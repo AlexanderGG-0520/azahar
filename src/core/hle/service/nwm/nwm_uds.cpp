@@ -1359,6 +1359,21 @@ void NWM_UDS::GetChannel(Kernel::HLERequestContext& ctx) {
     LOG_DEBUG(Service_NWM, "called");
 }
 
+void NWM_UDS::SetProbeResponseParam(Kernel::HLERequestContext& ctx) {
+    IPC::RequestParser rp(ctx);
+
+    const u32 oui_and_type = rp.Pop<u32>();
+    const u32 data_word = rp.Pop<u32>();
+    const s8 data = static_cast<s8>(data_word & 0xFF);
+
+    LOG_INFO(Service_NWM,
+             "SetProbeResponseParam: oui_and_type=0x{:08X}, data_word=0x{:08X}, data={}",
+             oui_and_type, data_word, static_cast<int>(data));
+
+    IPC::RequestBuilder rb = rp.MakeBuilder(1, 0);
+    rb.Push(ResultSuccess);
+}
+
 class NWM_UDS::ThreadCallback : public Kernel::HLERequestContext::WakeupCallback {
 public:
     explicit ThreadCallback(u16 command_id_) : command_id(command_id_) {}
@@ -1690,7 +1705,7 @@ NWM_UDS::NWM_UDS(Core::System& system) : ServiceFramework("nwm::UDS"), system(sy
         {0x001E, &NWM_UDS::ConnectToNetwork, "ConnectToNetwork"},
         {0x001F, &NWM_UDS::DecryptBeaconData, "DecryptBeaconData"},
         {0x0020, nullptr, "Flush"},
-        {0x0021, nullptr, "SetProbeResponseParam"},
+        {0x0021, &NWM_UDS::SetProbeResponseParam, "SetProbeResponseParam"},
         {0x0022, nullptr, "ScanOnConnection"},
         // clang-format on
     };
