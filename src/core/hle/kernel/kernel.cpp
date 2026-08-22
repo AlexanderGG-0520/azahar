@@ -171,6 +171,57 @@ void KernelSystem::ResetThreadIDs() {
     next_thread_id = 0;
 }
 
+void KernelSystem::RegisterYW2UDSWorkerOrderingWorkaround(const std::shared_ptr<Thread>& thread,
+                                                           u16 command_id) {
+    constexpr u64 YW2ShinuchiTitleId = 0x0004000000155100;
+    if (!thread || (command_id != 0x001D && command_id != 0x001E)) {
+        return;
+    }
+
+    const auto process = thread->owner_process.lock();
+    if (!process || !process->codeset || process->codeset->program_id != YW2ShinuchiTitleId) {
+        return;
+    }
+
+    std::scoped_lock lock(yw2_uds_worker_ordering_mutex);
+    auto& state = command_id == 0x001D ? yw2_host_worker_ordering : yw2_client_worker_ordering;
+    state = {process, thread, command_id, false};
+}
+
+bool KernelSystem::TryUseYW2UDSWorkerOrderingWorkaround(
+    const std::shared_ptr<Process>& process, const std::shared_ptr<Thread>& thread, u16 command_id) {
+    if (!process || !thread || (command_id != 0x001D && command_id != 0x001E)) {
+        return false;
+    }
+
+    std::scoped_lock lock(yw2_uds_worker_ordering_mutex);
+    auto& state = command_id == 0x001D ? yw2_host_worker_ordering : yw2_client_worker_ordering;
+    const auto registered_process = state.process.lock();
+    const auto registered_thread = state.thread.lock();
+    if (!registered_process || !registered_thread) {
+        state = {};
+        return false;
+    }
+    if (state.used || state.command_id != command_id || registered_process != process ||
+        registered_thread != thread) {
+        return false;
+    }
+
+    state.used = true;
+    return true;
+}
+
+void KernelSystem::ClearYW2UDSWorkerOrderingWorkaround(
+    const std::shared_ptr<Process>& process) {
+    std::scoped_lock lock(yw2_uds_worker_ordering_mutex);
+    if (yw2_host_worker_ordering.process.lock() == process) {
+        yw2_host_worker_ordering = {};
+    }
+    if (yw2_client_worker_ordering.process.lock() == process) {
+        yw2_client_worker_ordering = {};
+    }
+}
+
 void KernelSystem::UpdateCPUAndMemoryState(u64 title_id, MemoryMode memory_mode,
                                            New3dsHwCapabilities n3ds_hw_cap) {
     if (Settings::values.is_new_3ds) {

@@ -999,6 +999,7 @@ Result NWM_UDS::BeginHostingNetwork(std::span<const u8> network_info_buffer,
 }
 
 void NWM_UDS::BeginHostingNetwork(Kernel::HLERequestContext& ctx) {
+    system.Kernel().RegisterYW2UDSWorkerOrderingWorkaround(ctx.ClientThread(), 0x001D);
     IPC::RequestParser rp(ctx);
 
     const u32 passphrase_size = rp.Pop<u32>();
@@ -1428,6 +1429,7 @@ void NWM_UDS::ConnectToNetwork(Kernel::HLERequestContext& ctx, u16 command_id,
 }
 
 void NWM_UDS::ConnectToNetwork(Kernel::HLERequestContext& ctx) {
+    system.Kernel().RegisterYW2UDSWorkerOrderingWorkaround(ctx.ClientThread(), 0x001E);
     IPC::RequestParser rp(ctx);
 
     const auto connection_type = rp.Pop<u8>();

@@ -120,6 +120,7 @@ void KernelSystem::TerminateProcess(std::shared_ptr<Process> process) {
     LOG_INFO(Kernel_SVC, "Process {} exiting", process->process_id);
 
     ASSERT_MSG(process->status == ProcessStatus::Running, "Process has already exited");
+    ClearYW2UDSWorkerOrderingWorkaround(process);
     process->status = ProcessStatus::Exited;
 
     // Stop all process threads.

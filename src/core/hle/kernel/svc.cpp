@@ -805,7 +805,44 @@ Result SVC::WaitSynchronization1(Handle handle, s64 nano_seconds) {
     LOG_TRACE(Kernel_SVC, "called handle=0x{:08X}({}:{}), nanoseconds={}", handle,
               object->GetTypeName(), object->GetName(), nano_seconds);
 
-    if (object->ShouldWait(thread)) {
+    const bool actual_should_wait = object->ShouldWait(thread);
+    bool apply_yw2_worker_ordering_workaround = false;
+    if (!actual_should_wait && nano_seconds == 0 &&
+        object->GetHandleType() == HandleType::Thread) {
+        constexpr u64 YW2ShinuchiTitleId = 0x0004000000155100;
+        constexpr VAddr PollCallerPC = 0x0020528C;
+        constexpr VAddr ClientPollCallerLR = 0x0027CFD8;
+        constexpr VAddr HostPollCallerLR = 0x00261EE0;
+
+        const auto process = kernel.GetCurrentProcess();
+        const auto& core = system.GetRunningCore();
+        u16 command_id = 0;
+        const VAddr caller_lr = core.GetReg(14);
+        if (caller_lr == HostPollCallerLR) {
+            command_id = 0x001D;
+        } else if (caller_lr == ClientPollCallerLR) {
+            command_id = 0x001E;
+        }
+
+        if (process && process->codeset && process->codeset->program_id == YW2ShinuchiTitleId &&
+            core.GetPC() == PollCallerPC && command_id != 0) {
+            const auto target_thread = std::static_pointer_cast<Thread>(object);
+            const auto target_process = target_thread->owner_process.lock();
+            if (target_process == process && target_thread->status == ThreadStatus::Dead) {
+                apply_yw2_worker_ordering_workaround =
+                    kernel.TryUseYW2UDSWorkerOrderingWorkaround(process, target_thread, command_id);
+                if (apply_yw2_worker_ordering_workaround) {
+                    LOG_INFO(Service_NWM,
+                             "YW2 worker ordering workaround: role={} command_id=0x{:04X}",
+                             command_id == 0x001D ? "host" : "client", command_id);
+                }
+            }
+        }
+    }
+
+    const bool effective_should_wait =
+        actual_should_wait || apply_yw2_worker_ordering_workaround;
+    if (effective_should_wait) {
         R_UNLESS(nano_seconds != 0, ResultTimeout);
 
         thread->wait_objects = {object};

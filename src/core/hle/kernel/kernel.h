@@ -312,6 +312,12 @@ public:
     /// Retrieves a thread from the current list of threads.
     std::shared_ptr<Thread> GetThreadByID(u32 thread_id) const;
 
+    void RegisterYW2UDSWorkerOrderingWorkaround(const std::shared_ptr<Thread>& thread,
+                                                 u16 command_id);
+    bool TryUseYW2UDSWorkerOrderingWorkaround(const std::shared_ptr<Process>& process,
+                                               const std::shared_ptr<Thread>& thread,
+                                               u16 command_id);
+
     std::span<const std::shared_ptr<Process>> GetProcessList() const {
         return process_list;
     }
@@ -420,6 +426,15 @@ public:
     void UpdateCore1AppCpuLimit();
 
 private:
+    struct YW2UDSWorkerOrderingState {
+        std::weak_ptr<Process> process;
+        std::weak_ptr<Thread> thread;
+        u16 command_id{};
+        bool used{};
+    };
+
+    void ClearYW2UDSWorkerOrderingWorkaround(const std::shared_ptr<Process>& process);
+
     void MemoryInit(MemoryMode memory_mode, u64 override_init_time);
 
     void UpdateReportedMemory(MemoryMode memory_mode, New3dsMemoryMode n3ds_mode);
@@ -431,6 +446,10 @@ private:
     std::atomic<u32> next_object_id{0};
 
     std::atomic<int> pending_async_operations{};
+
+    std::mutex yw2_uds_worker_ordering_mutex;
+    YW2UDSWorkerOrderingState yw2_host_worker_ordering;
+    YW2UDSWorkerOrderingState yw2_client_worker_ordering;
 
     // Note: keep the member order below in order to perform correct destruction.
     // Thread manager is destructed before process list in order to Stop threads and clear thread
