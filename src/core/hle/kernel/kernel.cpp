@@ -188,27 +188,37 @@ void KernelSystem::RegisterYW2UDSWorkerOrderingWorkaround(const std::shared_ptr<
     state = {process, thread, command_id, false};
 }
 
-bool KernelSystem::TryUseYW2UDSWorkerOrderingWorkaround(
-    const std::shared_ptr<Process>& process, const std::shared_ptr<Thread>& thread, u16 command_id) {
-    if (!process || !thread || (command_id != 0x001D && command_id != 0x001E)) {
-        return false;
+u16 KernelSystem::TryUseYW2UDSWorkerOrderingWorkaround(
+    const std::shared_ptr<Process>& process, const std::shared_ptr<Thread>& thread) {
+    if (!process || !thread) {
+        return 0;
     }
 
     std::scoped_lock lock(yw2_uds_worker_ordering_mutex);
-    auto& state = command_id == 0x001D ? yw2_host_worker_ordering : yw2_client_worker_ordering;
-    const auto registered_process = state.process.lock();
-    const auto registered_thread = state.thread.lock();
-    if (!registered_process || !registered_thread) {
-        state = {};
-        return false;
-    }
-    if (state.used || state.command_id != command_id || registered_process != process ||
-        registered_thread != thread) {
-        return false;
-    }
+    const auto try_state = [&](YW2UDSWorkerOrderingState& state) -> u16 {
+        const auto registered_process = state.process.lock();
+        const auto registered_thread = state.thread.lock();
+        if (!registered_process || !registered_thread) {
+            state = {};
+            return 0;
+        }
+        if (state.first_poll_consumed || registered_process != process ||
+            registered_thread != thread) {
+            return 0;
+        }
+        if (state.command_id != 0x001D && state.command_id != 0x001E) {
+            state = {};
+            return 0;
+        }
 
-    state.used = true;
-    return true;
+        state.first_poll_consumed = true;
+        return state.command_id;
+    };
+
+    if (const u16 command_id = try_state(yw2_host_worker_ordering); command_id != 0) {
+        return command_id;
+    }
+    return try_state(yw2_client_worker_ordering);
 }
 
 void KernelSystem::ClearYW2UDSWorkerOrderingWorkaround(

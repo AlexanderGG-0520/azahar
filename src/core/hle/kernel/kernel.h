@@ -314,9 +314,8 @@ public:
 
     void RegisterYW2UDSWorkerOrderingWorkaround(const std::shared_ptr<Thread>& thread,
                                                  u16 command_id);
-    bool TryUseYW2UDSWorkerOrderingWorkaround(const std::shared_ptr<Process>& process,
-                                               const std::shared_ptr<Thread>& thread,
-                                               u16 command_id);
+    u16 TryUseYW2UDSWorkerOrderingWorkaround(const std::shared_ptr<Process>& process,
+                                              const std::shared_ptr<Thread>& thread);
 
     std::span<const std::shared_ptr<Process>> GetProcessList() const {
         return process_list;
@@ -430,7 +429,7 @@ private:
         std::weak_ptr<Process> process;
         std::weak_ptr<Thread> thread;
         u16 command_id{};
-        bool used{};
+        bool first_poll_consumed{};
     };
 
     void ClearYW2UDSWorkerOrderingWorkaround(const std::shared_ptr<Process>& process);

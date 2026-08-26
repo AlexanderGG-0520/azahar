@@ -810,41 +810,24 @@ Result SVC::WaitSynchronization1(Handle handle, s64 nano_seconds) {
     if (!actual_should_wait && nano_seconds == 0 &&
         object->GetHandleType() == HandleType::Thread) {
         constexpr u64 YW2ShinuchiTitleId = 0x0004000000155100;
-        constexpr VAddr V12PollCallerPC = 0x0020528C;
-        constexpr VAddr V12ClientPollCallerLR = 0x0027CFD8;
-        constexpr VAddr V12HostPollCallerLR = 0x00261EE0;
-        constexpr VAddr V10PollCallerPC = 0x00204C8C;
-        constexpr VAddr V10ClientPollCallerLR = 0x0027C9C0;
-        constexpr VAddr V10HostPollCallerLR = 0x002618C8;
 
         const auto process = kernel.GetCurrentProcess();
-        const auto& core = system.GetRunningCore();
-        u16 command_id = 0;
-        const VAddr caller_pc = core.GetPC();
-        const VAddr caller_lr = core.GetReg(14);
-        const bool is_host_poll =
-            (caller_pc == V12PollCallerPC && caller_lr == V12HostPollCallerLR) ||
-            (caller_pc == V10PollCallerPC && caller_lr == V10HostPollCallerLR);
-        const bool is_client_poll =
-            (caller_pc == V12PollCallerPC && caller_lr == V12ClientPollCallerLR) ||
-            (caller_pc == V10PollCallerPC && caller_lr == V10ClientPollCallerLR);
-        if (is_host_poll) {
-            command_id = 0x001D;
-        } else if (is_client_poll) {
-            command_id = 0x001E;
-        }
-
-        if (process && process->codeset && process->codeset->program_id == YW2ShinuchiTitleId &&
-            command_id != 0) {
+        if (process && process->codeset &&
+            process->codeset->program_id == YW2ShinuchiTitleId) {
             const auto target_thread = std::static_pointer_cast<Thread>(object);
             const auto target_process = target_thread->owner_process.lock();
             if (target_process == process && target_thread->status == ThreadStatus::Dead) {
-                apply_yw2_worker_ordering_workaround =
-                    kernel.TryUseYW2UDSWorkerOrderingWorkaround(process, target_thread, command_id);
-                if (apply_yw2_worker_ordering_workaround) {
+                const u16 command_id =
+                    kernel.TryUseYW2UDSWorkerOrderingWorkaround(process, target_thread);
+                apply_yw2_worker_ordering_workaround = command_id != 0;
+                if (command_id != 0) {
                     LOG_INFO(Service_NWM,
-                             "YW2 worker ordering workaround: role={} command_id=0x{:04X}",
-                             command_id == 0x001D ? "host" : "client", command_id);
+                             "YW2 worker identity prototype: title_id=0x{:016X} process_id={} "
+                             "role={} command_id=0x{:04X} worker_thread_id={} timeout=0 "
+                             "worker_status=Dead first_poll_consumed=true matched=true",
+                             process->codeset->program_id, process->process_id,
+                             command_id == 0x001D ? "host" : "client", command_id,
+                             target_thread->GetThreadId());
                 }
             }
         }
