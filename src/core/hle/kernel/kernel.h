@@ -47,10 +47,28 @@ class Recorder;
 namespace Kernel {
 
 constexpr bool IsYoKaiWatch2Title(u64 title_id) {
-    constexpr u64 ShinuchiTitleId = 0x0004000000155100;
-    constexpr u64 GansoTitleId = 0x000400000012F900;
-    constexpr u64 HonkeTitleId = 0x000400000012F800;
-    return title_id == ShinuchiTitleId || title_id == GansoTitleId || title_id == HonkeTitleId;
+    switch (title_id) {
+    // Japanese retail releases (runtime verified).
+    case 0x0004000000155100: // Shinuchi
+    case 0x000400000012F900: // Ganso
+    case 0x000400000012F800: // Honke
+    // International retail releases (experimental).
+    case 0x000400000019A900: // North America: Bony Spirits
+    case 0x000400000019AA00: // North America: Fleshy Souls
+    case 0x00040000001B2700: // North America: Psychic Specters
+    case 0x000400000019AB00: // Europe: Bony Spirits
+    case 0x000400000019AC00: // Europe: Fleshy Souls
+    case 0x00040000001B2900: // Europe: Psychic Specters
+    case 0x000400000019B000: // Australia: Bony Spirits
+    case 0x000400000019B100: // Australia: Fleshy Souls
+    case 0x00040000001B2800: // Australia: Psychic Specters
+    case 0x000400000019AE00: // Korea: Bony Spirits (Wonjo)
+    case 0x000400000019AF00: // Korea: Fleshy Souls (Bonga)
+    case 0x00040000001B2A00: // Korea: Psychic Specters (Kkeutpanwang)
+        return true;
+    default:
+        return false;
+    }
 }
 
 class AddressArbiter;

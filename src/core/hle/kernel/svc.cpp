@@ -818,13 +818,13 @@ Result SVC::WaitSynchronization1(Handle handle, s64 nano_seconds) {
                     kernel.TryUseYW2UDSWorkerOrderingWorkaround(process, target_thread);
                 apply_yw2_worker_ordering_workaround = command_id != 0;
                 if (command_id != 0) {
-                    LOG_INFO(Service_NWM,
-                             "YW2 worker identity prototype: title_id=0x{:016X} process_id={} "
-                             "role={} command_id=0x{:04X} worker_thread_id={} timeout=0 "
-                             "worker_status=Dead first_poll_consumed=true matched=true",
-                             process->codeset->program_id, process->process_id,
-                             command_id == 0x001D ? "host" : "client", command_id,
-                             target_thread->GetThreadId());
+                    LOG_DEBUG(Service_NWM,
+                              "YW2 worker polling workaround: title_id=0x{:016X} process_id={} "
+                              "role={} command_id=0x{:04X} worker_thread_id={} timeout=0 "
+                              "worker_status=Dead first_poll_consumed=true matched=true",
+                              process->codeset->program_id, process->process_id,
+                              command_id == 0x001D ? "host" : "client", command_id,
+                              target_thread->GetThreadId());
                 }
             }
         }
