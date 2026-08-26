@@ -46,6 +46,13 @@ class Recorder;
 
 namespace Kernel {
 
+constexpr bool IsYoKaiWatch2Title(u64 title_id) {
+    constexpr u64 ShinuchiTitleId = 0x0004000000155100;
+    constexpr u64 GansoTitleId = 0x000400000012F900;
+    constexpr u64 HonkeTitleId = 0x000400000012F800;
+    return title_id == ShinuchiTitleId || title_id == GansoTitleId || title_id == HonkeTitleId;
+}
+
 class AddressArbiter;
 class Event;
 class Mutex;

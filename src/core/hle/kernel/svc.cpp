@@ -809,13 +809,8 @@ Result SVC::WaitSynchronization1(Handle handle, s64 nano_seconds) {
     bool apply_yw2_worker_ordering_workaround = false;
     if (!actual_should_wait && nano_seconds == 0 &&
         object->GetHandleType() == HandleType::Thread) {
-        constexpr u64 YW2ShinuchiTitleId = 0x0004000000155100;
-        constexpr u64 YW2GansoTitleId = 0x000400000012F900;
-
         const auto process = kernel.GetCurrentProcess();
-        if (process && process->codeset &&
-            (process->codeset->program_id == YW2ShinuchiTitleId ||
-             process->codeset->program_id == YW2GansoTitleId)) {
+        if (process && process->codeset && IsYoKaiWatch2Title(process->codeset->program_id)) {
             const auto target_thread = std::static_pointer_cast<Thread>(object);
             const auto target_process = target_thread->owner_process.lock();
             if (target_process == process && target_thread->status == ThreadStatus::Dead) {
