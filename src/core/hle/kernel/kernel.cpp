@@ -174,12 +174,15 @@ void KernelSystem::ResetThreadIDs() {
 void KernelSystem::RegisterYW2UDSWorkerOrderingWorkaround(const std::shared_ptr<Thread>& thread,
                                                            u16 command_id) {
     constexpr u64 YW2ShinuchiTitleId = 0x0004000000155100;
+    constexpr u64 YW2GansoTitleId = 0x000400000012F900;
     if (!thread || (command_id != 0x001D && command_id != 0x001E)) {
         return;
     }
 
     const auto process = thread->owner_process.lock();
-    if (!process || !process->codeset || process->codeset->program_id != YW2ShinuchiTitleId) {
+    if (!process || !process->codeset ||
+        (process->codeset->program_id != YW2ShinuchiTitleId &&
+         process->codeset->program_id != YW2GansoTitleId)) {
         return;
     }
 
