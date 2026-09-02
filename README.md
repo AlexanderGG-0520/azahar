@@ -595,7 +595,7 @@ Commit subject:
 https://github.com/utosa123/azahar/issues/1
 
 
-
+---
 
 
 ![Azahar Emulator](https://azahar-emu.org/resources/images/logo/azahar-name-and-logo.svg)
