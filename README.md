@@ -16,6 +16,7 @@ Currently available:
 
 - Windows
 - Android
+- macOS
 
 ## Compatibility
 
@@ -145,6 +146,7 @@ Currently distributed modified builds:
 
 - Windows
 - Android
+- -macOS
 
 ## Azahar Multiplayer Room
 
@@ -314,6 +316,7 @@ https://github.com/utosa123/azahar/releases/latest
 
 - Windows
 - Android
+- macOS
 
 ## 対応状況
 
@@ -443,6 +446,7 @@ OneDrive配下など、一部の場所ではAzaharが正常に起動しないケ
 
 - Windows
 - Android
+- -macOS
 
 ## Multiplayer Room
 
