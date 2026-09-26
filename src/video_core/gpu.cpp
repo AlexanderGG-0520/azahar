@@ -93,7 +93,7 @@ GPU::GPU(Core::System& system, Frontend::EmuWindow& emu_window,
     impl->vblank_event = impl->timing.RegisterEvent(
         "GPU::VBlankCallback",
         [this](uintptr_t user_data, s64 cycles_late) { VBlankCallback(user_data, cycles_late); });
-    impl->timing.ScheduleEvent(FRAME_TICKS, impl->vblank_event);
+    impl->timing.ScheduleEvent(FRAME_TICKS / 2, impl->vblank_event);
 
     // Bind the rasterizer to the PICA GPU
     impl->pica.BindRasterizer(impl->rasterizer);
@@ -494,7 +494,7 @@ void GPU::VBlankCallback(std::uintptr_t user_data, s64 cycles_late) {
     impl->renderer->SwapBuffers();
 
     // Reschedule recurrent event
-    impl->timing.ScheduleEvent(FRAME_TICKS - cycles_late, impl->vblank_event);
+    impl->timing.ScheduleEvent(FRAME_TICKS / 2 - cycles_late, impl->vblank_event);
 }
 
 void GPU::RecreateRenderer(Frontend::EmuWindow& emu_window, Frontend::EmuWindow* secondary_window) {
