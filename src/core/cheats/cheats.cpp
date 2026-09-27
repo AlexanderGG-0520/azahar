@@ -10,12 +10,129 @@
 #include "core/cheats/gateway_cheat.h"
 #include "core/core.h"
 #include "core/core_timing.h"
+#include "core/hle/kernel/kernel.h"
+#include "core/hle/kernel/process.h"
+#include "core/memory.h"
 
 namespace Cheats {
 
 // Luma3DS uses this interval for applying cheats, so to keep consistent behavior
 // we use the same value
 constexpr u64 run_interval_ticks = 50'000'000;
+
+namespace {
+
+constexpr u64 YW2_SHINUCHI_TITLE_ID = 0x0004000000155100;
+constexpr VAddr YW2_SCRIPT_SCAN_BEGIN = 0x08A00000;
+constexpr VAddr YW2_SCRIPT_SCAN_END = 0x08B00000;
+
+void ApplyYW2Shinuchi120FpsSoultimateFix(Core::System& system, u32 process_id) {
+    const auto process = system.Kernel().GetProcessById(process_id);
+    if (!process || !process->codeset ||
+        process->codeset->program_id != YW2_SHINUCHI_TITLE_ID) {
+        return;
+    }
+
+    auto& memory = system.Memory();
+
+    // Apply only while YW2 is using the 120 FPS B=2 / P=1 configuration.
+    const auto timing = memory.Read32OrNullopt(*process, 0x00857BCC);
+    if (!timing || ((*timing & 0xFFFF) != 0x0102)) {
+        return;
+    }
+
+    // Shinuchi Ver.1.2 guard.
+    const auto handler_prologue = memory.Read32OrNullopt(*process, 0x001E6374);
+    if (!handler_prologue || *handler_prologue != 0xE92D41F0) {
+        return;
+    }
+
+    static u32 cached_process_id = 0;
+    static VAddr cached_base = 0;
+    static u32 scan_divider = 0;
+
+    if (cached_process_id != process_id) {
+        cached_process_id = process_id;
+        cached_base = 0;
+        scan_divider = 0;
+    }
+
+    const auto matches = [&](VAddr address, u32 expected) {
+        const auto value = memory.Read32OrNullopt(*process, address);
+        return value && *value == expected;
+    };
+
+    const auto sequence_loaded = [&](VAddr base) {
+        return matches(base + 0x00, 0x010024B6) &&
+               matches(base + 0x04, 0x084803EB) &&
+               matches(base + 0x08, 0x001C1F14) &&
+               matches(base + 0x0C, 0x000224B6) &&
+               matches(base + 0x14, 0x001E6374) &&
+               matches(base + 0x18, 0x000224B8) &&
+               matches(base + 0x1C, 0x001E03E9) &&
+               matches(base + 0x20, 0x001D4060);
+    };
+
+    // If the previously found battle script still exists, only verify the patched word.
+    if (cached_base != 0) {
+        if (sequence_loaded(cached_base)) {
+            const auto current = memory.Read32OrNullopt(*process, cached_base + 0x10);
+
+            if (current && *current == 0x008703E9) {
+                return;
+            }
+
+            if (current && *current == 0x008703EA) {
+                memory.Write32(*process, cached_base + 0x10, 0x008703E9);
+                return;
+            }
+        }
+
+        // Battle ended or the script was rebuilt elsewhere.
+        cached_base = 0;
+    }
+
+    // The battle script is dynamically expanded.
+    // Search periodically until the exact 4823 -> 4824 -> 4825 sequence appears.
+    if (++scan_divider < 5) {
+        return;
+    }
+    scan_divider = 0;
+
+    for (VAddr base = YW2_SCRIPT_SCAN_BEGIN;
+         base + 0x24 <= YW2_SCRIPT_SCAN_END;
+         base += sizeof(u32)) {
+
+        if (!sequence_loaded(base)) {
+            continue;
+        }
+
+        const auto target = memory.Read32OrNullopt(*process, base + 0x10);
+        if (!target) {
+            continue;
+        }
+
+        if (*target == 0x008703E9) {
+            cached_base = base;
+            return;
+        }
+
+        if (*target != 0x008703EA) {
+            continue;
+        }
+
+        memory.Write32(*process, base + 0x10, 0x008703E9);
+        cached_base = base;
+
+        LOG_INFO(Core_Cheats,
+                 "YW2 Shinuchi 120 FPS Soultimate workaround: patched script record at "
+                 "0x{:08X}",
+                 base + 0x10);
+        return;
+    }
+}
+
+} // namespace
 
 CheatEngine::CheatEngine(Core::System& system_) : system{system_} {}
 
@@ -112,6 +229,7 @@ void CheatEngine::RunCallback([[maybe_unused]] std::uintptr_t user_data, s64 cyc
             }
         }
     }
+    ApplyYW2Shinuchi120FpsSoultimateFix(system, process_id);
     system.CoreTiming().ScheduleEvent(run_interval_ticks - cycles_late, event);
 }
 
