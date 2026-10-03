@@ -9,6 +9,8 @@
 #include <QCamera>
 #include <QImage>
 #include <QMediaCaptureSession>
+#include <QMetaObject>
+#include <QThread>
 #include <QVideoSink>
 #include "citra_qt/camera/camera_util.h"
 #include "citra_qt/camera/qt_camera_base.h"
@@ -76,11 +78,25 @@ public:
         : QtCameraInterface(flip), handler(handler) {}
 
     void StartCapture() override {
-        handler->StartCapture();
+        if (handler->thread() == QThread::currentThread()) {
+            handler->StartCapture();
+            return;
+        }
+
+        QMetaObject::invokeMethod(
+            handler.get(), [handler = handler] { handler->StartCapture(); },
+            Qt::BlockingQueuedConnection);
     }
 
     void StopCapture() override {
-        handler->StopCapture();
+        if (handler->thread() == QThread::currentThread()) {
+            handler->StopCapture();
+            return;
+        }
+
+        QMetaObject::invokeMethod(
+            handler.get(), [handler = handler] { handler->StopCapture(); },
+            Qt::BlockingQueuedConnection);
     }
 
     void SetFrameRate(Service::CAM::FrameRate frame_rate) override {}
