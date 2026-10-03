@@ -51,7 +51,7 @@ void QtMultimediaCameraHandlerFactory::ResumeCameras() {
     for (auto& handler_pair : handlers) {
         auto handler = handler_pair.second.lock();
         if (handler && handler->IsPaused()) {
-            handler->StartCapture();
+            handler->ResumeCapture();
         }
     }
 }
@@ -73,27 +73,74 @@ QtMultimediaCameraHandler::QtMultimediaCameraHandler(const std::string& camera_n
 }
 
 QtMultimediaCameraHandler::~QtMultimediaCameraHandler() {
-    StopCapture();
-}
-
-void QtMultimediaCameraHandler::StartCapture() {
-    if (!camera->isActive()) {
-#if defined(__APPLE__)
-        if (!AppleAuthorization::CheckAuthorizationForCamera()) {
-            LOG_ERROR(Service_CAM, "Unable to start camera due to lack of authorization");
-            return;
-        }
-#endif
-        camera->start();
-    }
-    paused = false;
-}
-
-void QtMultimediaCameraHandler::StopCapture() {
     if (camera->isActive()) {
         camera->stop();
     }
+}
+
+void QtMultimediaCameraHandler::StartCapture() {
+    ++capture_request_count;
+    LOG_DEBUG(Service_CAM, "System camera capture requested, users={}", capture_request_count);
+
+    if (camera->isActive() || paused) {
+        return;
+    }
+
+#if defined(__APPLE__)
+    if (!AppleAuthorization::CheckAuthorizationForCamera()) {
+        LOG_ERROR(Service_CAM, "Unable to start camera due to lack of authorization");
+        --capture_request_count;
+        return;
+    }
+#endif
+    camera->start();
+}
+
+void QtMultimediaCameraHandler::StopCapture() {
+    if (capture_request_count == 0) {
+        LOG_WARNING(Service_CAM, "System camera stop requested with no active users");
+        return;
+    }
+
+    --capture_request_count;
+    LOG_DEBUG(Service_CAM, "System camera capture released, users={}", capture_request_count);
+
+    if (capture_request_count == 0) {
+        if (camera->isActive()) {
+            camera->stop();
+        }
+        paused = false;
+    }
+}
+
+void QtMultimediaCameraHandler::PauseCapture() {
+    if (capture_request_count == 0 || paused) {
+        return;
+    }
+
+    if (camera->isActive()) {
+        camera->stop();
+    }
+    paused = true;
+}
+
+void QtMultimediaCameraHandler::ResumeCapture() {
+    if (!paused) {
+        return;
+    }
+
     paused = false;
+    if (capture_request_count == 0 || camera->isActive()) {
+        return;
+    }
+
+#if defined(__APPLE__)
+    if (!AppleAuthorization::CheckAuthorizationForCamera()) {
+        LOG_ERROR(Service_CAM, "Unable to resume camera due to lack of authorization");
+        return;
+    }
+#endif
+    camera->start();
 }
 
 } // namespace Camera
