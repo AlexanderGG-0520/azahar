@@ -28,6 +28,8 @@ public:
 
     void StartCapture();
     void StopCapture();
+    void PauseCapture();
+    void ResumeCapture();
 
     QImage QtReceiveFrame() {
         return camera_surface->videoFrame().toImage();
@@ -45,15 +47,11 @@ public:
         return paused;
     }
 
-    void PauseCapture() {
-        StopCapture();
-        paused = true;
-    }
-
 private:
     std::unique_ptr<QCamera> camera;
     std::unique_ptr<QVideoSink> camera_surface;
     QMediaCaptureSession capture_session{};
+    std::size_t capture_request_count = 0;
     bool paused = false; // was previously started but was paused, to be resumed
 };
 
