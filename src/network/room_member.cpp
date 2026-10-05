@@ -9,6 +9,7 @@
 #include <set>
 #include <thread>
 #include "common/assert.h"
+#include "common/logging/log.h"
 #include "enet/enet.h"
 #include "network/packet.h"
 #include "network/room_member.h"
@@ -59,6 +60,7 @@ public:
 
     private:
         CallbackSet<WifiPacket> callback_set_wifi_packet;
+        CallbackSet<StreetPassPacket> callback_set_streetpass_packet;
         CallbackSet<ChatEntry> callback_set_chat_messages;
         CallbackSet<StatusMessageEntry> callback_set_status_messages;
         CallbackSet<RoomInformation> callback_set_room_information;
@@ -107,6 +109,11 @@ public:
      * @param event The  ENet event that was received.
      */
     void HandleWifiPackets(const ENetEvent* event);
+
+    /**
+     * Extracts a StreetPassPacket from a received ENet packet.
+     */
+    void HandleStreetPassPacket(const ENetEvent* event);
 
     /**
      * Extracts a chat entry from a received ENet packet and adds it to the chat queue.
@@ -166,6 +173,9 @@ void RoomMember::RoomMemberImpl::MemberLoop() {
                 switch (event.packet->data[0]) {
                 case IdWifiPacket:
                     HandleWifiPackets(&event);
+                    break;
+                case IdStreetPassPacket:
+                    HandleStreetPassPacket(&event);
                     break;
                 case IdChatMessage:
                     HandleChatPacket(&event);
@@ -370,6 +380,24 @@ void RoomMember::RoomMemberImpl::HandleWifiPackets(const ENetEvent* event) {
     Invoke<WifiPacket>(wifi_packet);
 }
 
+void RoomMember::RoomMemberImpl::HandleStreetPassPacket(const ENetEvent* event) {
+    Packet packet;
+    packet.Append(event->packet->data, event->packet->dataLength);
+    packet.IgnoreBytes(sizeof(u8));
+
+    StreetPassPacket streetpass_packet{};
+    packet >> streetpass_packet.program_id;
+    packet >> streetpass_packet.message;
+
+    if (!packet || streetpass_packet.message.empty() ||
+        streetpass_packet.message.size() > MaxStreetPassMessageSize) {
+        LOG_WARNING(Network, "Dropping invalid StreetPass room packet");
+        return;
+    }
+
+    Invoke<StreetPassPacket>(streetpass_packet);
+}
+
 void RoomMember::RoomMemberImpl::HandleChatPacket(const ENetEvent* event) {
     Packet packet;
     packet.Append(event->packet->data, event->packet->dataLength);
@@ -445,6 +473,12 @@ void RoomMember::RoomMemberImpl::Disconnect() {
 template <>
 RoomMember::RoomMemberImpl::CallbackSet<WifiPacket>& RoomMember::RoomMemberImpl::Callbacks::Get() {
     return callback_set_wifi_packet;
+}
+
+template <>
+RoomMember::RoomMemberImpl::CallbackSet<StreetPassPacket>&
+RoomMember::RoomMemberImpl::Callbacks::Get() {
+    return callback_set_streetpass_packet;
 }
 
 template <>
@@ -597,6 +631,19 @@ void RoomMember::SendWifiPacket(const WifiPacket& wifi_packet) {
     room_member_impl->Send(std::move(packet));
 }
 
+void RoomMember::SendStreetPassPacket(const StreetPassPacket& streetpass_packet) {
+    if (!IsConnected() || streetpass_packet.message.empty() ||
+        streetpass_packet.message.size() > MaxStreetPassMessageSize) {
+        return;
+    }
+
+    Packet packet;
+    packet << static_cast<u8>(IdStreetPassPacket);
+    packet << streetpass_packet.program_id;
+    packet << streetpass_packet.message;
+    room_member_impl->Send(std::move(packet));
+}
+
 void RoomMember::SendChatMessage(const std::string& message) {
     Packet packet;
     packet << static_cast<u8>(IdChatMessage);
@@ -652,6 +699,11 @@ RoomMember::CallbackHandle<WifiPacket> RoomMember::BindOnWifiPacketReceived(
     return room_member_impl->Bind(callback);
 }
 
+RoomMember::CallbackHandle<StreetPassPacket> RoomMember::BindOnStreetPassPacketReceived(
+    std::function<void(const StreetPassPacket&)> callback) {
+    return room_member_impl->Bind(callback);
+}
+
 RoomMember::CallbackHandle<RoomInformation> RoomMember::BindOnRoomInformationChanged(
     std::function<void(const RoomInformation&)> callback) {
     return room_member_impl->Bind(callback);
@@ -688,6 +740,7 @@ void RoomMember::Leave() {
 }
 
 template void RoomMember::Unbind(CallbackHandle<WifiPacket>);
+template void RoomMember::Unbind(CallbackHandle<StreetPassPacket>);
 template void RoomMember::Unbind(CallbackHandle<RoomMember::State>);
 template void RoomMember::Unbind(CallbackHandle<RoomMember::Error>);
 template void RoomMember::Unbind(CallbackHandle<RoomInformation>);
