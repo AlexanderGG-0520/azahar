@@ -469,10 +469,6 @@ void Module::Interface::Read(Kernel::HLERequestContext& ctx) {
         write_buffer.Write(buffer.data(), 0, write_buffer_size);
         session_data->file->Close();
 
-        if (session_data->data_path_type == CecDataPathType::OutboxMsg) {
-            cecd->BroadcastStreetPassMessage(session_data->ncch_program_id, buffer);
-        }
-
         rb.Push(ResultSuccess);
         rb.Push<u32>(bytes_read);
     }
@@ -687,6 +683,10 @@ void Module::Interface::Write(Kernel::HLERequestContext& ctx) {
         [[maybe_unused]] const u32 bytes_written = static_cast<u32>(
             session_data->file->Write(0, buffer.size(), true, false, buffer.data()).Unwrap());
         session_data->file->Close();
+
+        if (session_data->data_path_type == CecDataPathType::OutboxMsg) {
+            cecd->BroadcastStreetPassMessage(session_data->ncch_program_id, buffer);
+        }
 
         rb.Push(ResultSuccess);
     }
@@ -1093,6 +1093,10 @@ void Module::Interface::OpenAndWrite(Kernel::HLERequestContext& ctx) {
             [[maybe_unused]] const u32 bytes_written = static_cast<u32>(
                 file->Write(0, buffer.size(), true, false, buffer.data()).Unwrap());
             file->Close();
+
+            if (path_type == CecDataPathType::OutboxMsg) {
+                cecd->BroadcastStreetPassMessage(ncch_program_id, buffer);
+            }
 
             rb.Push(ResultSuccess);
         } else {
