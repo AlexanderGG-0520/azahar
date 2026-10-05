@@ -18,6 +18,7 @@ constexpr u32 network_version = 4; ///< The version of this Room and RoomMember
 constexpr u16 DefaultRoomPort = 24872;
 
 constexpr u32 MaxMessageSize = 500;
+constexpr u32 MaxStreetPassMessageSize = 0x20000;
 
 /// Maximum number of concurrent connections allowed to this room.
 static constexpr u32 MaxConcurrentConnections = 254;
@@ -75,6 +76,7 @@ enum RoomMessageTypes : u8 {
     IdModPermissionDenied,
     IdModNoSuchUser,
     IdJoinSuccessAsMod,
+    IdStreetPassPacket,
 };
 
 /// Types of system status messages
