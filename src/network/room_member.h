@@ -23,7 +23,8 @@ struct WifiPacket {
         Authentication,
         AssociationResponse,
         Deauthentication,
-        NodeMap
+        NodeMap,
+        StreetPass,
     };
     PacketType type;      ///< The type of 802.11 frame.
     std::vector<u8> data; ///< Raw 802.11 frame data, starting at the management frame header
@@ -42,12 +43,6 @@ private:
         ar & channel;
     }
     friend class boost::serialization::access;
-};
-
-/// A CECD StreetPass message transported through an Azahar multiplayer room.
-struct StreetPassPacket {
-    u32 program_id{};
-    std::vector<u8> message;
 };
 
 /// Represents a chat message.
@@ -179,12 +174,6 @@ public:
     void SendWifiPacket(const WifiPacket& packet);
 
     /**
-     * Sends a CECD StreetPass message to the room.
-     * @param packet The StreetPass message to broadcast to other room members.
-     */
-    void SendStreetPassPacket(const StreetPassPacket& packet);
-
-    /**
      * Sends a chat message to the room.
      * @param message The contents of the message.
      */
@@ -236,12 +225,6 @@ public:
      */
     CallbackHandle<WifiPacket> BindOnWifiPacketReceived(
         std::function<void(const WifiPacket&)> callback);
-
-    /**
-     * Binds a function to an event triggered when a StreetPass packet is received.
-     */
-    CallbackHandle<StreetPassPacket> BindOnStreetPassPacketReceived(
-        std::function<void(const StreetPassPacket&)> callback);
 
     /**
      * Binds a function to an event that will be triggered every time the RoomInformation changes.
