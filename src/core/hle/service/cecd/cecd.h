@@ -24,7 +24,7 @@ class System;
 
 namespace Network {
 class RoomMember;
-struct StreetPassPacket;
+struct WifiPacket;
 }
 
 namespace Service::CECD {
@@ -635,7 +635,7 @@ private:
         std::vector<u8> message;
     };
 
-    void QueueStreetPassPacket(const Network::StreetPassPacket& packet);
+    void QueueStreetPassPacket(const Network::WifiPacket& packet);
     void ProcessPendingStreetPassPackets();
     bool InjectStreetPassMessage(u32 program_id, std::vector<u8> message);
     void BroadcastStreetPassMessage(u32 program_id, const std::vector<u8>& message);
