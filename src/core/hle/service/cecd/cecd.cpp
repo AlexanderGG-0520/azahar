@@ -50,6 +50,9 @@ using CecDataPathType = Module::CecDataPathType;
 using CecOpenMode = Module::CecOpenMode;
 using CecSystemInfoType = Module::CecSystemInfoType;
 
+constexpr std::size_t MaxRoomStreetPassMessageSize = 0x20000;
+constexpr std::size_t StreetPassRoomHeaderSize = sizeof(u32);
+
 void Module::BindRoomMember(const std::shared_ptr<Network::RoomMember>& member) {
     if (!member) {
         return;
@@ -61,23 +64,31 @@ void Module::BindRoomMember(const std::shared_ptr<Network::RoomMember>& member) 
 
     room_member = member;
     const std::weak_ptr<Module> weak_self = weak_from_this();
-    member->BindOnStreetPassPacketReceived(
-        [weak_self](const Network::StreetPassPacket& packet) {
-            if (const auto self = weak_self.lock()) {
-                self->QueueStreetPassPacket(packet);
-            }
-        });
+    member->BindOnWifiPacketReceived([weak_self](const Network::WifiPacket& packet) {
+        if (packet.type != Network::WifiPacket::PacketType::StreetPass) {
+            return;
+        }
+        if (const auto self = weak_self.lock()) {
+            self->QueueStreetPassPacket(packet);
+        }
+    });
 }
 
-void Module::QueueStreetPassPacket(const Network::StreetPassPacket& packet) {
-    if (packet.message.size() < sizeof(CecMessageHeader) ||
-        packet.message.size() > Network::MaxStreetPassMessageSize) {
+void Module::QueueStreetPassPacket(const Network::WifiPacket& packet) {
+    if (packet.data.size() < StreetPassRoomHeaderSize + sizeof(CecMessageHeader) ||
+        packet.data.size() > StreetPassRoomHeaderSize + MaxRoomStreetPassMessageSize) {
         return;
     }
 
+    const u32 program_id = static_cast<u32>(packet.data[0]) |
+                           (static_cast<u32>(packet.data[1]) << 8) |
+                           (static_cast<u32>(packet.data[2]) << 16) |
+                           (static_cast<u32>(packet.data[3]) << 24);
+
+    std::vector<u8> message(packet.data.begin() + StreetPassRoomHeaderSize, packet.data.end());
     {
         std::lock_guard lock(streetpass_mutex);
-        pending_streetpass_messages.push_back({packet.program_id, packet.message});
+        pending_streetpass_messages.push_back({program_id, std::move(message)});
     }
 
     // Room callbacks run on the network thread. As with NWM::UDS, take the HLE lock before
@@ -109,7 +120,7 @@ void Module::ProcessPendingStreetPassPackets() {
 
 bool Module::InjectStreetPassMessage(const u32 program_id, std::vector<u8> message) {
     if (message.size() < sizeof(CecMessageHeader) ||
-        message.size() > Network::MaxStreetPassMessageSize) {
+        message.size() > MaxRoomStreetPassMessageSize) {
         return false;
     }
 
@@ -238,9 +249,10 @@ bool Module::InjectStreetPassMessage(const u32 program_id, std::vector<u8> messa
     return true;
 }
 
-void Module::BroadcastStreetPassMessage(const u32 program_id, const std::vector<u8>& message) {
+void Module::BroadcastStreetPassMessage(const u32 program_id,
+                                        const std::vector<u8>& message) {
     if (message.size() < sizeof(CecMessageHeader) ||
-        message.size() > Network::MaxStreetPassMessageSize) {
+        message.size() > MaxRoomStreetPassMessageSize) {
         return;
     }
 
@@ -256,10 +268,19 @@ void Module::BroadcastStreetPassMessage(const u32 program_id, const std::vector<
         return;
     }
 
-    Network::StreetPassPacket packet{};
-    packet.program_id = program_id;
-    packet.message = message;
-    member->SendStreetPassPacket(packet);
+    Network::WifiPacket packet{};
+    packet.type = Network::WifiPacket::PacketType::StreetPass;
+    packet.channel = 0;
+    packet.transmitter_address = member->GetMacAddress();
+    packet.destination_address = Network::BroadcastMac;
+    packet.data.reserve(StreetPassRoomHeaderSize + message.size());
+    packet.data.push_back(static_cast<u8>(program_id));
+    packet.data.push_back(static_cast<u8>(program_id >> 8));
+    packet.data.push_back(static_cast<u8>(program_id >> 16));
+    packet.data.push_back(static_cast<u8>(program_id >> 24));
+    packet.data.insert(packet.data.end(), message.begin(), message.end());
+
+    member->SendWifiPacket(packet);
 }
 
 void Module::BroadcastOutboxMessages(const u32 program_id) {
@@ -300,7 +321,7 @@ void Module::BroadcastOutboxMessages(const u32 program_id) {
         auto message_file = std::move(message_result).Unwrap();
         const u32 message_size = static_cast<u32>(message_file->GetSize());
         if (message_size < sizeof(CecMessageHeader) ||
-            message_size > Network::MaxStreetPassMessageSize) {
+            message_size > MaxRoomStreetPassMessageSize) {
             message_file->Close();
             continue;
         }
