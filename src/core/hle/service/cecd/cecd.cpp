@@ -53,6 +53,34 @@ using CecSystemInfoType = Module::CecSystemInfoType;
 constexpr std::size_t MaxRoomStreetPassMessageSize = 0x20000;
 constexpr std::size_t StreetPassRoomHeaderSize = sizeof(u32);
 
+std::array<u8, 8> MakeRoomStreetPassMessageId(const std::array<u8, 8>& original_message_id,
+                                               const std::array<u8, 6>& sender_mac) {
+    // CECD message IDs can be identical when users clone a save/NAND. For room-delivered
+    // StreetPass, derive a stable local ID from both the original message ID and sender MAC.
+    // This makes retries from the same sender deduplicate while allowing another virtual 3DS
+    // with the same cloned message ID to be treated as a distinct encounter.
+    u64 hash = 14695981039346656037ULL;
+    constexpr u64 fnv_prime = 1099511628211ULL;
+
+    const auto mix = [&hash](const u8 byte) {
+        hash ^= byte;
+        hash *= fnv_prime;
+    };
+
+    for (const u8 byte : original_message_id) {
+        mix(byte);
+    }
+    for (const u8 byte : sender_mac) {
+        mix(byte);
+    }
+
+    std::array<u8, 8> derived_id{};
+    for (std::size_t i = 0; i < derived_id.size(); ++i) {
+        derived_id[i] = static_cast<u8>(hash >> (i * 8));
+    }
+    return derived_id;
+}
+
 void Module::BindRoomMember(const std::shared_ptr<Network::RoomMember>& member) {
     if (!member) {
         return;
@@ -85,10 +113,14 @@ void Module::QueueStreetPassPacket(const Network::WifiPacket& packet) {
                            (static_cast<u32>(packet.data[2]) << 16) |
                            (static_cast<u32>(packet.data[3]) << 24);
 
+    std::array<u8, 6> sender_mac{};
+    std::copy(packet.transmitter_address.begin(), packet.transmitter_address.end(),
+              sender_mac.begin());
+
     std::vector<u8> message(packet.data.begin() + StreetPassRoomHeaderSize, packet.data.end());
     {
         std::lock_guard lock(streetpass_mutex);
-        pending_streetpass_messages.push_back({program_id, std::move(message)});
+        pending_streetpass_messages.push_back({program_id, sender_mac, std::move(message)});
     }
 
     // Room callbacks run on the network thread. As with NWM::UDS, take the HLE lock before
@@ -114,11 +146,13 @@ void Module::ProcessPendingStreetPassPackets() {
     }
 
     for (auto& packet : pending) {
-        InjectStreetPassMessage(packet.program_id, std::move(packet.message));
+        InjectStreetPassMessage(packet.program_id, packet.sender_mac, std::move(packet.message));
     }
 }
 
-bool Module::InjectStreetPassMessage(const u32 program_id, std::vector<u8> message) {
+bool Module::InjectStreetPassMessage(const u32 program_id,
+                                     const std::array<u8, 6>& sender_mac,
+                                     std::vector<u8> message) {
     if (message.size() < sizeof(CecMessageHeader) ||
         message.size() > MaxRoomStreetPassMessageSize) {
         return false;
@@ -166,8 +200,14 @@ bool Module::InjectStreetPassMessage(const u32 program_id, std::vector<u8> messa
         return false;
     }
 
-    std::array<u8, 8> message_id{};
-    std::memcpy(message_id.data(), message_header.message_id.data(), message_id.size());
+    std::array<u8, 8> original_message_id{};
+    std::memcpy(original_message_id.data(), message_header.message_id.data(),
+                original_message_id.size());
+    const std::array<u8, 8> message_id =
+        MakeRoomStreetPassMessageId(original_message_id, sender_mac);
+    std::memcpy(message_header.message_id.data(), message_id.data(), message_id.size());
+    std::memcpy(message.data(), &message_header, sizeof(message_header));
+
     const FileSys::Path inbox_message_path(
         GetCecDataPathTypeAsString(CecDataPathType::InboxMsg, program_id, message_id).data());
 
