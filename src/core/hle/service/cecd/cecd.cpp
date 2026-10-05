@@ -75,8 +75,18 @@ void Module::QueueStreetPassPacket(const Network::StreetPassPacket& packet) {
         return;
     }
 
-    std::lock_guard lock(streetpass_mutex);
-    pending_streetpass_messages.push_back({packet.program_id, packet.message});
+    {
+        std::lock_guard lock(streetpass_mutex);
+        pending_streetpass_messages.push_back({packet.program_id, packet.message});
+    }
+
+    // Room callbacks run on the network thread. As with NWM::UDS, take the HLE lock before
+    // signaling kernel events from that thread. The actual NAND/CECD writes stay deferred until
+    // the emulation thread enters CECD again.
+    std::scoped_lock hle_lock(system.Kernel().GetHLELock());
+    cecinfo_event->Signal();
+    cecinfosys_event->Signal();
+    change_state_event->Signal();
 }
 
 void Module::ProcessPendingStreetPassPackets() {
