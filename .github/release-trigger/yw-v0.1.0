@@ -3,3 +3,5 @@ Release trigger for yw-v0.1.0
 Source branch: integration/yw
 Windows artifacts: MSYS2 installer + portable ZIP
 Linux: build from source using docs/yw-fork-install.md
+
+Retry: 2 (NSIS via Chocolatey)
