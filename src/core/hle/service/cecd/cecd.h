@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <array>
 #include <memory>
 #include <mutex>
 #include <span>
@@ -632,12 +633,14 @@ private:
 
     struct PendingStreetPassMessage {
         u32 program_id{};
+        std::array<u8, 6> sender_mac{};
         std::vector<u8> message;
     };
 
     void QueueStreetPassPacket(const Network::WifiPacket& packet);
     void ProcessPendingStreetPassPackets();
-    bool InjectStreetPassMessage(u32 program_id, std::vector<u8> message);
+    bool InjectStreetPassMessage(u32 program_id, const std::array<u8, 6>& sender_mac,
+                                 std::vector<u8> message);
     void BroadcastStreetPassMessage(u32 program_id, const std::vector<u8>& message);
     void BroadcastOutboxMessages(u32 program_id);
     void BroadcastAllOutboxMessages();
