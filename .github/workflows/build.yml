@@ -5,7 +5,7 @@ on:
     branches: [ "*" ]
     tags: [ "*" ]
   pull_request:
-    branches: [ master ]
+    branches: [ master, integration/yw ]
 
 permissions:
   id-token: write
