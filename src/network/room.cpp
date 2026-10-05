@@ -912,12 +912,20 @@ void Room::RoomImpl::HandleStreetPassPacket(const ENetEvent* event) {
     packet.IgnoreBytes(sizeof(u8));
 
     u32 program_id{};
-    std::vector<u8> message;
     packet >> program_id;
-    packet >> message;
 
-    if (!packet || message.empty() || message.size() > MaxStreetPassMessageSize) {
-        LOG_WARNING(Network, "Dropping invalid StreetPass packet from room member");
+    u32 message_size{};
+    packet >> message_size;
+    if (!packet || message_size == 0 || message_size > MaxStreetPassMessageSize) {
+        LOG_WARNING(Network, "Dropping invalid StreetPass packet size={} from room member",
+                    message_size);
+        return;
+    }
+
+    std::vector<u8> message(message_size);
+    packet.Read(message.data(), message_size);
+    if (!packet) {
+        LOG_WARNING(Network, "Dropping truncated StreetPass packet from room member");
         return;
     }
 
