@@ -5,6 +5,7 @@
 #pragma once
 
 #include <memory>
+#include <mutex>
 #include <span>
 #include "common/bit_field.h"
 #include "common/common_funcs.h"
@@ -21,12 +22,19 @@ namespace Core {
 class System;
 }
 
+namespace Network {
+class RoomMember;
+struct StreetPassPacket;
+}
+
 namespace Service::CECD {
 
-class Module final {
+class Module final : public std::enable_shared_from_this<Module> {
 public:
     explicit Module(Core::System& system);
     ~Module();
+
+    void BindRoomMember(const std::shared_ptr<Network::RoomMember>& member);
 
     enum class CecCommand : u32 {
         None = 0,
@@ -622,11 +630,27 @@ private:
     void CheckAndUpdateFile(const CecDataPathType path_type, const u32 ncch_program_id,
                             std::vector<u8>& file_buffer);
 
+    struct PendingStreetPassMessage {
+        u32 program_id{};
+        std::vector<u8> message;
+    };
+
+    void QueueStreetPassPacket(const Network::StreetPassPacket& packet);
+    void ProcessPendingStreetPassPackets();
+    bool InjectStreetPassMessage(u32 program_id, std::vector<u8> message);
+    void BroadcastStreetPassMessage(u32 program_id, const std::vector<u8>& message);
+    void BroadcastOutboxMessages(u32 program_id);
+    void BroadcastAllOutboxMessages();
+
     std::unique_ptr<FileSys::ArchiveBackend> cecd_system_save_data_archive;
 
     std::shared_ptr<Kernel::Event> cecinfo_event;
     std::shared_ptr<Kernel::Event> cecinfosys_event;
     std::shared_ptr<Kernel::Event> change_state_event;
+
+    std::mutex streetpass_mutex;
+    std::vector<PendingStreetPassMessage> pending_streetpass_messages;
+    std::weak_ptr<Network::RoomMember> room_member;
 
     Core::System& system;
 
