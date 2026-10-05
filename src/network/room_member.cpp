@@ -387,11 +387,18 @@ void RoomMember::RoomMemberImpl::HandleStreetPassPacket(const ENetEvent* event) 
 
     StreetPassPacket streetpass_packet{};
     packet >> streetpass_packet.program_id;
-    packet >> streetpass_packet.message;
 
-    if (!packet || streetpass_packet.message.empty() ||
-        streetpass_packet.message.size() > MaxStreetPassMessageSize) {
-        LOG_WARNING(Network, "Dropping invalid StreetPass room packet");
+    u32 message_size{};
+    packet >> message_size;
+    if (!packet || message_size == 0 || message_size > MaxStreetPassMessageSize) {
+        LOG_WARNING(Network, "Dropping invalid StreetPass room packet size={}", message_size);
+        return;
+    }
+
+    streetpass_packet.message.resize(message_size);
+    packet.Read(streetpass_packet.message.data(), message_size);
+    if (!packet) {
+        LOG_WARNING(Network, "Dropping truncated StreetPass room packet");
         return;
     }
 
