@@ -1,0 +1,108 @@
+name: YW fork Windows release
+
+on:
+  push:
+    branches:
+      - "release/**"
+    paths:
+      - ".github/release-trigger/**"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows-msys2:
+    runs-on: windows-latest
+    env:
+      OS: windows
+      TARGET: msys2
+
+    defaults:
+      run:
+        shell: msys2 {0}
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - name: Resolve release version
+        shell: pwsh
+        run: |
+          $version = "${{ github.ref_name }}".Replace("release/", "")
+          if ([string]::IsNullOrWhiteSpace($version)) {
+            throw "Could not derive release version from branch name."
+          }
+          "VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Append
+          Write-Host "Release version: $version"
+
+      - name: Set up MSYS2
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: clang64
+          update: true
+          install: git make p7zip
+          pacboy: >-
+            toolchain:p ccache:p cmake:p ninja:p spirv-tools:p
+            qt6-base:p qt6-multimedia:p qt6-multimedia-wmf:p qt6-tools:p qt6-translations:p
+
+      - name: Install NSIS
+        shell: pwsh
+        run: |
+          $installer = "$env:RUNNER_TEMP\nsis-setup.exe"
+          Invoke-WebRequest -Uri "https://download.sourceforge.net/project/nsis/NSIS%203/3.11/nsis-3.11-setup.exe" -OutFile $installer
+          Start-Process -FilePath $installer -ArgumentList "/S" -Wait
+
+      - name: Disable line ending translation
+        run: git config --global core.autocrlf input
+
+      - name: Build Windows MSYS2
+        run: ./.ci/windows.sh
+
+      - name: Generate installer
+        shell: cmd
+        run: |
+          cd src\installer
+          "C:\Program Files (x86)\NSIS\makensis.exe" /DPRODUCT_VARIANT=msys2 /DPRODUCT_VERSION=%VERSION% citra.nsi
+          if not exist ..\..\artifacts mkdir ..\..\artifacts
+          move /y *.exe ..\..\artifacts\
+
+      - name: Pack portable ZIP
+        run: ./.ci/pack.sh
+
+      - name: Normalize artifact names
+        shell: pwsh
+        run: |
+          $zip = Get-ChildItem artifacts -Filter "*.zip" | Select-Object -First 1
+          if (-not $zip) {
+            throw "Portable ZIP was not generated."
+          }
+          Move-Item -Force $zip.FullName "artifacts/azahar-$env:VERSION-windows-msys2.zip"
+
+          $installer = Get-ChildItem artifacts -Filter "*installer.exe" | Select-Object -First 1
+          if (-not $installer) {
+            throw "Windows installer was not generated."
+          }
+          Move-Item -Force $installer.FullName "artifacts/azahar-$env:VERSION-windows-msys2-installer.exe"
+
+          Get-ChildItem artifacts
+
+      - name: Upload workflow artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: azahar-${{ env.VERSION }}-windows-msys2
+          path: |
+            artifacts/*.zip
+            artifacts/*.exe
+
+      - name: Create GitHub prerelease
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $titleVersion = $env:VERSION.Replace("yw-", "")
+          $title = "Azahar YW Compatibility Fork $titleVersion"
+
+          gh release create $env:VERSION --target $env:GITHUB_SHA --title $title --notes-file docs/yw-fork-install.md --prerelease
+          gh release upload $env:VERSION "artifacts/azahar-$env:VERSION-windows-msys2.zip" "artifacts/azahar-$env:VERSION-windows-msys2-installer.exe" --clobber
