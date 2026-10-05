@@ -49,10 +49,7 @@ jobs:
 
       - name: Install NSIS
         shell: pwsh
-        run: |
-          $installer = "$env:RUNNER_TEMP\nsis-setup.exe"
-          Invoke-WebRequest -Uri "https://download.sourceforge.net/project/nsis/NSIS%203/3.11/nsis-3.11-setup.exe" -OutFile $installer
-          Start-Process -FilePath $installer -ArgumentList "/S" -Wait
+        run: choco install nsis --yes --no-progress
 
       - name: Disable line ending translation
         run: git config --global core.autocrlf input
