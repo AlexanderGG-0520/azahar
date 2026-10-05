@@ -228,6 +228,12 @@ public:
     void HandleWifiPacket(const ENetEvent* event);
 
     /**
+     * Broadcasts a CECD StreetPass packet to all members except the sender.
+     * @param event The ENet event containing the StreetPass packet.
+     */
+    void HandleStreetPassPacket(const ENetEvent* event);
+
+    /**
      * Extracts a chat entry from a received ENet packet and adds it to the chat queue.
      * @param event The ENet event that was received.
      */
@@ -262,6 +268,9 @@ void Room::RoomImpl::ServerLoop() {
                     break;
                 case IdWifiPacket:
                     HandleWifiPacket(&event);
+                    break;
+                case IdStreetPassPacket:
+                    HandleStreetPassPacket(&event);
                     break;
                 case IdChatMessage:
                     HandleChatPacket(&event);
@@ -894,6 +903,45 @@ void Room::RoomImpl::HandleWifiPacket(const ENetEvent* event) {
             enet_packet_destroy(enet_packet);
         }
     }
+    enet_host_flush(server);
+}
+
+void Room::RoomImpl::HandleStreetPassPacket(const ENetEvent* event) {
+    Packet packet;
+    packet.Append(event->packet->data, event->packet->dataLength);
+    packet.IgnoreBytes(sizeof(u8));
+
+    u32 program_id{};
+    std::vector<u8> message;
+    packet >> program_id;
+    packet >> message;
+
+    if (!packet || message.empty() || message.size() > MaxStreetPassMessageSize) {
+        LOG_WARNING(Network, "Dropping invalid StreetPass packet from room member");
+        return;
+    }
+
+    Packet out_packet;
+    out_packet << static_cast<u8>(IdStreetPassPacket);
+    out_packet << program_id;
+    out_packet << message;
+
+    ENetPacket* enet_packet = enet_packet_create(out_packet.GetData(), out_packet.GetDataSize(),
+                                                 ENET_PACKET_FLAG_RELIABLE);
+
+    std::lock_guard lock(member_mutex);
+    bool sent_packet = false;
+    for (const auto& member : members) {
+        if (member.peer != event->peer) {
+            sent_packet = true;
+            enet_peer_send(member.peer, 0, enet_packet);
+        }
+    }
+
+    if (!sent_packet) {
+        enet_packet_destroy(enet_packet);
+    }
+
     enet_host_flush(server);
 }
 
