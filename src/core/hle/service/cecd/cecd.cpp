@@ -80,6 +80,12 @@ void Module::QueueStreetPassPacket(const Network::StreetPassPacket& packet) {
 }
 
 void Module::ProcessPendingStreetPassPackets() {
+    if (room_member.expired()) {
+        if (const auto member = Network::GetRoomMember().lock()) {
+            BindRoomMember(member);
+        }
+    }
+
     std::vector<PendingStreetPassMessage> pending;
     {
         std::lock_guard lock(streetpass_mutex);
@@ -346,6 +352,7 @@ void Module::BroadcastAllOutboxMessages() {
 }
 
 void Module::Interface::Open(Kernel::HLERequestContext& ctx) {
+    cecd->ProcessPendingStreetPassPackets();
     IPC::RequestParser rp(ctx);
     const u32 ncch_program_id = rp.Pop<u32>();
     const CecDataPathType path_type = rp.PopEnum<CecDataPathType>();
@@ -462,6 +469,10 @@ void Module::Interface::Read(Kernel::HLERequestContext& ctx) {
         write_buffer.Write(buffer.data(), 0, write_buffer_size);
         session_data->file->Close();
 
+        if (session_data->data_path_type == CecDataPathType::OutboxMsg) {
+            cecd->BroadcastStreetPassMessage(session_data->ncch_program_id, buffer);
+        }
+
         rb.Push(ResultSuccess);
         rb.Push<u32>(bytes_read);
     }
@@ -472,6 +483,7 @@ void Module::Interface::Read(Kernel::HLERequestContext& ctx) {
 }
 
 void Module::Interface::ReadMessage(Kernel::HLERequestContext& ctx) {
+    cecd->ProcessPendingStreetPassPackets();
     IPC::RequestParser rp(ctx);
     const u32 ncch_program_id = rp.Pop<u32>();
     const bool is_outbox = rp.Pop<bool>();
@@ -541,6 +553,7 @@ void Module::Interface::ReadMessage(Kernel::HLERequestContext& ctx) {
 }
 
 void Module::Interface::ReadMessageWithHMAC(Kernel::HLERequestContext& ctx) {
+    cecd->ProcessPendingStreetPassPackets();
     IPC::RequestParser rp(ctx);
     const u32 ncch_program_id = rp.Pop<u32>();
     const bool is_outbox = rp.Pop<bool>();
@@ -737,6 +750,10 @@ void Module::Interface::WriteMessage(Kernel::HLERequestContext& ctx) {
             static_cast<u32>(message->Write(0, buffer_size, true, false, buffer.data()).Unwrap());
         message->Close();
 
+        if (is_outbox) {
+            cecd->BroadcastStreetPassMessage(ncch_program_id, buffer);
+        }
+
         rb.Push(ResultSuccess);
     } else {
         rb.Push(Result(ErrorDescription::NoData, ErrorModule::CEC, ErrorSummary::NotFound,
@@ -823,6 +840,10 @@ void Module::Interface::WriteMessageWithHMAC(Kernel::HLERequestContext& ctx) {
         [[maybe_unused]] const u32 bytes_written =
             static_cast<u32>(message->Write(0, buffer_size, true, false, buffer.data()).Unwrap());
         message->Close();
+
+        if (is_outbox) {
+            cecd->BroadcastStreetPassMessage(ncch_program_id, buffer);
+        }
 
         rb.Push(ResultSuccess);
     } else {
@@ -960,8 +981,14 @@ void Module::Interface::ReadData(Kernel::HLERequestContext& ctx) {
 }
 
 void Module::Interface::Start(Kernel::HLERequestContext& ctx) {
+    cecd->ProcessPendingStreetPassPackets();
+
     IPC::RequestParser rp(ctx);
     const CecCommand command = rp.PopEnum<CecCommand>();
+
+    if (command == CecCommand::StartScan || command == CecCommand::Rescan) {
+        cecd->BroadcastAllOutboxMessages();
+    }
 
     IPC::RequestBuilder rb = rp.MakeBuilder(1, 0);
     rb.Push(ResultSuccess);
@@ -1084,6 +1111,7 @@ void Module::Interface::OpenAndWrite(Kernel::HLERequestContext& ctx) {
 }
 
 void Module::Interface::OpenAndRead(Kernel::HLERequestContext& ctx) {
+    cecd->ProcessPendingStreetPassPackets();
     IPC::RequestParser rp(ctx);
     const u32 buffer_size = rp.Pop<u32>();
     const u32 ncch_program_id = rp.Pop<u32>();
@@ -1773,6 +1801,9 @@ Module::~Module() = default;
 void InstallInterfaces(Core::System& system) {
     auto& service_manager = system.ServiceManager();
     auto cecd = std::make_shared<Module>(system);
+    if (const auto member = Network::GetRoomMember().lock()) {
+        cecd->BindRoomMember(member);
+    }
     std::make_shared<CECD_NDM>(cecd)->InstallAsService(service_manager);
     std::make_shared<CECD_S>(cecd)->InstallAsService(service_manager);
     std::make_shared<CECD_U>(cecd)->InstallAsService(service_manager);
