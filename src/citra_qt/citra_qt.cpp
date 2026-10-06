@@ -1,4 +1,4 @@
-// Copyright Citra Emulator Project / Azahar Emulator Project
+// Copyright 2024-2026 Citra Emulator Project / Azahar Emulator Project
 // Licensed under GPLv2 or any later version
 // Refer to the license.txt file included.
 
@@ -1257,9 +1257,9 @@ void GMainWindow::UpdateMenuState() {
     ui->action_Advance_Frame->setEnabled(emulation_running && is_paused);
 
     if (emulation_running && is_paused) {
-        ui->action_Pause->setText(tr("&Continue"));
+        ui->action_Pause->setText(tr("Continue"));
     } else {
-        ui->action_Pause->setText(tr("&Pause"));
+        ui->action_Pause->setText(tr("Pause"));
     }
 }
 
@@ -1425,7 +1425,7 @@ bool GMainWindow::LoadROM(const QString& filename) {
             break;
         case Core::System::ResultStatus::ErrorLoader:
             QMessageBox::critical(this, tr("Generic load error"),
-                                  tr("An generic load error occurred while loading the "
+                                  tr("A generic load error occurred while loading the "
                                      "application.<br/>Please check the log for more details."));
             break;
         case Core::System::ResultStatus::ErrorLoader_ErrorPatches:
@@ -1802,28 +1802,21 @@ void GMainWindow::UpdateSaveStates() {
         if (savestate.slot >= Core::SaveStateSlotCount) {
             continue;
         }
-        const bool display_name =
-            savestate.status == Core::SaveStateInfo::ValidationStatus::RevisionDismatch &&
-            !savestate.build_name.empty();
         actions_load_state[savestate.slot]->setEnabled(true);
         if (savestate.slot == 0) {
-            const auto text = tr("%2 %3")
+            const auto text = QStringLiteral("%2")
                                   .arg(QDateTime::fromSecsSinceEpoch(savestate.time)
                                            .toString(QStringLiteral("yyyy-MM-dd hh:mm:ss")))
-                                  .arg(display_name ? QString::fromStdString(savestate.build_name)
-                                                    : QLatin1String())
                                   .trimmed();
             ui->action_Quick_Save->setText(tr("Quick Save - %1").arg(text).trimmed());
             ui->action_Quick_Load->setText(tr("Quick Load - %1").arg(text).trimmed());
             continue;
         }
-        const auto text =
-            tr("Slot %1 - %2 %3")
-                .arg(savestate.slot)
-                .arg(QDateTime::fromSecsSinceEpoch(savestate.time)
-                         .toString(QStringLiteral("yyyy-MM-dd hh:mm:ss")))
-                .arg(display_name ? QString::fromStdString(savestate.build_name) : QLatin1String())
-                .trimmed();
+        const auto text = tr("Slot %1 - %2")
+                              .arg(savestate.slot)
+                              .arg(QDateTime::fromSecsSinceEpoch(savestate.time)
+                                       .toString(QStringLiteral("yyyy-MM-dd hh:mm:ss")))
+                              .trimmed();
 
         actions_load_state[savestate.slot]->setText(text);
         actions_save_state[savestate.slot]->setText(text);
@@ -2226,7 +2219,7 @@ void GMainWindow::OnGameListDumpRomFS(QString game_path, u64 program_id) {
                 const auto& [base, update] = future_watcher->result();
                 if (base != Loader::ResultStatus::Success) {
                     QMessageBox::critical(
-                        this, tr("Azahar"),
+                        this, QStringLiteral("Azahar"),
                         tr("Could not dump base RomFS.\nRefer to the log for details."));
                     return;
                 }
@@ -2300,9 +2293,8 @@ void GMainWindow::OnGameListOpenPerGameProperties(const QString& file) {
 void GMainWindow::OnMenuLoadFile() {
     const QString extensions = QStringLiteral("*.").append(
         GameList::supported_file_extensions.join(QStringLiteral(" *.")));
-    const QString file_filter = tr("3DS Executable (%1);;All Files (*.*)",
-                                   "%1 is an identifier for the 3DS executable file extensions.")
-                                    .arg(extensions);
+    const QString file_filter = tr("3DS Executable") + QStringLiteral(" (%1)").arg(extensions) +
+                                QStringLiteral(";;") + tr("All Files") + QStringLiteral(" (*.*)");
     const QString filename = QFileDialog::getOpenFileName(
         this, tr("Load File"), UISettings::values.roms_path, file_filter);
 
@@ -2347,7 +2339,7 @@ void GMainWindow::OnMenuSetUpSystemFiles() {
     QLineEdit textInput(UISettings::values.last_artic_base_addr, &dialog);
     layout_h.addWidget(&textInput);
 
-    QLabel label_select(tr("<br>Choose setup mode:"), &dialog);
+    QLabel label_select(QStringLiteral("<br>") + tr("Choose setup mode:"), &dialog);
     layout.addWidget(&label_select);
 
     std::pair<bool, bool> install_state = Core::AreSystemTitlesInstalled();
@@ -2416,7 +2408,8 @@ void GMainWindow::OnMenuSetUpSystemFiles() {
 void GMainWindow::OnMenuInstallCIA() {
     QStringList filepaths = QFileDialog::getOpenFileNames(
         this, tr("Load Files"), UISettings::values.roms_path,
-        tr("3DS Installation File (*.cia *.zcia)") + QStringLiteral(";;") + tr("All Files (*.*)"));
+        tr("3DS Installation File") + QStringLiteral(" (*.cia *.zcia);;") + tr("All Files") +
+            QStringLiteral(" (*.*)"));
 
     if (filepaths.isEmpty()) {
         return;
@@ -2578,9 +2571,10 @@ void GMainWindow::UninstallTitles(
     future_watcher.waitForFinished();
 
     if (failed) {
-        QMessageBox::critical(this, tr("Azahar"), tr("Failed to uninstall '%1'.").arg(failed_name));
+        QMessageBox::critical(this, QStringLiteral("Azahar"),
+                              tr("Failed to uninstall '%1'.").arg(failed_name));
     } else if (!future_watcher.isCanceled()) {
-        QMessageBox::information(this, tr("Azahar"),
+        QMessageBox::information(this, QStringLiteral("Azahar"),
                                  tr("Successfully uninstalled '%1'.").arg(first_name));
         emit InstalledTitlesChanged();
     }
@@ -3059,7 +3053,8 @@ void GMainWindow::OnLoadAmiibo() {
     }
 
     const QString extensions{QStringLiteral("*.bin")};
-    const QString file_filter = tr("Amiibo File (%1);; All Files (*.*)").arg(extensions);
+    const QString file_filter = tr("Amiibo File") + QStringLiteral(" (%1);;").arg(extensions) +
+                                tr("All Files") + QStringLiteral(" (*.*)");
     const QString filename = QFileDialog::getOpenFileName(this, tr("Load Amiibo"), {}, file_filter);
 
     if (filename.isEmpty()) {
@@ -3296,10 +3291,10 @@ void GMainWindow::OnCompressFile() {
     //
     // This is enforced using the loaders as they already return an error on encryption.
 
-    QStringList filepaths =
-        QFileDialog::getOpenFileNames(this, tr("Load 3DS ROM Files"), UISettings::values.roms_path,
-                                      tr("3DS ROM Files (*.cia *.cci *.3dsx *.cxi *.3ds)") +
-                                          QStringLiteral(";;") + tr("All Files (*.*)"));
+    QStringList filepaths = QFileDialog::getOpenFileNames(
+        this, tr("Load 3DS ROM Files"), UISettings::values.roms_path,
+        tr("3DS ROM Files") + QStringLiteral(" (*.cia *.cci *.3dsx *.cxi *.3ds);;") +
+            tr("All Files") + QStringLiteral(" (*.*)"));
 
     QString out_path;
 
@@ -3322,9 +3317,9 @@ void GMainWindow::OnCompressFile() {
             QStringLiteral(".") +
             QString::fromStdString(compress_info.value().first.recommended_compressed_extension);
 
-        QString out_filter = tr("3DS Compressed ROM File (*.%1)")
-                                 .arg(QString::fromStdString(
-                                     compress_info.value().first.recommended_compressed_extension));
+        QString out_filter = tr("3DS Compressed ROM File") +
+                             QStringLiteral(" (*.%1)").arg(QString::fromStdString(
+                                 compress_info.value().first.recommended_compressed_extension));
         out_path = QFileDialog::getSaveFileName(this, tr("Save 3DS Compressed ROM File"),
                                                 final_path, out_filter);
         if (out_path.isEmpty()) {
@@ -3391,8 +3386,8 @@ void GMainWindow::OnDecompressFile() {
 
     QStringList filepaths = QFileDialog::getOpenFileNames(
         this, tr("Load 3DS Compressed ROM Files"), UISettings::values.roms_path,
-        tr("3DS Compressed ROM Files (*.zcia *zcci *z3dsx *zcxi)") + QStringLiteral(";;") +
-            tr("All Files (*.*)"));
+        tr("3DS Compressed ROM Files") + QStringLiteral(" (*.zcia *zcci *z3dsx *zcxi)") +
+            QStringLiteral(";;") + tr("All Files") + QStringLiteral(" (*.*)"));
 
     QString out_path;
 
@@ -3415,10 +3410,9 @@ void GMainWindow::OnDecompressFile() {
             QStringLiteral(".") +
             QString::fromStdString(compress_info.value().first.recommended_uncompressed_extension);
 
-        QString out_filter =
-            tr("3DS ROM File (*.%1)")
-                .arg(QString::fromStdString(
-                    compress_info.value().first.recommended_uncompressed_extension));
+        QString out_filter = tr("3DS ROM File") +
+                             QStringLiteral(" (*.%1)").arg(QString::fromStdString(
+                                 compress_info.value().first.recommended_uncompressed_extension));
         out_path =
             QFileDialog::getSaveFileName(this, tr("Save 3DS ROM File"), final_path, out_filter);
         if (out_path.isEmpty()) {
@@ -3504,7 +3498,7 @@ void GMainWindow::OnOpenFFmpeg() {
 
     for (auto& library_name : library_names) {
         if (!FileUtil::Exists(bin_dir + DIR_SEP + library_name)) {
-            QMessageBox::critical(this, tr("Azahar"),
+            QMessageBox::critical(this, QStringLiteral("Azahar"),
                                   tr("The provided FFmpeg directory is missing %1. Please make "
                                      "sure the correct directory was selected.")
                                       .arg(QString::fromStdString(library_name)));
@@ -3528,9 +3522,10 @@ void GMainWindow::OnOpenFFmpeg() {
     FileUtil::ForeachDirectoryEntry(nullptr, bin_dir, process_file);
 
     if (success.load()) {
-        QMessageBox::information(this, tr("Azahar"), tr("FFmpeg has been sucessfully installed."));
+        QMessageBox::information(this, QStringLiteral("Azahar"),
+                                 tr("FFmpeg has been sucessfully installed."));
     } else {
-        QMessageBox::critical(this, tr("Azahar"),
+        QMessageBox::critical(this, QStringLiteral("Azahar"),
                               tr("Installation of FFmpeg failed. Check the log file for details."));
     }
 }
@@ -3560,7 +3555,7 @@ void GMainWindow::StartVideoDumping(const QString& path) {
         system.RegisterVideoDumper(dumper);
     } else {
         QMessageBox::critical(
-            this, tr("Azahar"),
+            this, QStringLiteral("Azahar"),
             tr("Could not start video dumping.<br>Please ensure that the video encoder is "
                "configured correctly.<br>Refer to the log for details."));
         ui->action_Dump_Video->setChecked(false);
@@ -3645,7 +3640,7 @@ void GMainWindow::UpdateStatusBar() {
                                tr("(Accessing SaveData)")),
             };
 
-        const QString unit = do_mb ? tr("MB/s") : tr("KB/s");
+        const QString unit = do_mb ? QStringLiteral("MB/s") : QStringLiteral("KB/s");
         QString event{};
         for (auto p : perf_events) {
             if (results.artic_events.Get(p.first)) {
@@ -3903,6 +3898,17 @@ void GMainWindow::OnCoreError(Core::System::ResultStatus result, std::string det
             tr("An invalid memory access occurred while executing the emulated application.\n\n");
         message += QString::fromStdString(details);
         error_severity_icon = QMessageBox::Icon::Critical;
+    } else if (result == Core::System::ResultStatus::ErrorSavestateBuildMismatch) {
+        title = tr("Savestate version mismatch");
+        message = tr("Could not load savestate because it was created on a different Azahar "
+                     "version:<br/>"
+                     "<b>Azahar %1</b>.<br/><br/>Please read our blog entry <a "
+                     "href='https://azahar-emu.org/blog/understanding-save-states/'>understanding "
+                     "savestates</a> for more information.<br/><br/>To recover your progress, "
+                     "downgrade to <b>Azahar %1</b>, load this savestate and use the application's "
+                     "built-in save functionality.")
+                      .arg(QString::fromStdString(details));
+        error_severity_icon = QMessageBox::Icon::Critical;
     } else {
         title = tr("Fatal Error");
         message = tr("A fatal error occurred. "
@@ -3958,7 +3964,7 @@ bool GMainWindow::ConfirmClose() {
     }
 
     QMessageBox::StandardButton answer =
-        QMessageBox::question(this, tr("Azahar"), tr("Would you like to exit now?"),
+        QMessageBox::question(this, QStringLiteral("Azahar"), tr("Would you like to exit now?"),
                               QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
     return answer != QMessageBox::No;
 }
@@ -4054,7 +4060,7 @@ bool GMainWindow::ConfirmChangeGame() {
     }
 
     auto answer = QMessageBox::question(
-        this, tr("Azahar"),
+        this, QStringLiteral("Azahar"),
         tr("The application is still running. Would you like to stop emulation?"),
         QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
     return answer != QMessageBox::No;
