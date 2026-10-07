@@ -2,6 +2,8 @@
 // Licensed under GPLv2 or any later version
 // Refer to the license.txt file included.
 
+#include <algorithm>
+#include <charconv>
 #include <boost/serialization/shared_ptr.hpp>
 #include <boost/serialization/unique_ptr.hpp>
 #include <cryptopp/base64.h>
@@ -26,6 +28,8 @@
 #include "core/hle/service/cecd/cecd_s.h"
 #include "core/hle/service/cecd/cecd_u.h"
 #include "core/hle/service/cfg/cfg.h"
+#include "network/network.h"
+#include "network/room_member.h"
 
 SERVICE_CONSTRUCT_IMPL(Service::CECD::Module)
 SERIALIZE_EXPORT_IMPL(Service::CECD::Module)
@@ -47,7 +51,380 @@ using CecDataPathType = Module::CecDataPathType;
 using CecOpenMode = Module::CecOpenMode;
 using CecSystemInfoType = Module::CecSystemInfoType;
 
+constexpr std::size_t MaxRoomStreetPassMessageSize = 0x20000;
+constexpr std::size_t StreetPassRoomHeaderSize = sizeof(u32);
+
+std::array<u8, 8> MakeRoomStreetPassMessageId(const std::array<u8, 8>& original_message_id,
+                                               const std::array<u8, 6>& sender_mac) {
+    // CECD message IDs can be identical when users clone a save/NAND. For room-delivered
+    // StreetPass, derive a stable local ID from both the original message ID and sender MAC.
+    // This makes retries from the same sender deduplicate while allowing another virtual 3DS
+    // with the same cloned message ID to be treated as a distinct encounter.
+    u64 hash = 14695981039346656037ULL;
+    constexpr u64 fnv_prime = 1099511628211ULL;
+
+    const auto mix = [&hash](const u8 byte) {
+        hash ^= byte;
+        hash *= fnv_prime;
+    };
+
+    for (const u8 byte : original_message_id) {
+        mix(byte);
+    }
+    for (const u8 byte : sender_mac) {
+        mix(byte);
+    }
+
+    std::array<u8, 8> derived_id{};
+    for (std::size_t i = 0; i < derived_id.size(); ++i) {
+        derived_id[i] = static_cast<u8>(hash >> (i * 8));
+    }
+    return derived_id;
+}
+
+void Module::BindRoomMember(const std::shared_ptr<Network::RoomMember>& member) {
+    if (!member) {
+        return;
+    }
+
+    if (const auto current = room_member.lock(); current && current.get() == member.get()) {
+        return;
+    }
+
+    room_member = member;
+    const std::weak_ptr<Module> weak_self = weak_from_this();
+    member->BindOnWifiPacketReceived([weak_self](const Network::WifiPacket& packet) {
+        if (packet.type != Network::WifiPacket::PacketType::StreetPass) {
+            return;
+        }
+        if (const auto self = weak_self.lock()) {
+            self->QueueStreetPassPacket(packet);
+        }
+    });
+}
+
+void Module::QueueStreetPassPacket(const Network::WifiPacket& packet) {
+    if (packet.data.size() < StreetPassRoomHeaderSize + sizeof(CecMessageHeader) ||
+        packet.data.size() > StreetPassRoomHeaderSize + MaxRoomStreetPassMessageSize) {
+        return;
+    }
+
+    const u32 program_id = static_cast<u32>(packet.data[0]) |
+                           (static_cast<u32>(packet.data[1]) << 8) |
+                           (static_cast<u32>(packet.data[2]) << 16) |
+                           (static_cast<u32>(packet.data[3]) << 24);
+
+    std::array<u8, 6> sender_mac{};
+    std::copy(packet.transmitter_address.begin(), packet.transmitter_address.end(),
+              sender_mac.begin());
+
+    std::vector<u8> message(packet.data.begin() + StreetPassRoomHeaderSize, packet.data.end());
+    {
+        std::lock_guard lock(streetpass_mutex);
+        pending_streetpass_messages.push_back({program_id, sender_mac, std::move(message)});
+    }
+
+    // Room callbacks run on the network thread. As with NWM::UDS, take the HLE lock before
+    // signaling kernel events from that thread. The actual NAND/CECD writes stay deferred until
+    // the emulation thread enters CECD again.
+    std::scoped_lock hle_lock(system.Kernel().GetHLELock());
+    cecinfo_event->Signal();
+    cecinfosys_event->Signal();
+    change_state_event->Signal();
+}
+
+void Module::ProcessPendingStreetPassPackets() {
+    if (room_member.expired()) {
+        if (const auto member = Network::GetRoomMember().lock()) {
+            BindRoomMember(member);
+        }
+    }
+
+    std::vector<PendingStreetPassMessage> pending;
+    {
+        std::lock_guard lock(streetpass_mutex);
+        pending.swap(pending_streetpass_messages);
+    }
+
+    for (auto& packet : pending) {
+        InjectStreetPassMessage(packet.program_id, packet.sender_mac, std::move(packet.message));
+    }
+}
+
+bool Module::InjectStreetPassMessage(const u32 program_id,
+                                     const std::array<u8, 6>& sender_mac,
+                                     std::vector<u8> message) {
+    if (message.size() < sizeof(CecMessageHeader) ||
+        message.size() > MaxRoomStreetPassMessageSize) {
+        return false;
+    }
+
+    CecMessageHeader message_header{};
+    std::memcpy(&message_header, message.data(), sizeof(message_header));
+    if (message_header.magic != 0x6060 || message_header.header_size < sizeof(CecMessageHeader) ||
+        static_cast<u64>(message_header.header_size) + message_header.body_size > message.size()) {
+        LOG_WARNING(Service_CECD,
+                    "Dropping malformed StreetPass message for program {:#010x}", program_id);
+        return false;
+    }
+
+    FileSys::Mode info_mode;
+    info_mode.read_flag.Assign(1);
+    info_mode.write_flag.Assign(1);
+
+    const FileSys::Path inbox_info_path(
+        GetCecDataPathTypeAsString(CecDataPathType::InboxInfo, program_id).data());
+    auto info_result = cecd_system_save_data_archive->OpenFile(inbox_info_path, info_mode);
+    if (info_result.Failed()) {
+        LOG_DEBUG(Service_CECD,
+                  "Ignoring StreetPass message for inactive CECD program {:#010x}", program_id);
+        return false;
+    }
+
+    auto info_file = std::move(info_result).Unwrap();
+    const u32 info_size = static_cast<u32>(info_file->GetSize());
+    if (info_size < sizeof(CecBoxInfoHeader)) {
+        info_file->Close();
+        return false;
+    }
+
+    std::vector<u8> info_buffer(info_size);
+    if (info_file->Read(0, info_size, info_buffer.data()).Failed()) {
+        info_file->Close();
+        return false;
+    }
+
+    CecBoxInfoHeader info_header{};
+    std::memcpy(&info_header, info_buffer.data(), sizeof(info_header));
+    if (info_header.magic != 0x6262) {
+        info_file->Close();
+        return false;
+    }
+
+    std::array<u8, 8> original_message_id{};
+    std::memcpy(original_message_id.data(), message_header.message_id.data(),
+                original_message_id.size());
+    const std::array<u8, 8> message_id =
+        MakeRoomStreetPassMessageId(original_message_id, sender_mac);
+    std::memcpy(message_header.message_id.data(), message_id.data(), message_id.size());
+    std::memcpy(message.data(), &message_header, sizeof(message_header));
+
+    const FileSys::Path inbox_message_path(
+        GetCecDataPathTypeAsString(CecDataPathType::InboxMsg, program_id, message_id).data());
+
+    FileSys::Mode read_mode;
+    read_mode.read_flag.Assign(1);
+    auto existing_result = cecd_system_save_data_archive->OpenFile(inbox_message_path, read_mode);
+    if (existing_result.Succeeded()) {
+        auto existing_file = std::move(existing_result).Unwrap();
+        existing_file->Close();
+        info_file->Close();
+        return false;
+    }
+
+    const u32 existing_count =
+        static_cast<u32>((info_buffer.size() - sizeof(CecBoxInfoHeader)) / sizeof(CecMessageHeader));
+    info_header.message_num = existing_count;
+
+    if ((info_header.max_message_num != 0 &&
+         info_header.message_num >= info_header.max_message_num) ||
+        (info_header.max_message_size != 0 && message.size() > info_header.max_message_size) ||
+        (info_header.max_box_size != 0 &&
+         static_cast<u64>(info_header.box_size) + message.size() > info_header.max_box_size)) {
+        LOG_WARNING(Service_CECD,
+                    "StreetPass inbox is full for program {:#010x}; dropping message", program_id);
+        info_file->Close();
+        return false;
+    }
+
+    message_header.is_unopen = 1;
+    message_header.is_new = 1;
+    std::memcpy(message.data(), &message_header, sizeof(message_header));
+
+    FileSys::Mode message_mode;
+    message_mode.write_flag.Assign(1);
+    message_mode.create_flag.Assign(1);
+    auto message_result =
+        cecd_system_save_data_archive->OpenFile(inbox_message_path, message_mode);
+    if (message_result.Failed()) {
+        info_file->Close();
+        return false;
+    }
+
+    auto message_file = std::move(message_result).Unwrap();
+    message_file->SetSize(message.size());
+    const auto write_result =
+        message_file->Write(0, message.size(), true, false, message.data());
+    message_file->Close();
+    if (write_result.Failed()) {
+        info_file->Close();
+        return false;
+    }
+
+    const std::size_t header_offset =
+        sizeof(CecBoxInfoHeader) + static_cast<std::size_t>(info_header.message_num) *
+                                       sizeof(CecMessageHeader);
+    info_buffer.resize(header_offset + sizeof(CecMessageHeader));
+    std::memcpy(info_buffer.data() + header_offset, &message_header, sizeof(message_header));
+
+    info_header.message_num++;
+    info_header.box_size += static_cast<u32>(message.size());
+    info_header.box_info_size = static_cast<u32>(info_buffer.size());
+    std::memcpy(info_buffer.data(), &info_header, sizeof(info_header));
+
+    info_file->SetSize(info_buffer.size());
+    const auto info_write_result =
+        info_file->Write(0, info_buffer.size(), true, false, info_buffer.data());
+    info_file->Close();
+    if (info_write_result.Failed()) {
+        return false;
+    }
+
+    cecinfo_event->Signal();
+    cecinfosys_event->Signal();
+    change_state_event->Signal();
+
+    LOG_INFO(Service_CECD,
+             "Received StreetPass room message for program {:#010x}, {} bytes", program_id,
+             message.size());
+    return true;
+}
+
+void Module::BroadcastStreetPassMessage(const u32 program_id,
+                                        const std::vector<u8>& message) {
+    if (message.size() < sizeof(CecMessageHeader) ||
+        message.size() > MaxRoomStreetPassMessageSize) {
+        return;
+    }
+
+    auto member = room_member.lock();
+    if (!member) {
+        member = Network::GetRoomMember().lock();
+        if (member) {
+            BindRoomMember(member);
+        }
+    }
+
+    if (!member || !member->IsConnected()) {
+        return;
+    }
+
+    Network::WifiPacket packet{};
+    packet.type = Network::WifiPacket::PacketType::StreetPass;
+    packet.channel = 0;
+    packet.transmitter_address = member->GetMacAddress();
+    packet.destination_address = Network::BroadcastMac;
+    packet.data.reserve(StreetPassRoomHeaderSize + message.size());
+    packet.data.push_back(static_cast<u8>(program_id));
+    packet.data.push_back(static_cast<u8>(program_id >> 8));
+    packet.data.push_back(static_cast<u8>(program_id >> 16));
+    packet.data.push_back(static_cast<u8>(program_id >> 24));
+    packet.data.insert(packet.data.end(), message.begin(), message.end());
+
+    member->SendWifiPacket(packet);
+}
+
+void Module::BroadcastOutboxMessages(const u32 program_id) {
+    auto member = room_member.lock();
+    if (!member || !member->IsConnected()) {
+        return;
+    }
+
+    const FileSys::Path outbox_path(
+        GetCecDataPathTypeAsString(CecDataPathType::OutboxDir, program_id).data());
+    auto dir_result = cecd_system_save_data_archive->OpenDirectory(outbox_path);
+    if (dir_result.Failed()) {
+        return;
+    }
+
+    constexpr u32 max_entries = 101;
+    auto outbox_dir = std::move(dir_result).Unwrap();
+    std::vector<FileSys::Entry> entries(max_entries);
+    const u32 entry_count = outbox_dir->Read(max_entries, entries.data());
+    outbox_dir->Close();
+
+    for (u32 i = 0; i < entry_count; ++i) {
+        const std::string filename = Common::UTF16ToUTF8(std::u16string(entries[i].filename));
+        if (entries[i].is_directory || filename == "BoxInfo_____" || filename == "OBIndex_____") {
+            continue;
+        }
+
+        const FileSys::Path message_path(
+            (GetCecDataPathTypeAsString(CecDataPathType::OutboxDir, program_id) + "/" + filename)
+                .data());
+        FileSys::Mode mode;
+        mode.read_flag.Assign(1);
+        auto message_result = cecd_system_save_data_archive->OpenFile(message_path, mode);
+        if (message_result.Failed()) {
+            continue;
+        }
+
+        auto message_file = std::move(message_result).Unwrap();
+        const u32 message_size = static_cast<u32>(message_file->GetSize());
+        if (message_size < sizeof(CecMessageHeader) ||
+            message_size > MaxRoomStreetPassMessageSize) {
+            message_file->Close();
+            continue;
+        }
+
+        std::vector<u8> message(message_size);
+        const auto read_result = message_file->Read(0, message_size, message.data());
+        message_file->Close();
+        if (read_result.Failed()) {
+            continue;
+        }
+
+        BroadcastStreetPassMessage(program_id, message);
+    }
+}
+
+void Module::BroadcastAllOutboxMessages() {
+    auto member = room_member.lock();
+    if (!member) {
+        member = Network::GetRoomMember().lock();
+        if (member) {
+            BindRoomMember(member);
+        }
+    }
+    if (!member || !member->IsConnected()) {
+        return;
+    }
+
+    const FileSys::Path root_path(GetCecDataPathTypeAsString(CecDataPathType::RootDir, 0).data());
+    auto dir_result = cecd_system_save_data_archive->OpenDirectory(root_path);
+    if (dir_result.Failed()) {
+        return;
+    }
+
+    constexpr u32 max_entries = 25;
+    auto root_dir = std::move(dir_result).Unwrap();
+    std::vector<FileSys::Entry> entries(max_entries);
+    const u32 entry_count = root_dir->Read(max_entries, entries.data());
+    root_dir->Close();
+
+    for (u32 i = 0; i < entry_count; ++i) {
+        if (!entries[i].is_directory) {
+            continue;
+        }
+
+        const std::string name = Common::UTF16ToUTF8(std::u16string(entries[i].filename));
+        if (name.size() != 8) {
+            continue;
+        }
+
+        u32 program_id{};
+        const auto [end, error] =
+            std::from_chars(name.data(), name.data() + name.size(), program_id, 16);
+        if (error != std::errc{} || end != name.data() + name.size()) {
+            continue;
+        }
+
+        BroadcastOutboxMessages(program_id);
+    }
+}
+
 void Module::Interface::Open(Kernel::HLERequestContext& ctx) {
+    cecd->ProcessPendingStreetPassPackets();
     IPC::RequestParser rp(ctx);
     const u32 ncch_program_id = rp.Pop<u32>();
     const CecDataPathType path_type = rp.PopEnum<CecDataPathType>();
@@ -174,6 +551,7 @@ void Module::Interface::Read(Kernel::HLERequestContext& ctx) {
 }
 
 void Module::Interface::ReadMessage(Kernel::HLERequestContext& ctx) {
+    cecd->ProcessPendingStreetPassPackets();
     IPC::RequestParser rp(ctx);
     const u32 ncch_program_id = rp.Pop<u32>();
     const bool is_outbox = rp.Pop<bool>();
@@ -243,6 +621,7 @@ void Module::Interface::ReadMessage(Kernel::HLERequestContext& ctx) {
 }
 
 void Module::Interface::ReadMessageWithHMAC(Kernel::HLERequestContext& ctx) {
+    cecd->ProcessPendingStreetPassPackets();
     IPC::RequestParser rp(ctx);
     const u32 ncch_program_id = rp.Pop<u32>();
     const bool is_outbox = rp.Pop<bool>();
@@ -377,6 +756,10 @@ void Module::Interface::Write(Kernel::HLERequestContext& ctx) {
             session_data->file->Write(0, buffer.size(), true, false, buffer.data()).Unwrap());
         session_data->file->Close();
 
+        if (session_data->data_path_type == CecDataPathType::OutboxMsg) {
+            cecd->BroadcastStreetPassMessage(session_data->ncch_program_id, buffer);
+        }
+
         rb.Push(ResultSuccess);
     }
     rb.PushMappedBuffer(read_buffer);
@@ -438,6 +821,10 @@ void Module::Interface::WriteMessage(Kernel::HLERequestContext& ctx) {
         [[maybe_unused]] const u32 bytes_written =
             static_cast<u32>(message->Write(0, buffer_size, true, false, buffer.data()).Unwrap());
         message->Close();
+
+        if (is_outbox) {
+            cecd->BroadcastStreetPassMessage(ncch_program_id, buffer);
+        }
 
         rb.Push(ResultSuccess);
     } else {
@@ -525,6 +912,10 @@ void Module::Interface::WriteMessageWithHMAC(Kernel::HLERequestContext& ctx) {
         [[maybe_unused]] const u32 bytes_written =
             static_cast<u32>(message->Write(0, buffer_size, true, false, buffer.data()).Unwrap());
         message->Close();
+
+        if (is_outbox) {
+            cecd->BroadcastStreetPassMessage(ncch_program_id, buffer);
+        }
 
         rb.Push(ResultSuccess);
     } else {
@@ -662,8 +1053,14 @@ void Module::Interface::ReadData(Kernel::HLERequestContext& ctx) {
 }
 
 void Module::Interface::Start(Kernel::HLERequestContext& ctx) {
+    cecd->ProcessPendingStreetPassPackets();
+
     IPC::RequestParser rp(ctx);
     const CecCommand command = rp.PopEnum<CecCommand>();
+
+    if (command == CecCommand::StartScan || command == CecCommand::Rescan) {
+        cecd->BroadcastAllOutboxMessages();
+    }
 
     IPC::RequestBuilder rb = rp.MakeBuilder(1, 0);
     rb.Push(ResultSuccess);
@@ -769,6 +1166,10 @@ void Module::Interface::OpenAndWrite(Kernel::HLERequestContext& ctx) {
                 file->Write(0, buffer.size(), true, false, buffer.data()).Unwrap());
             file->Close();
 
+            if (path_type == CecDataPathType::OutboxMsg) {
+                cecd->BroadcastStreetPassMessage(ncch_program_id, buffer);
+            }
+
             rb.Push(ResultSuccess);
         } else {
             rb.Push(Result(ErrorDescription::NoData, ErrorModule::CEC, ErrorSummary::NotFound,
@@ -786,6 +1187,7 @@ void Module::Interface::OpenAndWrite(Kernel::HLERequestContext& ctx) {
 }
 
 void Module::Interface::OpenAndRead(Kernel::HLERequestContext& ctx) {
+    cecd->ProcessPendingStreetPassPackets();
     IPC::RequestParser rp(ctx);
     const u32 buffer_size = rp.Pop<u32>();
     const u32 ncch_program_id = rp.Pop<u32>();
@@ -1475,6 +1877,9 @@ Module::~Module() = default;
 void InstallInterfaces(Core::System& system) {
     auto& service_manager = system.ServiceManager();
     auto cecd = std::make_shared<Module>(system);
+    if (const auto member = Network::GetRoomMember().lock()) {
+        cecd->BindRoomMember(member);
+    }
     std::make_shared<CECD_NDM>(cecd)->InstallAsService(service_manager);
     std::make_shared<CECD_S>(cecd)->InstallAsService(service_manager);
     std::make_shared<CECD_U>(cecd)->InstallAsService(service_manager);
