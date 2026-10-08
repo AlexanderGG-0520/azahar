@@ -913,8 +913,12 @@ Result GSP_GPU::AcquireGpuRight(const Kernel::HLERequestContext& ctx,
                                 bool blocking) {
     const auto session_data = GetSessionData(ctx.Session());
 
-    LOG_DEBUG(Service_GSP, "called flag={:08X} process={} thread_id={}", flag, process->process_id,
-              session_data->thread_id);
+    LOG_INFO(Service_GSP,
+             "[HOME-HANDOFF] AcquireGpuRight request: pid={} title={:016X} session_thread={} "
+             "client_thread={} holder_session_thread={} holder_client_thread={} blocking={} flag={:08X}",
+             process->process_id, process->codeset->program_id, session_data->thread_id,
+             ctx.ClientThread()->thread_id, thread_id_with_rights, active_client_thread_id, blocking,
+             flag);
 
     bool right_eye_disable_allow =
         Common::Hacks::hack_manager.GetHackAllowMode(Common::Hacks::HackType::RIGHT_EYE_DISABLE,
@@ -946,6 +950,14 @@ Result GSP_GPU::AcquireGpuRight(const Kernel::HLERequestContext& ctx,
 
     if (blocking) {
         // TODO: The thread should be put to sleep until acquired.
+        if (thread_id_with_rights != std::numeric_limits<u32>::max()) {
+            LOG_CRITICAL(Service_GSP,
+                         "[HOME-HANDOFF] BLOCKING GPU RIGHT CONFLICT: requester_pid={} "
+                         "requester_title={:016X} requester_session_thread={} holder_session_thread={} "
+                         "holder_client_thread={}",
+                         process->process_id, process->codeset->program_id, session_data->thread_id,
+                         thread_id_with_rights, active_client_thread_id);
+        }
         ASSERT_MSG(thread_id_with_rights == std::numeric_limits<u32>::max(),
                    "Sleeping for GPU right is not yet supported.");
     } else if (thread_id_with_rights != std::numeric_limits<u32>::max()) {
@@ -990,13 +1002,25 @@ void GSP_GPU::ReleaseRight(Kernel::HLERequestContext& ctx) {
     IPC::RequestParser rp(ctx);
 
     const SessionData* session_data = GetSessionData(ctx.Session());
+    const auto process = ctx.ClientThread()->owner_process.lock();
+    LOG_INFO(Service_GSP,
+             "[HOME-HANDOFF] ReleaseRight request: pid={} title={:016X} session_thread={} "
+             "client_thread={} holder_session_thread={} holder_client_thread={}",
+             process ? process->process_id : 0,
+             process && process->codeset ? process->codeset->program_id : 0,
+             session_data->thread_id, ctx.ClientThread()->thread_id, thread_id_with_rights,
+             active_client_thread_id);
+
     // Success even if wrong thread calls this function.
     ReleaseRight(session_data);
 
     IPC::RequestBuilder rb = rp.MakeBuilder(1, 0);
     rb.Push(ResultSuccess);
 
-    LOG_WARNING(Service_GSP, "called");
+    LOG_INFO(Service_GSP,
+             "[HOME-HANDOFF] ReleaseRight complete: session_thread={} new_holder_session_thread={} "
+             "new_holder_client_thread={}",
+             session_data->thread_id, thread_id_with_rights, active_client_thread_id);
 }
 
 void GSP_GPU::StoreDataCache(Kernel::HLERequestContext& ctx) {
