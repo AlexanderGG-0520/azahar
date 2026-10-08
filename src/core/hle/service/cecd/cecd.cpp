@@ -160,6 +160,8 @@ void Module::BindRoomMember(const std::shared_ptr<Network::RoomMember>& member) 
 void Module::QueueStreetPassPacket(const Network::WifiPacket& packet) {
     if (packet.data.size() < StreetPassRoomHeaderSize + sizeof(CecMessageHeader) ||
         packet.data.size() > StreetPassRoomHeaderSize + MaxRoomStreetPassMessageSize) {
+        LOG_WARNING(Service_CECD, "Ignoring StreetPass room packet with invalid size {} bytes",
+                    packet.data.size());
         return;
     }
 
@@ -178,8 +180,8 @@ void Module::QueueStreetPassPacket(const Network::WifiPacket& packet) {
         pending_streetpass_messages.push_back({program_id, sender_mac, std::move(message)});
     }
 
-    LOG_DEBUG(Service_CECD,
-              "Queued StreetPass room message for program {:#010x} from "
+    LOG_INFO(Service_CECD,
+             "Queued StreetPass room message for program {:#010x} from "
               "{:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}",
               program_id, sender_mac[0], sender_mac[1], sender_mac[2], sender_mac[3],
               sender_mac[4], sender_mac[5]);
@@ -206,8 +208,17 @@ void Module::ProcessPendingStreetPassPackets() {
         pending.swap(pending_streetpass_messages);
     }
 
+    if (!pending.empty()) {
+        LOG_INFO(Service_CECD, "Processing {} pending StreetPass room message(s) on emulation "
+                               "thread", pending.size());
+    }
     for (auto& packet : pending) {
-        InjectStreetPassMessage(packet.program_id, packet.sender_mac, std::move(packet.message));
+        if (!InjectStreetPassMessage(packet.program_id, packet.sender_mac,
+                                     std::move(packet.message))) {
+            LOG_WARNING(Service_CECD,
+                        "Unable to commit StreetPass room message for program {:#010x}; see "
+                        "previous CECD logs for reason", packet.program_id);
+        }
     }
 }
 
@@ -469,8 +480,8 @@ void Module::SendStreetPassMessage(const std::shared_ptr<Network::RoomMember>& m
     packet.data.insert(packet.data.end(), message.begin(), message.end());
 
     member->SendWifiPacket(packet);
-    LOG_DEBUG(Service_CECD,
-              "Sent StreetPass room message for program {:#010x}, {} bytes", program_id,
+    LOG_INFO(Service_CECD,
+             "Sent StreetPass room message for program {:#010x}, {} bytes", program_id,
               message.size());
 }
 
@@ -2062,8 +2073,9 @@ Module::Module(Core::System& system) : system(system) {
     streetpass_delivery_event = system.CoreTiming().RegisterEvent(
         "CECD::StreetPassDeliveryCallback", [this](std::uintptr_t, s64 cycles_late) {
             ProcessPendingStreetPassPackets();
-            system.CoreTiming().ScheduleEvent(msToCycles(250) - cycles_late,
-                                              streetpass_delivery_event);
+            system.CoreTiming().ScheduleEvent(
+                std::max<s64>(msToCycles(1), msToCycles(250) - cycles_late),
+                streetpass_delivery_event);
         });
     system.CoreTiming().ScheduleEvent(msToCycles(250), streetpass_delivery_event);
 }
