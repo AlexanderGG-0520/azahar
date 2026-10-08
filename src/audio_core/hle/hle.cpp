@@ -82,6 +82,8 @@ private:
     void AudioTickCallback(s64 cycles_late);
 
     DspState dsp_state = DspState::Off;
+    // Keep running until the current audio frame finishes before acknowledging DSP sleep.
+    bool sleep_pending = false;
     std::array<std::vector<u8>, num_dsp_pipe> pipe_data{};
 
 public:
@@ -112,6 +114,7 @@ private:
         ar& boost::serialization::make_binary_object(backup_dsp_memory.raw_memory.data(),
                                                      backup_dsp_memory.raw_memory.size());
         ar & dsp_state;
+        ar & sleep_pending;
         ar & pipe_data;
         ar & sources;
         ar & mixers;
@@ -165,7 +168,8 @@ u16 DspHle::Impl::RecvData(u32 register_number) {
 
 bool DspHle::Impl::RecvDataIsReady(u32 register_number) const {
     ASSERT_MSG(register_number == 0, "Unknown register_number {}", register_number);
-    return true;
+    // A sleep acknowledgement cannot be read before the current DSP frame is finished.
+    return !sleep_pending;
 }
 
 std::vector<u8> DspHle::Impl::PipeRead(DspPipe pipe_number, std::size_t length) {
@@ -233,25 +237,29 @@ void DspHle::Impl::PipeWrite(DspPipe pipe_number, std::span<const u8> buffer) {
         switch (static_cast<StateChange>(buffer[0])) {
         case StateChange::Initialize:
             LOG_INFO(Audio_DSP, "Application has requested initialization of DSP hardware");
+            sleep_pending = false;
             Initialize();
             AudioPipeWriteStructAddresses();
             dsp_state = DspState::On;
             break;
         case StateChange::Shutdown:
             LOG_INFO(Audio_DSP, "Application has requested shutdown of DSP hardware");
+            sleep_pending = false;
             dsp_state = DspState::Off;
             break;
         case StateChange::Wakeup:
             LOG_INFO(Audio_DSP, "Application has requested wakeup of DSP hardware");
+            sleep_pending = false;
             Wakeup();
             AudioPipeWriteStructAddresses();
             dsp_state = DspState::On;
             break;
         case StateChange::Sleep:
             LOG_INFO(Audio_DSP, "Application has requested sleep of DSP hardware");
-            Sleep();
-            AudioPipeWriteStructAddresses();
-            dsp_state = DspState::Sleeping;
+            // Real DSP firmware acknowledges the transition only after processing it.
+            // Finishing an HLE audio frame before replying avoids an instantaneous
+            // teardown of the IRQ event while a guest audio worker is still active.
+            sleep_pending = true;
             break;
         default:
             LOG_ERROR(Audio_DSP,
@@ -462,6 +470,16 @@ void DspHle::Impl::AudioTickCallback(s64 cycles_late) {
     if (Tick()) {
         // TODO(merry): Signal all the other interrupts as appropriate.
         interrupt_handler(InterruptType::Pipe, DspPipe::Audio);
+    }
+
+    if (sleep_pending) {
+        // Acknowledge sleep after the final audio frame / pipe interrupt.
+        // The guest may poll DSP::RecvDataIsReady while waiting for completion.
+        Sleep();
+        dsp_state = DspState::Sleeping;
+        AudioPipeWriteStructAddresses();
+        sleep_pending = false;
+        LOG_INFO(Audio_DSP, "[DSP-HLE] Sleep acknowledged after final audio frame");
     }
 
     // Reschedule recurrent event
