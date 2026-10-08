@@ -722,8 +722,23 @@ Result SVC::OpenThread(Handle* out_handle, Handle process_handle, u32 thread_id)
 
 /// Close a handle
 Result SVC::CloseHandle(Handle handle) {
+    const auto process = kernel.GetCurrentProcess();
+    if (process && process->codeset && IsYoKaiWatch2Title(process->codeset->program_id)) {
+        const auto object = process->handle_table.GetGeneric(handle);
+        LOG_INFO(Kernel_SVC,
+                 "[HOME-HANDOFF] YW2 CloseHandle: pid={} thread={} pc=0x{:08X} handle=0x{:08X} "
+                 "valid={} type={} name={}",
+                 process->process_id,
+                 kernel.GetCurrentThreadManager().GetCurrentThread()
+                     ? kernel.GetCurrentThreadManager().GetCurrentThread()->thread_id
+                     : 0,
+                 GetReg(15), handle, object != nullptr,
+                 object ? object->GetTypeName() : "<invalid>",
+                 object ? object->GetName() : "<invalid>");
+    }
+
     LOG_TRACE(Kernel_SVC, "Closing handle 0x{:08X}", handle);
-    return kernel.GetCurrentProcess()->handle_table.Close(handle);
+    return process->handle_table.Close(handle);
 }
 
 static Result ReceiveIPCRequest(Kernel::KernelSystem& kernel, Memory::MemorySystem& memory,
@@ -798,8 +813,26 @@ private:
 
 /// Wait for a handle to synchronize, timeout after the specified nanoseconds
 Result SVC::WaitSynchronization1(Handle handle, s64 nano_seconds) {
-    auto object = kernel.GetCurrentProcess()->handle_table.Get<WaitObject>(handle);
+    const auto process = kernel.GetCurrentProcess();
+    auto object = process->handle_table.Get<WaitObject>(handle);
     Thread* thread = kernel.GetCurrentThreadManager().GetCurrentThread();
+
+    if (process && process->codeset && IsYoKaiWatch2Title(process->codeset->program_id)) {
+        if (object) {
+            LOG_INFO(Kernel_SVC,
+                     "[HOME-HANDOFF] YW2 WaitSynchronization1: pid={} thread={} pc=0x{:08X} "
+                     "handle=0x{:08X} type={} name={} timeout={}",
+                     process->process_id, thread ? thread->thread_id : 0, GetReg(15), handle,
+                     object->GetTypeName(), object->GetName(), nano_seconds);
+        } else {
+            LOG_CRITICAL(Kernel_SVC,
+                         "[HOME-HANDOFF] YW2 WaitSynchronization1 INVALID: pid={} thread={} "
+                         "pc=0x{:08X} handle=0x{:08X} timeout={}",
+                         process->process_id, thread ? thread->thread_id : 0, GetReg(15), handle,
+                         nano_seconds);
+        }
+    }
+
     R_UNLESS(object, ResultInvalidHandle);
 
     LOG_TRACE(Kernel_SVC, "called handle=0x{:08X}({}:{}), nanoseconds={}", handle,
