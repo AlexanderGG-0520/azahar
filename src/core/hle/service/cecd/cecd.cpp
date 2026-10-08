@@ -1780,212 +1780,169 @@ void Module::CheckAndUpdateFile(const CecDataPathType path_type, const u32 ncch_
         break;
     }
     case CecDataPathType::OutboxInfo: {
-        CecBoxInfoHeader outbox_info_header = {};
-        std::memcpy(&outbox_info_header, file_buffer.data(), sizeof(CecBoxInfoHeader));
-
-        LOG_DEBUG(Service_CECD,
-                  "CecBoxInfoHeader: magic={:#06x}, box_info_size={:#010x}, "
-                  "max_box_size={:#010x}, box_size={:#010x}, "
-                  "max_message_num={:#010x}, message_num={:#010x}, "
-                  "max_batch_size={:#010x}, max_message_size={:#010x}",
-                  outbox_info_header.magic, outbox_info_header.box_info_size,
-                  outbox_info_header.max_box_size, outbox_info_header.box_size,
-                  outbox_info_header.max_message_num, outbox_info_header.message_num,
-                  outbox_info_header.max_batch_size, outbox_info_header.max_message_size);
-
-        if (outbox_info_header.magic != 0x6262) { // 'bb'
-            if (outbox_info_header.magic == 0)
-                LOG_DEBUG(Service_CECD, "CecOutBoxInfoHeader magic number is not set");
-            else
-                LOG_DEBUG(Service_CECD, "CecOutBoxInfoHeader magic number is incorrect: {}",
-                          outbox_info_header.magic);
-            outbox_info_header.magic = 0x6262;
+        if (file_size < sizeof(CecBoxInfoHeader)) {
+            LOG_WARNING(Service_CECD, "Invalid OutBox BoxInfo buffer size {}", file_size);
+            break;
         }
 
-        if (outbox_info_header.box_info_size != file_buffer.size()) {
-            if (outbox_info_header.box_info_size == 0)
-                LOG_DEBUG(Service_CECD, "CecOutBoxInfoHeader box info size is not set");
-            else
-                LOG_DEBUG(Service_CECD, "CecOutBoxInfoHeader box info size is incorrect:",
-                          outbox_info_header.box_info_size);
-            outbox_info_header.box_info_size = sizeof(CecBoxInfoHeader);
-            outbox_info_header.message_num = 0;
+        CecBoxInfoHeader header{};
+        std::memcpy(&header, file_buffer.data(), sizeof(header));
+        header.magic = 0x6262;
+        if (header.max_batch_size == 0) {
+            header.max_batch_size = header.max_message_num;
         }
 
-        if (outbox_info_header.max_box_size == 0) {
-            LOG_DEBUG(Service_CECD, "CecOutBoxInfoHeader max box size is not set");
-        } else if (outbox_info_header.max_box_size > 0x100000) {
-            LOG_DEBUG(Service_CECD, "CecOutBoxInfoHeader max box size is too large");
-        }
-
-        if (outbox_info_header.max_message_num == 0) {
-            LOG_DEBUG(Service_CECD, "CecOutBoxInfoHeader max message number is not set");
-        } else if (outbox_info_header.max_message_num > 99) {
-            LOG_DEBUG(Service_CECD, "CecOutBoxInfoHeader max message number is too large");
-        }
-
-        if (outbox_info_header.max_message_size == 0) {
-            LOG_DEBUG(Service_CECD, "CecOutBoxInfoHeader max message size is not set");
-        } else if (outbox_info_header.max_message_size > 0x019000) {
-            LOG_DEBUG(Service_CECD, "CecOutBoxInfoHeader max message size is too large");
-        }
-
-        if (outbox_info_header.max_batch_size == 0) {
-            LOG_DEBUG(Service_CECD, "CecOutBoxInfoHeader max batch size is not set");
-            outbox_info_header.max_batch_size = outbox_info_header.max_message_num;
-        } else if (outbox_info_header.max_batch_size != outbox_info_header.max_message_num) {
-            LOG_DEBUG(Service_CECD, "CecOutBoxInfoHeader max batch size != max message number");
-        }
-
-        /// We need to read the /CEC/<id>/OutBox directory to find out which messages, if any,
-        /// are present. The num_of_messages = (total_read_count) - 2, to adjust for
-        /// the BoxInfo____ and OBIndex_____files that are present in the directory as well.
-        FileSys::Path outbox_path(
+        const FileSys::Path outbox_path(
             GetCecDataPathTypeAsString(CecDataPathType::OutboxDir, ncch_program_id).data());
-
         auto dir_result = cecd_system_save_data_archive->OpenDirectory(outbox_path);
+        if (dir_result.Failed()) {
+            LOG_WARNING(Service_CECD, "Cannot rebuild OutBox BoxInfo for program {:#010x}",
+                        ncch_program_id);
+            break;
+        }
 
+        constexpr u32 max_entries = 128;
+        constexpr u32 max_messages = 99;
+        const u32 limit =
+            header.max_message_num ? std::min<u32>(header.max_message_num, max_messages)
+                                   : max_messages;
         auto outbox_dir = std::move(dir_result).Unwrap();
-        std::vector<FileSys::Entry> entries(outbox_info_header.max_message_num + 2);
-        const u32 entry_count =
-            outbox_dir->Read(outbox_info_header.max_message_num + 2, entries.data());
+        std::vector<FileSys::Entry> entries(max_entries);
+        const u32 entry_count = outbox_dir->Read(max_entries, entries.data());
         outbox_dir->Close();
 
-        LOG_DEBUG(Service_CECD, "Number of entries found in /OutBox: {}", entry_count);
-        std::array<CecMessageHeader, 8> message_headers;
-
-        std::string boxinfo_name("BoxInfo_____");
-        std::string obindex_name("OBIndex_____");
-        std::string file_name;
-        std::u16string u16_filename;
-
-        for (u32 i = 0; i < entry_count; i++) {
-            u16_filename = std::u16string(entries[i].filename);
-            file_name = Common::UTF16ToUTF8(u16_filename);
-
-            if (boxinfo_name.compare(file_name) != 0 && obindex_name.compare(file_name) != 0) {
-                LOG_DEBUG(Service_CECD, "Adding message to BoxInfo_____: {}", file_name);
-
-                FileSys::Path message_path(
-                    (GetCecDataPathTypeAsString(CecDataPathType::OutboxDir, ncch_program_id) + "/" +
-                     file_name)
-                        .data());
-
-                FileSys::Mode mode;
-                mode.read_flag.Assign(1);
-
-                auto message_result = cecd_system_save_data_archive->OpenFile(message_path, mode);
-
-                auto message = std::move(message_result).Unwrap();
-                const u32 message_size = static_cast<u32>(message->GetSize());
-                std::vector<u8> buffer(message_size);
-
-                void(message->Read(0, message_size, buffer.data()).Unwrap());
-                message->Close();
-
-                std::memcpy(&message_headers[outbox_info_header.message_num++], buffer.data(),
-                            sizeof(CecMessageHeader));
+        std::vector<CecMessageHeader> message_headers;
+        message_headers.reserve(limit);
+        u32 total_bytes = 0;
+        for (u32 i = 0; i < entry_count; ++i) {
+            if (entries[i].is_directory) {
+                continue;
             }
+            const std::string name = Common::UTF16ToUTF8(std::u16string(entries[i].filename));
+            if (name.size() != 13 || name[0] != '_') {
+                continue;
+            }
+            if (message_headers.size() >= limit) {
+                LOG_WARNING(Service_CECD, "OutBox exceeds message limit for program {:#010x}",
+                            ncch_program_id);
+                break;
+            }
+
+            const FileSys::Path message_path(
+                (GetCecDataPathTypeAsString(CecDataPathType::OutboxDir, ncch_program_id) +
+                 "/" + name).data());
+            FileSys::Mode mode;
+            mode.read_flag.Assign(1);
+            auto result = cecd_system_save_data_archive->OpenFile(message_path, mode);
+            if (result.Failed()) {
+                continue;
+            }
+            auto message = std::move(result).Unwrap();
+            const u32 size = static_cast<u32>(message->GetSize());
+            if (size < sizeof(CecMessageHeader) || size > MaxRoomStreetPassMessageSize) {
+                message->Close();
+                continue;
+            }
+
+            CecMessageHeader message_header{};
+            auto read_result = message->Read(0, sizeof(message_header),
+                                             reinterpret_cast<u8*>(&message_header));
+            message->Close();
+            if (read_result.Failed() || message_header.magic != 0x6060) {
+                continue;
+            }
+            message_headers.push_back(message_header);
+            total_bytes += size;
         }
 
-        if (outbox_info_header.message_num > 0) {
-            const u32 message_headers_size =
-                outbox_info_header.message_num * sizeof(CecMessageHeader);
-
-            file_buffer.resize(sizeof(CecBoxInfoHeader) + message_headers_size, 0);
-            outbox_info_header.box_info_size += message_headers_size;
-
-            std::memcpy(file_buffer.data() + sizeof(CecBoxInfoHeader), &message_headers,
-                        message_headers_size);
+        // A metadata rebuild must be idempotent. Derive all counters and the header array from
+        // the actual files every time instead of appending to the previous count.
+        header.message_num = static_cast<u32>(message_headers.size());
+        header.box_size = total_bytes;
+        header.box_info_size =
+            static_cast<u32>(sizeof(header) + message_headers.size() * sizeof(CecMessageHeader));
+        file_buffer.resize(header.box_info_size);
+        if (!message_headers.empty()) {
+            std::memcpy(file_buffer.data() + sizeof(header), message_headers.data(),
+                        message_headers.size() * sizeof(CecMessageHeader));
         }
-
-        std::memcpy(file_buffer.data(), &outbox_info_header, sizeof(CecBoxInfoHeader));
+        std::memcpy(file_buffer.data(), &header, sizeof(header));
+        LOG_INFO(Service_CECD, "Rebuilt OutBox BoxInfo with {} message(s) for program {:#010x}",
+                 header.message_num, ncch_program_id);
         break;
     }
     case CecDataPathType::OutboxIndex: {
-        CecOBIndexHeader obindex_header = {};
-        std::memcpy(&obindex_header, file_buffer.data(), sizeof(CecOBIndexHeader));
-
-        if (file_size < sizeof(CecOBIndexHeader)) { // 0x08, minimum size
-            LOG_DEBUG(Service_CECD, "CecOBIndexHeader size is too small: {}", file_size);
+        if (file_size < sizeof(CecOBIndexHeader)) {
+            LOG_WARNING(Service_CECD, "Invalid OutBox index buffer size {}", file_size);
+            break;
         }
 
-        if (obindex_header.magic != 0x6767) { // 'gg'
-            if (obindex_header.magic == 0)
-                LOG_DEBUG(Service_CECD, "CecOBIndexHeader magic number is not set");
-            else
-                LOG_DEBUG(Service_CECD, "CecOBIndexHeader magic number is incorrect: {}",
-                          obindex_header.magic);
-            obindex_header.magic = 0x6767;
-        }
+        CecOBIndexHeader header{};
+        std::memcpy(&header, file_buffer.data(), sizeof(header));
+        header.magic = 0x6767;
 
-        if (obindex_header.message_num == 0) {
-            if (file_size > sizeof(CecOBIndexHeader)) {
-                LOG_DEBUG(Service_CECD, "CecOBIndexHeader message number is not set");
-                obindex_header.message_num = (file_size % 8) - 1; // 8 byte message id - 1 header
-            }
-        } else if (obindex_header.message_num != (file_size % 8) - 1) {
-            LOG_DEBUG(Service_CECD, "CecOBIndexHeader message number is incorrect: {}",
-                      obindex_header.message_num);
-            obindex_header.message_num = 0;
-        }
-
-        /// We need to read the /CEC/<id>/OutBox directory to find out which messages, if any,
-        /// are present. The num_of_messages = (total_read_count) - 2, to adjust for
-        /// the BoxInfo____ and OBIndex_____files that are present in the directory as well.
-        FileSys::Path outbox_path(
+        const FileSys::Path outbox_path(
             GetCecDataPathTypeAsString(CecDataPathType::OutboxDir, ncch_program_id).data());
-
         auto dir_result = cecd_system_save_data_archive->OpenDirectory(outbox_path);
+        if (dir_result.Failed()) {
+            LOG_WARNING(Service_CECD, "Cannot rebuild OutBox index for program {:#010x}",
+                        ncch_program_id);
+            break;
+        }
 
+        constexpr u32 max_entries = 128;
+        constexpr u32 max_messages = 99;
         auto outbox_dir = std::move(dir_result).Unwrap();
-        std::vector<FileSys::Entry> entries(8);
-        const u32 entry_count = outbox_dir->Read(8, entries.data());
+        std::vector<FileSys::Entry> entries(max_entries);
+        const u32 entry_count = outbox_dir->Read(max_entries, entries.data());
         outbox_dir->Close();
 
-        LOG_DEBUG(Service_CECD, "Number of entries found in /OutBox: {}", entry_count);
-        std::array<std::array<u8, 8>, 8> message_ids;
-
-        std::string boxinfo_name("BoxInfo_____");
-        std::string obindex_name("OBIndex_____");
-        std::string file_name;
-        std::u16string u16_filename;
-
-        for (u32 i = 0; i < entry_count; i++) {
-            u16_filename = std::u16string(entries[i].filename);
-            file_name = Common::UTF16ToUTF8(u16_filename);
-
-            if (boxinfo_name.compare(file_name) != 0 && obindex_name.compare(file_name) != 0) {
-                FileSys::Path message_path(
-                    (GetCecDataPathTypeAsString(CecDataPathType::OutboxDir, ncch_program_id) + "/" +
-                     file_name)
-                        .data());
-
-                FileSys::Mode mode;
-                mode.read_flag.Assign(1);
-
-                auto message_result = cecd_system_save_data_archive->OpenFile(message_path, mode);
-
-                auto message = std::move(message_result).Unwrap();
-                const u32 message_size = static_cast<u32>(message->GetSize());
-                std::vector<u8> buffer(message_size);
-
-                void(message->Read(0, message_size, buffer.data()).Unwrap());
-                message->Close();
-
-                // Message id is at offset 0x20, and is 8 bytes
-                std::memcpy(&message_ids[obindex_header.message_num++], buffer.data() + 0x20, 8);
+        std::vector<std::array<u8, 8>> ids;
+        ids.reserve(max_messages);
+        for (u32 i = 0; i < entry_count; ++i) {
+            if (entries[i].is_directory) {
+                continue;
             }
+            const std::string name = Common::UTF16ToUTF8(std::u16string(entries[i].filename));
+            if (name.size() != 13 || name[0] != '_') {
+                continue;
+            }
+            if (ids.size() >= max_messages) {
+                break;
+            }
+            const FileSys::Path message_path(
+                (GetCecDataPathTypeAsString(CecDataPathType::OutboxDir, ncch_program_id) +
+                 "/" + name).data());
+            FileSys::Mode mode;
+            mode.read_flag.Assign(1);
+            auto result = cecd_system_save_data_archive->OpenFile(message_path, mode);
+            if (result.Failed()) {
+                continue;
+            }
+            auto message = std::move(result).Unwrap();
+            if (message->GetSize() < sizeof(CecMessageHeader)) {
+                message->Close();
+                continue;
+            }
+            CecMessageHeader message_header{};
+            const auto read_result = message->Read(
+                0, sizeof(message_header), reinterpret_cast<u8*>(&message_header));
+            message->Close();
+            if (read_result.Failed() || message_header.magic != 0x6060) {
+                continue;
+            }
+            ids.push_back(message_header.message_id);
         }
 
-        if (obindex_header.message_num > 0) {
-            const u32 message_ids_size = obindex_header.message_num * 8;
-            file_buffer.resize(sizeof(CecOBIndexHeader) + message_ids_size);
-            std::memcpy(file_buffer.data() + sizeof(CecOBIndexHeader), &message_ids,
-                        message_ids_size);
+        header.message_num = static_cast<u32>(ids.size());
+        file_buffer.resize(sizeof(header) + ids.size() * sizeof(ids.front()));
+        if (!ids.empty()) {
+            std::memcpy(file_buffer.data() + sizeof(header), ids.data(),
+                        ids.size() * sizeof(ids.front()));
         }
-
-        std::memcpy(file_buffer.data(), &obindex_header, sizeof(CecOBIndexHeader));
+        std::memcpy(file_buffer.data(), &header, sizeof(header));
+        LOG_INFO(Service_CECD, "Rebuilt OutBox index with {} message(s) for program {:#010x}",
+                 header.message_num, ncch_program_id);
         break;
     }
     case CecDataPathType::InboxMsg:
