@@ -406,6 +406,8 @@ bool Module::InjectStreetPassMessage(const u32 program_id,
         return false;
     }
 
+    ReconcileInboxBoxInfo(program_id);
+
     FileSys::Mode info_mode;
     info_mode.read_flag.Assign(1);
     info_mode.write_flag.Assign(1);
@@ -783,6 +785,10 @@ void Module::Interface::Open(Kernel::HLERequestContext& ctx) {
     open_mode.raw = rp.Pop<u32>();
     rp.PopPID();
 
+    if (path_type == CecDataPathType::MboxInfo ||
+        path_type == CecDataPathType::InboxInfo) {
+        cecd->ReconcileInboxBoxInfo(ncch_program_id);
+    }
     FileSys::Path path(cecd->GetCecDataPathTypeAsString(path_type, ncch_program_id).data());
     FileSys::Mode mode;
     mode.read_flag.Assign(1);
@@ -1110,6 +1116,8 @@ void Module::Interface::Write(Kernel::HLERequestContext& ctx) {
 
         if (session_data->data_path_type == CecDataPathType::OutboxMsg) {
             cecd->BroadcastStreetPassMessage(session_data->ncch_program_id, buffer);
+        } else if (session_data->data_path_type == CecDataPathType::InboxInfo) {
+            cecd->ReconcileInboxBoxInfo(session_data->ncch_program_id);
         }
 
         rb.Push(ResultSuccess);
@@ -1318,6 +1326,9 @@ void Module::Interface::Delete(Kernel::HLERequestContext& ctx) {
                                                  ncch_program_id, id_buffer)
                     .data();
             rb.Push(cecd->cecd_system_save_data_archive->DeleteFile(message_path));
+            if (!is_outbox) {
+                cecd->ReconcileInboxBoxInfo(ncch_program_id);
+            }
         }
     }
 
@@ -1525,6 +1536,8 @@ void Module::Interface::OpenAndWrite(Kernel::HLERequestContext& ctx) {
 
             if (path_type == CecDataPathType::OutboxMsg) {
                 cecd->BroadcastStreetPassMessage(ncch_program_id, buffer);
+            } else if (path_type == CecDataPathType::InboxInfo) {
+                cecd->ReconcileInboxBoxInfo(ncch_program_id);
             }
 
             rb.Push(ResultSuccess);
@@ -1554,6 +1567,10 @@ void Module::Interface::OpenAndRead(Kernel::HLERequestContext& ctx) {
     rp.PopPID();
     auto& write_buffer = rp.PopMappedBuffer();
 
+    if (path_type == CecDataPathType::MboxInfo ||
+        path_type == CecDataPathType::InboxInfo) {
+        cecd->ReconcileInboxBoxInfo(ncch_program_id);
+    }
     FileSys::Path path(cecd->GetCecDataPathTypeAsString(path_type, ncch_program_id).data());
     FileSys::Mode mode;
     mode.read_flag.Assign(1);
