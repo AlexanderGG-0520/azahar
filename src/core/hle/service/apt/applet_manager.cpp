@@ -12,6 +12,7 @@
 #include "core/hle/applets/mii_selector.h"
 #include "core/hle/applets/mint.h"
 #include "core/hle/applets/swkbd.h"
+#include "core/hle/kernel/process.h"
 #include "core/hle/service/am/am.h"
 #include "core/hle/service/apt/applet_manager.h"
 #include "core/hle/service/apt/errors.h"
@@ -1003,12 +1004,14 @@ Result AppletManager::JumpToHomeMenu(std::shared_ptr<Kernel::Object> object,
 
             switch (slot_data->attributes.applet_pos) {
             case AppletPos::Application:
+                ResumeSlotProcess(AppletSlot::HomeMenu);
                 active_slot = AppletSlot::HomeMenu;
 
                 param.destination_id = AppletId::HomeMenu;
                 param.sender_id = AppletId::Application;
                 param.signal = SignalType::WakeupByPause;
                 SendParameter(param);
+                SuspendSlotProcessAfterIPC(AppletSlot::Application);
                 break;
             case AppletPos::Library:
                 param.destination_id = slot_data->applet_id;
@@ -1058,6 +1061,7 @@ Result AppletManager::PrepareToLeaveHomeMenu() {
 
 Result AppletManager::LeaveHomeMenu(std::shared_ptr<Kernel::Object> object,
                                     const std::vector<u8>& buffer) {
+    ResumeSlotProcess(AppletSlot::Application);
     active_slot = AppletSlot::Application;
 
     SendParameter({
@@ -1067,6 +1071,7 @@ Result AppletManager::LeaveHomeMenu(std::shared_ptr<Kernel::Object> object,
         .object = std::move(object),
         .buffer = buffer,
     });
+    SuspendSlotProcessAfterIPC(AppletSlot::HomeMenu);
 
     return ResultSuccess;
 }
@@ -1101,6 +1106,7 @@ Result AppletManager::OrderToCloseApplication() {
     }
 
     ordered_to_close_application = true;
+    ResumeSlotProcess(AppletSlot::Application);
     active_slot = AppletSlot::Application;
 
     SendParameter({
@@ -1108,6 +1114,7 @@ Result AppletManager::OrderToCloseApplication() {
         .destination_id = AppletId::Application,
         .signal = SignalType::WakeupByCancel,
     });
+    SuspendSlotProcessAfterIPC(AppletSlot::HomeMenu);
 
     return ResultSuccess;
 }
@@ -1176,6 +1183,9 @@ Result AppletManager::CloseApplication(std::shared_ptr<Kernel::Object> object,
             !GetAppletSlot(application_close_target)->registered) {
             system.RequestShutdown();
         } else {
+            if (application_close_target == AppletSlot::HomeMenu) {
+                ResumeSlotProcess(AppletSlot::HomeMenu);
+            }
             active_slot = application_close_target;
 
             CancelAndSendParameter({
@@ -1525,6 +1535,7 @@ Result AppletManager::WakeupApplication(std::shared_ptr<Kernel::Object> object,
     // Send a Wakeup signal via the apt parameter to the application once it registers itself.
     // The real APT service does this by spin waiting on another thread until the application is
     // registered.
+    ResumeSlotProcess(AppletSlot::Application);
     SendApplicationParameterAfterRegistration({
         .sender_id = AppletId::HomeMenu,
         .destination_id = AppletId::Application,
@@ -1532,6 +1543,10 @@ Result AppletManager::WakeupApplication(std::shared_ptr<Kernel::Object> object,
         .object = std::move(object),
         .buffer = buffer,
     });
+
+    if (GetAppletSlot(AppletSlot::HomeMenu)->registered) {
+        SuspendSlotProcessAfterIPC(AppletSlot::HomeMenu);
+    }
 
     return ResultSuccess;
 }
@@ -1604,6 +1619,69 @@ void AppletManager::SendApplicationParameterAfterRegistration(const MessageParam
 
     // Otherwise queue it until the Application calls APT::Enable
     delayed_parameter = parameter;
+}
+
+std::shared_ptr<Kernel::Process> AppletManager::GetProcessForSlot(const AppletSlot slot) {
+    if (slot == AppletSlot::Error) {
+        return nullptr;
+    }
+
+    const auto slot_data = GetAppletSlot(slot);
+    if (!slot_data->registered || slot_data->title_id == 0) {
+        return nullptr;
+    }
+
+    std::shared_ptr<Kernel::Process> newest_process;
+    for (const auto& process : system.Kernel().GetProcessList()) {
+        if (!process || !process->codeset || process->status == Kernel::ProcessStatus::Exited ||
+            process->codeset->program_id != slot_data->title_id) {
+            continue;
+        }
+
+        if (!newest_process ||
+            process->creation_time_ticks > newest_process->creation_time_ticks) {
+            newest_process = process;
+        }
+    }
+    return newest_process;
+}
+
+void AppletManager::ResumeSlotProcess(const AppletSlot slot) {
+    const auto process = GetProcessForSlot(slot);
+    if (!process) {
+        return;
+    }
+
+    LOG_DEBUG(Service_APT, "Resuming process {} for applet slot {:02X}", process->process_id, slot);
+    process->ClearUnscheduleMode(Kernel::UnscheduleMode::APT);
+}
+
+void AppletManager::SuspendSlotProcessAfterIPC(const AppletSlot slot) {
+    const auto process = GetProcessForSlot(slot);
+    if (!process) {
+        return;
+    }
+
+    // Do not deschedule the process while its APT IPC request is still executing. Defer the
+    // scheduler change until CoreTiming regains control, after the service call has returned.
+    system.CoreTiming().ScheduleEvent(1, process_suspend_event, process->process_id);
+}
+
+void AppletManager::ProcessSuspendEvent(const std::uintptr_t user_data, s64) {
+    const auto process = system.Kernel().GetProcessById(static_cast<u32>(user_data));
+    if (!process || process->status == Kernel::ProcessStatus::Exited) {
+        return;
+    }
+
+    // A stale transition event must never suspend whichever applet has since become active.
+    if (const auto active_process = GetProcessForSlot(active_slot);
+        active_process && active_process == process) {
+        return;
+    }
+
+    LOG_DEBUG(Service_APT, "Suspending process {} after APT applet transition",
+              process->process_id);
+    process->SetUnscheduleMode(Kernel::UnscheduleMode::APT);
 }
 
 void AppletManager::EnsureHomeMenuLoaded() {
@@ -1786,12 +1864,17 @@ AppletManager::AppletManager(Core::System& system) : system(system) {
         "APT Button Update Event", [this](std::uintptr_t user_data, s64 cycles_late) {
             ButtonUpdateEvent(user_data, cycles_late);
         });
+    process_suspend_event = system.CoreTiming().RegisterEvent(
+        "APT Process Suspend Event", [this](std::uintptr_t user_data, s64 cycles_late) {
+            ProcessSuspendEvent(user_data, cycles_late);
+        });
     system.CoreTiming().ScheduleEvent(usToCycles(button_update_interval_us), button_update_event);
 }
 
 AppletManager::~AppletManager() {
     system.CoreTiming().RemoveEvent(hle_applet_update_event);
     system.CoreTiming().RemoveEvent(button_update_event);
+    system.CoreTiming().RemoveEvent(process_suspend_event);
 }
 
 void AppletManager::ReloadInputDevices() {
