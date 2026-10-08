@@ -161,12 +161,66 @@ void Module::BindRoomMember(const std::shared_ptr<Network::RoomMember>& member) 
                     self->pending_streetpass_requests.push_back(packet.transmitter_address);
                 }
             }
-            LOG_INFO(Service_CECD, "Queued UDS-triggered StreetPass exchange request");
+            LOG_INFO(Service_CECD, "Queued game-presence-triggered StreetPass exchange request");
         }
     });
 
-    // Cache already-registered CECD outboxes without sending. Joining a room alone must not
-    // generate a StreetPass encounter; a completed UDS association triggers the unicast reply.
+    // Game-presence updates come from the room server whenever any member starts/stops a
+    // title (or joins/leaves). Match pairs of running titles, irrespective of join order.
+    // Room membership by itself must not create a StreetPass encounter.
+    const std::weak_ptr<Network::RoomMember> weak_member = member;
+    member->BindOnRoomInformationChanged(
+        [weak_self, weak_member](const Network::RoomInformation&) {
+            const auto self = weak_self.lock();
+            const auto current_member = weak_member.lock();
+            if (!self || !current_member || !current_member->IsConnected() ||
+                self->room_member.lock().get() != current_member.get()) {
+                return;
+            }
+
+            // The callback runs on the room's ENet thread, which owns the member list.
+            // A nonzero game ID means the member is running an emulated title; the two
+            // titles need not match because StreetPass uses persisted CECD mailboxes.
+            const auto self_mac = current_member->GetMacAddress();
+            bool local_game_running = false;
+            std::set<Network::MacAddress> eligible_peers;
+            for (const auto& room_peer : current_member->GetMemberInformation()) {
+                if (room_peer.mac_address == self_mac) {
+                    local_game_running = room_peer.game_info.id != 0;
+                } else if (room_peer.game_info.id != 0) {
+                    eligible_peers.insert(room_peer.mac_address);
+                }
+            }
+            if (!local_game_running) {
+                eligible_peers.clear();
+            }
+
+            std::vector<Network::MacAddress> new_peers;
+            {
+                std::lock_guard lock(self->streetpass_mutex);
+                for (const auto& mac : eligible_peers) {
+                    if (!self->active_streetpass_peers.contains(mac)) {
+                        new_peers.push_back(mac);
+                    }
+                }
+                // A title stopping or a peer leaving rearms the pair for the next boot.
+                self->active_streetpass_peers = std::move(eligible_peers);
+            }
+
+            for (const auto& mac : new_peers) {
+                Network::WifiPacket request{};
+                request.type = Network::WifiPacket::PacketType::StreetPassRequest;
+                request.channel = 0;
+                request.transmitter_address = self_mac;
+                request.destination_address = mac;
+                current_member->SendWifiPacket(request);
+                LOG_INFO(Service_CECD,
+                         "Requesting StreetPass exchange after both room peers launched games");
+            }
+        });
+
+    // Cache already-registered CECD outboxes without sending. A game-start presence
+    // transition triggers a unicast request, and its reply uses a refreshed OutBox cache.
     BroadcastAllOutboxMessages();
     {
         std::lock_guard lock(streetpass_mutex);
@@ -248,7 +302,7 @@ void Module::ProcessPendingStreetPassPackets() {
         if (const auto member = room_member.lock(); member && member->IsConnected()) {
             for (const auto& peer_mac : requests) {
                 LOG_INFO(Service_CECD,
-                         "Answering UDS-triggered StreetPass exchange request with refreshed "
+                         "Answering game-presence-triggered StreetPass request with refreshed "
                          "OutBox cache");
                 SendCachedStreetPassMessages(member, peer_mac);
             }
