@@ -582,6 +582,15 @@ bool Module::InjectStreetPassMessage(const u32 program_id,
         return false;
     }
 
+    // A received StreetPass message has consumed one forwarding hop. Titles can
+    // inspect the remaining forwarding budget to tell whether a message was
+    // actually delivered. YW2, for example, computes its Pandanoko receipt count
+    // from (255 - forward_count); leaving a freshly received 255 unchanged makes
+    // the special message indistinguishable from one not yet delivered.
+    if (message_header.forward_count > 0) {
+        --message_header.forward_count;
+    }
+
     const RoomCecTimestamp received_timestamp = GetCurrentRoomCecTimestamp();
     message_header.is_unopen = 1;
     message_header.is_new = 1;
