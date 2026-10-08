@@ -773,6 +773,8 @@ Result AppletManager::CancelLibraryApplet(bool app_exiting) {
 
 Result AppletManager::SendDspSleep(AppletId from_applet_id,
                                    std::shared_ptr<Kernel::Object> object) {
+    LOG_INFO(Service_APT, "[HOME-HANDOFF] SendDspSleep from={:03X} active_slot={:02X}",
+             from_applet_id, active_slot);
     auto lib_slot = GetAppletSlotFromPos(AppletPos::Library);
     auto lib_app_id =
         lib_slot != AppletSlot::Error ? GetAppletSlot(lib_slot)->applet_id : AppletId::None;
@@ -807,6 +809,8 @@ Result AppletManager::SendDspSleep(AppletId from_applet_id,
 
 Result AppletManager::SendDspWakeUp(AppletId from_applet_id,
                                     std::shared_ptr<Kernel::Object> object) {
+    LOG_INFO(Service_APT, "[HOME-HANDOFF] SendDspWakeUp from={:03X} active_slot={:02X}",
+             from_applet_id, active_slot);
     auto lib_slot = GetAppletSlotFromPos(AppletPos::Library);
     auto lib_app_id =
         lib_slot != AppletSlot::Error ? GetAppletSlot(lib_slot)->applet_id : AppletId::None;
@@ -994,6 +998,13 @@ Result AppletManager::PrepareToJumpToHomeMenu() {
 
 Result AppletManager::JumpToHomeMenu(std::shared_ptr<Kernel::Object> object,
                                      const std::vector<u8>& buffer) {
+    LOG_INFO(Service_APT,
+             "[HOME-HANDOFF] JumpToHomeMenu: active_slot={:02X} last_jump_slot={:02X} "
+             "home_registered={} app_registered={}",
+             active_slot, last_jump_to_home_slot,
+             GetAppletSlot(AppletSlot::HomeMenu)->registered,
+             GetAppletSlot(AppletSlot::Application)->registered);
+
     if (last_jump_to_home_slot != AppletSlot::Error) {
         auto slot_data = GetAppletSlot(last_jump_to_home_slot);
         if (slot_data->applet_id != AppletId::None) {
@@ -1058,6 +1069,11 @@ Result AppletManager::PrepareToLeaveHomeMenu() {
 
 Result AppletManager::LeaveHomeMenu(std::shared_ptr<Kernel::Object> object,
                                     const std::vector<u8>& buffer) {
+    LOG_INFO(Service_APT,
+             "[HOME-HANDOFF] LeaveHomeMenu: active_slot_before={:02X} "
+             "home_registered={} app_registered={}",
+             active_slot, GetAppletSlot(AppletSlot::HomeMenu)->registered,
+             GetAppletSlot(AppletSlot::Application)->registered);
     active_slot = AppletSlot::Application;
 
     SendParameter({
@@ -1501,6 +1517,12 @@ Result AppletManager::StartApplication(const std::vector<u8>& parameter,
     // PM::LaunchTitle. We should research more about that.
     ASSERT_MSG(app_start_parameters, "Trying to start an application without preparing it first.");
 
+    LOG_INFO(Service_APT,
+             "[HOME-HANDOFF] manager StartApplication: next_title={:016X} media={} paused={} "
+             "active_slot_before={:02X}",
+             app_start_parameters->next_title_id, app_start_parameters->next_media_type, paused,
+             active_slot);
+
     active_slot = AppletSlot::Application;
 
     // Launch the title directly.
@@ -1509,6 +1531,11 @@ Result AppletManager::StartApplication(const std::vector<u8>& parameter,
     if (!process) {
         LOG_CRITICAL(Service_APT, "Failed to launch title during application start, exiting.");
         system.RequestShutdown();
+    } else {
+        LOG_INFO(Service_APT,
+                 "[HOME-HANDOFF] manager StartApplication launched pid={} title={:016X} "
+                 "active_slot_now={:02X}",
+                 process->process_id, process->codeset->program_id, active_slot);
     }
 
     app_start_parameters.reset();
@@ -1522,6 +1549,13 @@ Result AppletManager::StartApplication(const std::vector<u8>& parameter,
 
 Result AppletManager::WakeupApplication(std::shared_ptr<Kernel::Object> object,
                                         const std::vector<u8>& buffer) {
+    const auto application_slot = GetAppletSlot(AppletSlot::Application);
+    LOG_INFO(Service_APT,
+             "[HOME-HANDOFF] manager WakeupApplication: app_registered={} app_id={:03X} "
+             "app_title={:016X} active_slot={:02X}",
+             application_slot->registered, application_slot->applet_id, application_slot->title_id,
+             active_slot);
+
     // Send a Wakeup signal via the apt parameter to the application once it registers itself.
     // The real APT service does this by spin waiting on another thread until the application is
     // registered.
