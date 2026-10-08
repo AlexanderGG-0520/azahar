@@ -9,6 +9,7 @@
 #include "core/core.h"
 #include "core/hle/ipc_helpers.h"
 #include "core/hle/kernel/process.h"
+#include "core/hle/kernel/thread.h"
 #include "core/hle/service/dsp/dsp_dsp.h"
 
 using DspPipe = AudioCore::DspPipe;
@@ -254,12 +255,35 @@ void DSP_DSP::RegisterInterruptEvents(Kernel::HLERequestContext& ctx) {
                            ErrorSummary::OutOfResource, ErrorLevel::Status));
             return;
         } else {
-            GetInterruptEvent(type, pipe) = event;
+            auto& registered_event = GetInterruptEvent(type, pipe);
+            if (type == InterruptType::Pipe && pipe == DspPipe::Audio) {
+                if (registered_event && registered_event != event) {
+                    registered_event->SetDspAudioIrqRegistered(false);
+                }
+                event->SetDspAudioIrqRegistered(true);
+            }
+            registered_event = event;
             LOG_INFO(Service_DSP, "Registered interrupt={}, channel={}, event={}", interrupt,
                      channel, event->GetName());
         }
     } else { /// Otherwise unregister event
-        GetInterruptEvent(type, pipe) = nullptr;
+        auto& registered_event = GetInterruptEvent(type, pipe);
+        if (type == InterruptType::Pipe && pipe == DspPipe::Audio && registered_event) {
+            const u32 event_id = registered_event->GetObjectId();
+            u32 eligible_threads = 0;
+            for (u32 core_id = 0; core_id < system.GetNumCores(); ++core_id) {
+                for (const auto& thread : system.Kernel().GetThreadManager(core_id).GetThreadList()) {
+                    if (thread->RetireDspAudioIrqWait(event_id)) {
+                        ++eligible_threads;
+                    }
+                }
+            }
+            registered_event->SetDspAudioIrqRegistered(false);
+            LOG_INFO(Service_DSP,
+                     "[DSP-IRQ-GRACE] Unregistered audio IRQ object={} eligible_threads={}",
+                     event_id, eligible_threads);
+        }
+        registered_event = nullptr;
         LOG_INFO(Service_DSP, "Unregistered interrupt={}, channel={}", interrupt, channel);
     }
     rb.Push(ResultSuccess);
