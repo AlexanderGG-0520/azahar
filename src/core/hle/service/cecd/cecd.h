@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <set>
+
 #include <array>
 #include <memory>
 #include <mutex>
@@ -673,6 +675,8 @@ private:
     std::shared_ptr<Kernel::Event> change_state_event;
 
     std::mutex streetpass_mutex;
+    // Peers eligible in the last room-game-presence snapshot; rearm on game stop/leave.
+    std::set<std::array<u8, 6>> active_streetpass_peers;
     std::vector<PendingStreetPassMessage> pending_streetpass_messages;
     // Requests arrive on the ENet thread; read the latest OutBoxes on the emulation thread.
     std::vector<std::array<u8, 6>> pending_streetpass_requests;
