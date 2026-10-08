@@ -1819,7 +1819,7 @@ void Module::CheckAndUpdateFile(const CecDataPathType path_type, const u32 ncch_
                 continue;
             }
             const std::string name = Common::UTF16ToUTF8(std::u16string(entries[i].filename));
-            if (name.size() != 13 || name[0] != '_') {
+            if (name.size() != 12 || name[0] != '_') {
                 continue;
             }
             if (message_headers.size() >= limit) {
@@ -1904,7 +1904,7 @@ void Module::CheckAndUpdateFile(const CecDataPathType path_type, const u32 ncch_
                 continue;
             }
             const std::string name = Common::UTF16ToUTF8(std::u16string(entries[i].filename));
-            if (name.size() != 13 || name[0] != '_') {
+            if (name.size() != 12 || name[0] != '_') {
                 continue;
             }
             if (ids.size() >= max_messages) {
