@@ -56,6 +56,7 @@ enum class UnscheduleMode : u32 {
     SVC = (1 << 0),
     GDB = (1 << 1),
     FRONTEND = (1 << 2),
+    APT = (1 << 3),
 };
 DECLARE_ENUM_FLAG_OPERATORS(UnscheduleMode);
 
