@@ -256,6 +256,134 @@ void Module::ProcessPendingStreetPassPackets() {
     }
 }
 
+bool Module::ReconcileInboxBoxInfo(const u32 program_id) {
+    // Reconstruct the index from actual messages. YW2 can consume/remove a message and
+    // write back only the 0x20-byte BoxInfo header while keeping obsolete counters.
+    const FileSys::Path path(
+        GetCecDataPathTypeAsString(CecDataPathType::InboxInfo, program_id).data());
+    FileSys::Mode mode;
+    mode.read_flag.Assign(1);
+    mode.write_flag.Assign(1);
+    auto info_result = cecd_system_save_data_archive->OpenFile(path, mode);
+    if (info_result.Failed()) {
+        return false;
+    }
+    auto info_file = std::move(info_result).Unwrap();
+    const u32 old_file_size = static_cast<u32>(info_file->GetSize());
+    CecBoxInfoHeader box{};
+    if (old_file_size < sizeof(box) ||
+        info_file->Read(0, sizeof(box), reinterpret_cast<u8*>(&box)).Failed() ||
+        box.magic != 0x6262) {
+        info_file->Close();
+        return false;
+    }
+
+    const FileSys::Path inbox_path(
+        GetCecDataPathTypeAsString(CecDataPathType::InboxDir, program_id).data());
+    auto dir_result = cecd_system_save_data_archive->OpenDirectory(inbox_path);
+    if (dir_result.Failed()) {
+        info_file->Close();
+        return false;
+    }
+    constexpr u32 max_directory_entries = 128;
+    auto dir = std::move(dir_result).Unwrap();
+    std::vector<FileSys::Entry> entries(max_directory_entries);
+    const u32 entry_count = dir->Read(max_directory_entries, entries.data());
+    dir->Close();
+
+    std::vector<std::pair<std::string, CecMessageHeader>> headers;
+    u32 total_message_bytes = 0;
+    for (u32 i = 0; i < entry_count; ++i) {
+        if (entries[i].is_directory) {
+            continue;
+        }
+        const std::string name = Common::UTF16ToUTF8(std::u16string(entries[i].filename));
+        if (name.size() != 12 || name[0] != '_') {
+            continue;
+        }
+        const FileSys::Path message_path(
+            (GetCecDataPathTypeAsString(CecDataPathType::InboxDir, program_id) + "/" + name)
+                .data());
+        FileSys::Mode read_mode;
+        read_mode.read_flag.Assign(1);
+        auto result = cecd_system_save_data_archive->OpenFile(message_path, read_mode);
+        if (result.Failed()) {
+            continue;
+        }
+        auto file = std::move(result).Unwrap();
+        const u32 size = static_cast<u32>(file->GetSize());
+        if (size < sizeof(CecMessageHeader) || size > MaxRoomStreetPassMessageSize) {
+            file->Close();
+            continue;
+        }
+        CecMessageHeader header{};
+        const auto read_result =
+            file->Read(0, sizeof(header), reinterpret_cast<u8*>(&header));
+        file->Close();
+        if (read_result.Failed() || header.magic != 0x6060 ||
+            header.message_size != size || header.title_id != program_id) {
+            continue;
+        }
+        headers.emplace_back(name, header);
+        total_message_bytes += size;
+    }
+    std::sort(headers.begin(), headers.end(),
+              [](const auto& a, const auto& b) { return a.first < b.first; });
+    const u32 new_count = static_cast<u32>(headers.size());
+    const u32 new_index_size =
+        static_cast<u32>(sizeof(box) + headers.size() * sizeof(CecMessageHeader));
+
+    if (box.message_num == new_count && box.box_size == total_message_bytes &&
+        box.box_info_size == new_index_size && old_file_size == new_index_size) {
+        info_file->Close();
+        return false;
+    }
+
+    LOG_WARNING(Service_CECD, "Repairing stale Inbox for program {:#010x}: "
+                               "{} messages / {} bytes -> {} messages / {} bytes",
+                program_id, static_cast<u32>(box.message_num), static_cast<u32>(box.box_size),
+                new_count, total_message_bytes);
+    box.message_num = new_count;
+    box.box_size = total_message_bytes;
+    box.box_info_size = new_index_size;
+    std::vector<u8> buffer(new_index_size);
+    std::memcpy(buffer.data(), &box, sizeof(box));
+    for (std::size_t i = 0; i < headers.size(); ++i) {
+        std::memcpy(buffer.data() + sizeof(box) + i * sizeof(CecMessageHeader),
+                    &headers[i].second, sizeof(CecMessageHeader));
+    }
+    info_file->SetSize(buffer.size());
+    const auto write_result = info_file->Write(0, buffer.size(), true, false, buffer.data());
+    info_file->Close();
+    if (write_result.Failed()) {
+        LOG_ERROR(Service_CECD, "Failed to repair Inbox for program {:#010x}", program_id);
+        return false;
+    }
+
+    if (new_count == 0) {
+        // No pending messages: clear only notification flags, never registration or HMAC keys.
+        const FileSys::Path mbox_path(
+            GetCecDataPathTypeAsString(CecDataPathType::MboxInfo, program_id).data());
+        auto mbox_result = cecd_system_save_data_archive->OpenFile(mbox_path, mode);
+        if (mbox_result.Succeeded()) {
+            auto mbox_file = std::move(mbox_result).Unwrap();
+            CecMBoxInfoHeader mbox{};
+            if (mbox_file->GetSize() >= sizeof(mbox) &&
+                mbox_file->Read(0, sizeof(mbox), reinterpret_cast<u8*>(&mbox)).Succeeded() &&
+                mbox.magic == 0x6363) {
+                mbox.flag_unread = 0;
+                mbox.flag_new = 0;
+                if (mbox_file->Write(0, sizeof(mbox), true, false,
+                                     reinterpret_cast<const u8*>(&mbox)).Failed()) {
+                    LOG_WARNING(Service_CECD, "Failed clearing stale Inbox indicators");
+                }
+            }
+            mbox_file->Close();
+        }
+    }
+    return true;
+}
+
 bool Module::InjectStreetPassMessage(const u32 program_id,
                                      const std::array<u8, 6>& sender_mac,
                                      std::vector<u8> message) {
