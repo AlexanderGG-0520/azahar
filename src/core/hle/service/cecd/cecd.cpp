@@ -56,7 +56,6 @@ using CecSystemInfoType = Module::CecSystemInfoType;
 constexpr std::size_t MaxRoomStreetPassMessageSize = 0x20000;
 constexpr std::size_t StreetPassRoomHeaderSize = sizeof(u32);
 constexpr std::size_t StreetPassHmacSize = 0x20;
-constexpr std::size_t MBoxInfoNewNotificationOffset = 0x40;
 
 struct RoomCecTimestamp {
     u32_le year;
@@ -226,9 +225,11 @@ bool Module::InjectStreetPassMessage(const u32 program_id,
     std::memcpy(&message_header, message.data(), sizeof(message_header));
     const u64 payload_end =
         static_cast<u64>(message_header.header_size) + message_header.body_size;
+    const u64 expected_message_size = payload_end + StreetPassHmacSize;
     if (message_header.magic != 0x6060 || message_header.header_size < sizeof(CecMessageHeader) ||
-        payload_end > message.size() ||
-        (message_header.message_size != 0 && message_header.message_size > message.size())) {
+        message_header.title_id != program_id ||
+        static_cast<u64>(message_header.message_size) != expected_message_size ||
+        expected_message_size != message.size()) {
         LOG_WARNING(Service_CECD,
                     "Dropping malformed StreetPass message for program {:#010x}", program_id);
         return false;
@@ -293,9 +294,7 @@ bool Module::InjectStreetPassMessage(const u32 program_id,
         static_cast<u32>((info_buffer.size() - sizeof(CecBoxInfoHeader)) / sizeof(CecMessageHeader));
     info_header.message_num = existing_count;
 
-    const u32 stored_message_size =
-        message_header.message_size != 0 ? static_cast<u32>(message_header.message_size)
-                                         : static_cast<u32>(message.size());
+    const u32 stored_message_size = static_cast<u32>(message_header.message_size);
     if ((info_header.max_message_num != 0 &&
          info_header.message_num >= info_header.max_message_num) ||
         (info_header.max_message_size != 0 &&
@@ -347,20 +346,12 @@ bool Module::InjectStreetPassMessage(const u32 program_id,
     std::memcpy(&message_header.recv_time, &received_timestamp, sizeof(received_timestamp));
     std::memcpy(message.data(), &message_header, sizeof(message_header));
 
-    // Real CECD receive paths re-sign an incoming tag with the receiver mailbox key. This matters
-    // when two installations do not happen to have identical MBoxInfo HMAC keys.
-    if (payload_end + StreetPassHmacSize <= message.size()) {
-        using namespace CryptoPP;
-        HMAC<SHA256> hmac(mbox_header.hmac_key.data(), mbox_header.hmac_key.size());
-        hmac.CalculateDigest(message.data() + payload_end,
-                             message.data() + message_header.header_size,
-                             message_header.body_size);
-    } else {
-        LOG_WARNING(Service_CECD,
-                    "StreetPass message for program {:#010x} has no HMAC trailer; "
-                    "preserving payload as-is",
-                    program_id);
-    }
+    // Real CECD receive paths re-sign an incoming tag with the receiver mailbox key.
+    using namespace CryptoPP;
+    HMAC<SHA256> hmac(mbox_header.hmac_key.data(), mbox_header.hmac_key.size());
+    hmac.CalculateDigest(message.data() + payload_end,
+                         message.data() + message_header.header_size,
+                         message_header.body_size);
 
     FileSys::Mode message_mode;
     message_mode.write_flag.Assign(1);
@@ -404,13 +395,11 @@ bool Module::InjectStreetPassMessage(const u32 program_id,
         return false;
     }
 
-    // MBoxInfo byte 0x40 is CECD's "new notification" state. StreetPass clients also update
-    // last_received when installing a tag; games can use this metadata to notice fresh inbox data.
+    // Match the receive-side mailbox state used by real CECD clients such as NetPass.
     std::memcpy(&mbox_header.last_received, &received_timestamp, sizeof(received_timestamp));
+    mbox_header.flag_unread = 1;
+    mbox_header.flag_new = 1;
     std::memcpy(mbox_buffer.data(), &mbox_header, sizeof(mbox_header));
-    if (mbox_buffer.size() > MBoxInfoNewNotificationOffset) {
-        mbox_buffer[MBoxInfoNewNotificationOffset] = 1;
-    }
 
     const auto mbox_write_result =
         mbox_file->Write(0, mbox_buffer.size(), true, false, mbox_buffer.data());
