@@ -254,11 +254,26 @@ void DSP_DSP::RegisterInterruptEvents(Kernel::HLERequestContext& ctx) {
                            ErrorSummary::OutOfResource, ErrorLevel::Status));
             return;
         } else {
+            // Mark only the audio-pipe IRQ in the object's diagnostic name. This
+            // lets the SVC wake callback identify it without knowing title IDs,
+            // program counters or guest handles. Event behavior is unchanged.
+            if (type == InterruptType::Pipe && pipe == DspPipe::Audio) {
+                const auto old_name = event->GetName();
+                if (old_name.rfind("DSP_IRQ:", 0) != 0) {
+                    event->SetName("DSP_IRQ:" + old_name);
+                }
+                LOG_INFO(Service_DSP, "[DSP-IRQ-TRACE] register event={}", event->GetName());
+            }
             GetInterruptEvent(type, pipe) = event;
             LOG_INFO(Service_DSP, "Registered interrupt={}, channel={}, event={}", interrupt,
                      channel, event->GetName());
         }
     } else { /// Otherwise unregister event
+        const auto& old_event = GetInterruptEvent(type, pipe);
+        if (type == InterruptType::Pipe && pipe == DspPipe::Audio && old_event) {
+            LOG_INFO(Service_DSP, "[DSP-IRQ-TRACE] unregister event={} waiters={}",
+                     old_event->GetName(), old_event->GetWaitingThreads().size());
+        }
         GetInterruptEvent(type, pipe) = nullptr;
         LOG_INFO(Service_DSP, "Unregistered interrupt={}, channel={}", interrupt, channel);
     }
