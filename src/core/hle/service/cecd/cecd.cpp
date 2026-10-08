@@ -161,7 +161,7 @@ void Module::BindRoomMember(const std::shared_ptr<Network::RoomMember>& member) 
                     self->pending_streetpass_requests.push_back(packet.transmitter_address);
                 }
             }
-            LOG_INFO(Service_CECD, "Queued game-presence-triggered StreetPass exchange request");
+            LOG_INFO(Service_CECD, "Queued compatibility StreetPass exchange request");
         }
     });
 
@@ -211,32 +211,36 @@ void Module::BindRoomMember(const std::shared_ptr<Network::RoomMember>& member) 
                 eligible_peers.clear();
             }
 
-            std::vector<Network::MacAddress> new_peers;
+            std::size_t new_peers = 0;
             {
                 std::lock_guard lock(self->streetpass_mutex);
                 for (const auto& mac : eligible_peers) {
-                    if (!self->active_streetpass_peers.contains(mac)) {
-                        new_peers.push_back(mac);
+                    if (self->active_streetpass_peers.contains(mac)) {
+                        continue;
+                    }
+                    // Do not wait for a remote StreetPassRequest response: both active peers
+                    // independently enqueue their own OutBoxes for unicast delivery. This
+                    // avoids losing one direction if game-start notifications race.
+                    auto& pending = self->pending_streetpass_requests;
+                    if (std::find(pending.begin(), pending.end(), mac) == pending.end()) {
+                        pending.push_back(mac);
+                        ++new_peers;
                     }
                 }
                 // A title stopping or a peer leaving rearms the pair for the next boot.
                 self->active_streetpass_peers = std::move(eligible_peers);
             }
 
-            for (const auto& mac : new_peers) {
-                Network::WifiPacket request{};
-                request.type = Network::WifiPacket::PacketType::StreetPassRequest;
-                request.channel = 0;
-                request.transmitter_address = self_mac;
-                request.destination_address = mac;
-                current_member->SendWifiPacket(request);
+            if (new_peers != 0) {
                 LOG_INFO(Service_CECD,
-                         "Requesting StreetPass exchange after both room peers launched games");
+                         "Queued StreetPass OutBox delivery to {} room peer(s) after both "
+                         "launched games",
+                         new_peers);
             }
         });
 
     // Cache already-registered CECD outboxes without sending. A game-start presence
-    // transition triggers a unicast request, and its reply uses a refreshed OutBox cache.
+    // transition queues direct unicast delivery, using a refreshed OutBox cache.
     BroadcastAllOutboxMessages();
     {
         std::lock_guard lock(streetpass_mutex);
@@ -318,8 +322,7 @@ void Module::ProcessPendingStreetPassPackets() {
         if (const auto member = room_member.lock(); member && member->IsConnected()) {
             for (const auto& peer_mac : requests) {
                 LOG_INFO(Service_CECD,
-                         "Answering game-presence-triggered StreetPass request with refreshed "
-                         "OutBox cache");
+                         "Sending game-presence-triggered StreetPass OutBox to room peer");
                 SendCachedStreetPassMessages(member, peer_mac);
             }
         }
