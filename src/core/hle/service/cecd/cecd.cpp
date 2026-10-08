@@ -1200,6 +1200,13 @@ void Module::Interface::WriteMessage(Kernel::HLERequestContext& ctx) {
                   msg_header.sender_id, msg_header.sender_id2, msg_header.send_count,
                   msg_header.forward_count, msg_header.user_data);
 
+        // CECD may reuse the same message ID for a different payload length (e.g. YW2's
+        // special StreetPass QR replaces a 5524-byte team with a 3396-byte tag).
+        // A plain Write does not truncate an existing archive file, leaving stale trailing
+        // data which the receiver rejects as an invalid CECD message.
+        if (message->GetSize() != buffer.size()) {
+            message->SetSize(buffer.size());
+        }
         [[maybe_unused]] const u32 bytes_written =
             static_cast<u32>(message->Write(0, buffer_size, true, false, buffer.data()).Unwrap());
         message->Close();
@@ -1291,6 +1298,13 @@ void Module::Interface::WriteMessageWithHMAC(Kernel::HLERequestContext& ctx) {
         hmac.CalculateDigest(hmac_digest.data(), message_body.data(), msg_header.body_size);
         std::memcpy(buffer.data() + hmac_offset, hmac_digest.data(), hmac_size);
 
+        // CECD may reuse the same message ID for a different payload length (e.g. YW2's
+        // special StreetPass QR replaces a 5524-byte team with a 3396-byte tag).
+        // A plain Write does not truncate an existing archive file, leaving stale trailing
+        // data which the receiver rejects as an invalid CECD message.
+        if (message->GetSize() != buffer.size()) {
+            message->SetSize(buffer.size());
+        }
         [[maybe_unused]] const u32 bytes_written =
             static_cast<u32>(message->Write(0, buffer_size, true, false, buffer.data()).Unwrap());
         message->Close();
