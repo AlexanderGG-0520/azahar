@@ -320,6 +320,33 @@ public:
      */
     void SetWaitSynchronizationResult(Result result);
 
+    // Transient, one-shot compatibility state. Only dsp::DSP can retire a
+    // registered audio IRQ, and only a thread that actually waited on that
+    // event can consume the subsequent zero-handle sleep-probe grace.
+    void RememberDspAudioIrqWait(u32 object_id) {
+        last_dsp_audio_irq_object_id = object_id;
+        dsp_audio_irq_grace_pending = false;
+    }
+
+    void ClearDspAudioIrqWait() {
+        last_dsp_audio_irq_object_id = 0;
+        dsp_audio_irq_grace_pending = false;
+    }
+
+    bool RetireDspAudioIrqWait(u32 object_id) {
+        if (last_dsp_audio_irq_object_id != object_id) {
+            return false;
+        }
+        dsp_audio_irq_grace_pending = true;
+        return true;
+    }
+
+    bool ConsumeDspAudioIrqGrace() {
+        const bool pending = dsp_audio_irq_grace_pending;
+        ClearDspAudioIrqWait();
+        return pending;
+    }
+
     /**
      * Sets the output parameter value after the thread awakens (from WaitSynchronizationN SVC only)
      * @param output Value to set to the output parameter
@@ -415,6 +442,12 @@ public:
     const u32 core_id;
 
 private:
+    // Not serialized for this isolated runtime experiment. Savestate load
+    // clears these markers, which may temporarily disable this workaround
+    // until the DSP audio IRQ is registered again.
+    u32 last_dsp_audio_irq_object_id = 0;
+    bool dsp_audio_irq_grace_pending = false;
+
     ThreadManager& thread_manager;
 
     // Does not represent how real HW works, instead it mimics behaviour
