@@ -2054,9 +2054,25 @@ Module::Module(Core::System& system) : system(system) {
         mboxlist->Write(0, mboxlist_size, true, false, mboxlist_buffer.data());
         mboxlist->Close();
     }
+
+    // On real hardware the CECD sysmodule processes StreetPass in the background. Azahar's
+    // older implementation only drained the queue during game-driven CECD IPC requests,
+    // so successfully received packets could remain invisible indefinitely during gameplay.
+    // Schedule delivery on the emulation thread instead of doing NAND I/O on ENet's thread.
+    streetpass_delivery_event = system.CoreTiming().RegisterEvent(
+        "CECD::StreetPassDeliveryCallback", [this](std::uintptr_t, s64 cycles_late) {
+            ProcessPendingStreetPassPackets();
+            system.CoreTiming().ScheduleEvent(msToCycles(250) - cycles_late,
+                                              streetpass_delivery_event);
+        });
+    system.CoreTiming().ScheduleEvent(msToCycles(250), streetpass_delivery_event);
 }
 
-Module::~Module() = default;
+Module::~Module() {
+    if (streetpass_delivery_event) {
+        system.CoreTiming().UnscheduleEvent(streetpass_delivery_event, 0);
+    }
+}
 
 void InstallInterfaces(Core::System& system) {
     auto& service_manager = system.ServiceManager();
