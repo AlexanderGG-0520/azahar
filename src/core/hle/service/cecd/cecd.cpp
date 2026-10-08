@@ -256,6 +256,61 @@ void Module::ProcessPendingStreetPassPackets() {
     }
 }
 
+bool Module::AllocateOutboxMessageId(const u32 program_id, std::vector<u8>& message_id,
+                                     std::vector<u8>& message) {
+    if (message_id.size() != 8 || message.size() < sizeof(CecMessageHeader) ||
+        std::any_of(message_id.begin(), message_id.end(), [](u8 value) { return value != 0; })) {
+        return false;
+    }
+
+    CecMessageHeader header{};
+    std::memcpy(&header, message.data(), sizeof(header));
+    if (header.magic != 0x6060 || header.title_id != program_id) {
+        LOG_WARNING(Service_CECD,
+                    "Cannot allocate StreetPass ID: invalid OutBox header for {:#010x}",
+                    program_id);
+        return false;
+    }
+
+    // Zero means that the title has not yet been assigned a message ID. A unique ID
+    // must be returned through WriteMessage[WithHMAC]'s read/write mapped buffer.
+    // Reusing zero for every call makes YW2's 0x0001 party and 0x0002 Pandanoko
+    // messages overwrite the very same OutBox file.
+    const auto now = std::chrono::system_clock::now().time_since_epoch();
+    u64 candidate = static_cast<u64>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(now).count());
+
+    FileSys::Mode read_mode;
+    read_mode.read_flag.Assign(1);
+    for (u32 attempts = 0; attempts < 1024; ++attempts, ++candidate) {
+        for (std::size_t i = 0; i < message_id.size(); ++i) {
+            message_id[i] = static_cast<u8>(candidate >> (i * 8));
+        }
+        const FileSys::Path candidate_path(
+            GetCecDataPathTypeAsString(CecDataPathType::OutboxMsg, program_id, message_id).data());
+        auto existing = cecd_system_save_data_archive->OpenFile(candidate_path, read_mode);
+        if (existing.Succeeded()) {
+            auto file = std::move(existing).Unwrap();
+            file->Close();
+            continue;
+        }
+
+        std::copy(message_id.begin(), message_id.end(), header.message_id.begin());
+        std::memcpy(message.data(), &header, sizeof(header));
+        LOG_INFO(Service_CECD,
+                 "Allocated StreetPass OutBox ID for program {:#010x}, user_data={:#06x}, "
+                 "send_count={}, forward_count={}",
+                 program_id, static_cast<u16>(header.user_data), header.send_count,
+                 header.forward_count);
+        return true;
+    }
+
+    LOG_ERROR(Service_CECD, "Unable to allocate unused StreetPass OutBox ID for {:#010x}",
+              program_id);
+    message_id.assign(8, 0);
+    return false;
+}
+
 bool Module::ReconcileInboxBoxInfo(const u32 program_id) {
     // Reconstruct the index from actual messages. YW2 can consume/remove a message and
     // write back only the 0x20-byte BoxInfo header while keeping obsolete counters.
