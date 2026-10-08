@@ -743,6 +743,15 @@ void Module::BroadcastOutboxMessages(const u32 program_id) {
 }
 
 void Module::BroadcastAllOutboxMessages() {
+    // Rebuild from the NAND every time. A StreetPass registration update may replace an
+    // OutBox message ID or delete all messages, and keeping the old cached entries causes
+    // stale teams to be sent alongside the current registration (or even when it is empty).
+    // Only the emulation thread performs archive reads and writes.
+    {
+        std::lock_guard lock(streetpass_mutex);
+        cached_streetpass_messages.clear();
+    }
+
     const FileSys::Path root_path(GetCecDataPathTypeAsString(CecDataPathType::RootDir, 0).data());
     auto dir_result = cecd_system_save_data_archive->OpenDirectory(root_path);
     if (dir_result.Failed()) {
