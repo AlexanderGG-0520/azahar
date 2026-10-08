@@ -131,31 +131,29 @@ void Module::BindRoomMember(const std::shared_ptr<Network::RoomMember>& member) 
     room_member = member;
     const std::weak_ptr<Module> weak_self = weak_from_this();
     member->BindOnWifiPacketReceived([weak_self](const Network::WifiPacket& packet) {
-        if (packet.type != Network::WifiPacket::PacketType::StreetPass) {
+        const auto self = weak_self.lock();
+        if (!self) {
             return;
         }
-        if (const auto self = weak_self.lock()) {
-            self->QueueStreetPassPacket(packet);
-        }
-    });
 
-    const std::weak_ptr<Network::RoomMember> weak_member = member;
-    member->BindOnStateChanged(
-        [weak_self, weak_member](const Network::RoomMember::State& state) {
-            if (state != Network::RoomMember::State::Joined &&
-                state != Network::RoomMember::State::Moderator) {
+        if (packet.type == Network::WifiPacket::PacketType::StreetPass) {
+            self->QueueStreetPassPacket(packet);
+        } else if (packet.type == Network::WifiPacket::PacketType::StreetPassRequest &&
+                   packet.data.empty()) {
+            const auto room = self->room_member.lock();
+            if (!room || !room->IsConnected() ||
+                packet.transmitter_address == room->GetMacAddress() ||
+                packet.transmitter_address == Network::BroadcastMac) {
                 return;
             }
 
-            const auto self = weak_self.lock();
-            const auto current_member = weak_member.lock();
-            if (self && current_member) {
-                self->BroadcastCachedStreetPassMessages(current_member);
-            }
-        });
+            LOG_INFO(Service_CECD, "Answering UDS-triggered StreetPass exchange request");
+            self->SendCachedStreetPassMessages(room, packet.transmitter_address);
+        }
+    });
 
-    // Populate the cache even while disconnected. Existing StreetPass outbox data often predates
-    // joining a multiplayer room, so relying only on new CECD writes misses the common case.
+    // Cache already-registered CECD outboxes without sending. Joining a room alone must not
+    // generate a StreetPass encounter; a completed UDS association triggers the unicast reply.
     BroadcastAllOutboxMessages();
 }
 
@@ -451,8 +449,8 @@ void Module::CacheStreetPassMessage(const u32 program_id,
 }
 
 void Module::SendStreetPassMessage(const std::shared_ptr<Network::RoomMember>& member,
-                                   const u32 program_id,
-                                   const std::vector<u8>& message) {
+                                   const u32 program_id, const std::vector<u8>& message,
+                                   const std::array<u8, 6>& destination) {
     if (!member || message.size() < sizeof(CecMessageHeader) ||
         message.size() > MaxRoomStreetPassMessageSize) {
         return;
@@ -462,7 +460,7 @@ void Module::SendStreetPassMessage(const std::shared_ptr<Network::RoomMember>& m
     packet.type = Network::WifiPacket::PacketType::StreetPass;
     packet.channel = 0;
     packet.transmitter_address = member->GetMacAddress();
-    packet.destination_address = Network::BroadcastMac;
+    packet.destination_address = destination;
     packet.data.reserve(StreetPassRoomHeaderSize + message.size());
     packet.data.push_back(static_cast<u8>(program_id));
     packet.data.push_back(static_cast<u8>(program_id >> 8));
@@ -476,8 +474,8 @@ void Module::SendStreetPassMessage(const std::shared_ptr<Network::RoomMember>& m
               message.size());
 }
 
-void Module::BroadcastCachedStreetPassMessages(
-    const std::shared_ptr<Network::RoomMember>& member) {
+void Module::SendCachedStreetPassMessages(
+    const std::shared_ptr<Network::RoomMember>& member, const std::array<u8, 6>& destination) {
     if (!member) {
         return;
     }
@@ -494,9 +492,10 @@ void Module::BroadcastCachedStreetPassMessages(
         cached = cached_streetpass_messages;
     }
 
-    LOG_INFO(Service_CECD, "Broadcasting {} cached StreetPass room message(s)", cached.size());
+    LOG_INFO(Service_CECD, "Replying with {} cached StreetPass message(s) to UDS peer",
+             cached.size());
     for (const auto& entry : cached) {
-        SendStreetPassMessage(member, entry.program_id, entry.message);
+        SendStreetPassMessage(member, entry.program_id, entry.message, destination);
     }
 }
 
@@ -507,27 +506,15 @@ void Module::BroadcastStreetPassMessage(const u32 program_id,
         return;
     }
 
+    // Store the OutBox tag for the next real UDS connection. A write while merely present
+    // in a multiplayer room must not create an encounter.
     CacheStreetPassMessage(program_id, message);
 
-    auto member = room_member.lock();
-    if (!member) {
-        member = Network::GetRoomMember().lock();
-        if (member) {
+    if (room_member.expired()) {
+        if (const auto member = Network::GetRoomMember().lock()) {
             BindRoomMember(member);
         }
     }
-
-    if (!member) {
-        return;
-    }
-
-    const auto state = member->GetState();
-    if (state != Network::RoomMember::State::Joined &&
-        state != Network::RoomMember::State::Moderator) {
-        return;
-    }
-
-    SendStreetPassMessage(member, program_id, message);
 }
 
 void Module::BroadcastOutboxMessages(const u32 program_id) {
