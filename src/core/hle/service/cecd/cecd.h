@@ -650,8 +650,10 @@ private:
                                  std::vector<u8> message);
     void CacheStreetPassMessage(u32 program_id, const std::vector<u8>& message);
     void SendStreetPassMessage(const std::shared_ptr<Network::RoomMember>& member, u32 program_id,
-                               const std::vector<u8>& message);
-    void BroadcastCachedStreetPassMessages(const std::shared_ptr<Network::RoomMember>& member);
+                               const std::vector<u8>& message,
+                               const std::array<u8, 6>& destination);
+    void SendCachedStreetPassMessages(const std::shared_ptr<Network::RoomMember>& member,
+                                      const std::array<u8, 6>& destination);
     void BroadcastStreetPassMessage(u32 program_id, const std::vector<u8>& message);
     void BroadcastOutboxMessages(u32 program_id);
     void BroadcastAllOutboxMessages();
