@@ -8,6 +8,7 @@
 #include <memory>
 #include <mutex>
 #include <span>
+#include "core/core_timing.h"
 #include "common/bit_field.h"
 #include "common/common_funcs.h"
 #include "core/hle/kernel/event.h"
@@ -668,6 +669,10 @@ private:
     std::vector<PendingStreetPassMessage> pending_streetpass_messages;
     std::vector<CachedStreetPassMessage> cached_streetpass_messages;
     std::weak_ptr<Network::RoomMember> room_member;
+
+    // Network packet callbacks only enqueue data; this emulation-thread event commits it to
+    // the CECD NAND archive even if the title does not make another CECD IPC call.
+    Core::TimingEventType* streetpass_delivery_event = nullptr;
 
     Core::System& system;
 
