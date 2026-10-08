@@ -2079,7 +2079,7 @@ Module::Module(Core::System& system) : system(system) {
     streetpass_delivery_event = system.CoreTiming().RegisterEvent(
         "CECD::StreetPassDeliveryCallback", [this](std::uintptr_t, s64 cycles_late) {
             ProcessPendingStreetPassPackets();
-            system.CoreTiming().ScheduleEvent(
+            this->system.CoreTiming().ScheduleEvent(
                 std::max<s64>(msToCycles(1), msToCycles(250) - cycles_late),
                 streetpass_delivery_event);
         });
