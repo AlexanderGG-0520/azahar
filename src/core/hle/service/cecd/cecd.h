@@ -652,6 +652,10 @@ private:
     // Keep the Inbox index and unread flags consistent with the on-disk message files.
     // Recovers stale counts after the title consumes/deletes a StreetPass message.
     bool ReconcileInboxBoxInfo(u32 program_id);
+    // A zero outgoing CECD message ID requests a fresh, unique per-title ID.
+    // Update both the caller's read/write ID buffer and the saved message header.
+    bool AllocateOutboxMessageId(u32 program_id, std::vector<u8>& message_id,
+                                 std::vector<u8>& message);
     void CacheStreetPassMessage(u32 program_id, const std::vector<u8>& message);
     void SendStreetPassMessage(const std::shared_ptr<Network::RoomMember>& member, u32 program_id,
                                const std::vector<u8>& message,
