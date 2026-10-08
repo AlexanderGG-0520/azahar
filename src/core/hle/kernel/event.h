@@ -26,6 +26,15 @@ public:
         name = name_;
     }
 
+    // Emulator-internal marker set by dsp::DSP, not guest-controlled event names.
+    // Diagnostic/compatibility state only; it is not a guest-visible event property.
+    void SetDspAudioIrqRegistered(bool registered) {
+        dsp_audio_irq_registered = registered;
+    }
+    bool IsDspAudioIrqRegistered() const {
+        return dsp_audio_irq_registered;
+    }
+
     static constexpr HandleType HANDLE_TYPE = HandleType::Event;
     HandleType GetHandleType() const override {
         return HANDLE_TYPE;
@@ -50,6 +59,9 @@ private:
 
     bool signaled;    ///< Whether the event has already been signaled
     std::string name; ///< Name of event (optional)
+
+    // Transient: existing savestate layouts stay unchanged for this experiment.
+    bool dsp_audio_irq_registered = false;
 
     friend class KernelSystem;
 
