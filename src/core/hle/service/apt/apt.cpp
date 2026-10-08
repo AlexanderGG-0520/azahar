@@ -359,7 +359,11 @@ void Module::APTInterface::NotifyToWait(Kernel::HLERequestContext& ctx) {
     IPC::RequestBuilder rb = rp.MakeBuilder(1, 0);
     rb.Push(ResultSuccess); // No error
 
-    LOG_WARNING(Service_APT, "(STUBBED) app_id={}", app_id);
+    const auto caller_process = ctx.ClientThread()->owner_process.lock();
+    LOG_INFO(Service_APT,
+             "[HOME-HANDOFF] NotifyToWait(STUB) app_id={} caller_pid={} caller_title={:016X}",
+             app_id, caller_process ? caller_process->process_id : 0,
+             caller_process && caller_process->codeset ? caller_process->codeset->program_id : 0);
 }
 
 void Module::APTInterface::GetLockHandle(Kernel::HLERequestContext& ctx) {
@@ -389,7 +393,12 @@ void Module::APTInterface::Enable(Kernel::HLERequestContext& ctx) {
     IPC::RequestParser rp(ctx);
     const auto attributes = rp.Pop<u32>();
 
-    LOG_DEBUG(Service_APT, "called attributes={:#010X}", attributes);
+    const auto caller_process = ctx.ClientThread()->owner_process.lock();
+    LOG_INFO(Service_APT,
+             "[HOME-HANDOFF] Enable caller_pid={} caller_title={:016X} attributes={:#010X}",
+             caller_process ? caller_process->process_id : 0,
+             caller_process && caller_process->codeset ? caller_process->codeset->program_id : 0,
+             attributes);
 
     IPC::RequestBuilder rb = rp.MakeBuilder(1, 0);
     rb.Push(apt->applet_manager->Enable(attributes));
@@ -696,7 +705,12 @@ void Module::APTInterface::StartApplication(Kernel::HLERequestContext& ctx) {
     const auto parameter = rp.PopStaticBuffer();
     const auto hmac = rp.PopStaticBuffer();
 
-    LOG_INFO(Service_APT, "called parameter_size={:#010X}, hmac_size={:#010X}, paused={}",
+    const auto caller_process = ctx.ClientThread()->owner_process.lock();
+    LOG_INFO(Service_APT,
+             "[HOME-HANDOFF] StartApplication caller_pid={} caller_title={:016X} "
+             "parameter_size={:#010X} hmac_size={:#010X} paused={}",
+             caller_process ? caller_process->process_id : 0,
+             caller_process && caller_process->codeset ? caller_process->codeset->program_id : 0,
              parameter_size, hmac_size, paused);
 
     IPC::RequestBuilder rb = rp.MakeBuilder(1, 0);
@@ -705,8 +719,11 @@ void Module::APTInterface::StartApplication(Kernel::HLERequestContext& ctx) {
 
 void Module::APTInterface::WakeupApplication(Kernel::HLERequestContext& ctx) {
     IPC::RequestParser rp(ctx);
+    const auto caller_process = ctx.ClientThread()->owner_process.lock();
 
-    LOG_DEBUG(Service_APT, "called");
+    LOG_INFO(Service_APT, "[HOME-HANDOFF] WakeupApplication caller_pid={} caller_title={:016X}",
+             caller_process ? caller_process->process_id : 0,
+             caller_process && caller_process->codeset ? caller_process->codeset->program_id : 0);
 
     IPC::RequestBuilder rb = rp.MakeBuilder(1, 0);
     rb.Push(apt->applet_manager->WakeupApplication(nullptr, {}));
