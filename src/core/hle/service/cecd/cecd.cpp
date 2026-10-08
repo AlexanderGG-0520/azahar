@@ -389,6 +389,11 @@ bool Module::InjectStreetPassMessage(const u32 program_id,
                                      std::vector<u8> message) {
     if (message.size() < sizeof(CecMessageHeader) ||
         message.size() > MaxRoomStreetPassMessageSize) {
+        LOG_WARNING(Service_CECD,
+                    "Dropping StreetPass message for program {:#010x}: actual size {} "
+                    "outside [{}, {}]",
+                    program_id, message.size(), sizeof(CecMessageHeader),
+                    MaxRoomStreetPassMessageSize);
         return false;
     }
 
@@ -402,7 +407,15 @@ bool Module::InjectStreetPassMessage(const u32 program_id,
         static_cast<u64>(message_header.message_size) != expected_message_size ||
         expected_message_size != message.size()) {
         LOG_WARNING(Service_CECD,
-                    "Dropping malformed StreetPass message for program {:#010x}", program_id);
+                    "Dropping malformed StreetPass message for program {:#010x}: "
+                    "magic={:#06x}, header_size={}, body_size={}, declared_size={}, "
+                    "expected_size={}, actual_size={}, title_id={:#010x}",
+                    program_id, static_cast<u16>(message_header.magic),
+                    static_cast<u32>(message_header.header_size),
+                    static_cast<u32>(message_header.body_size),
+                    static_cast<u32>(message_header.message_size),
+                    expected_message_size, message.size(),
+                    static_cast<u32>(message_header.title_id));
         return false;
     }
 
