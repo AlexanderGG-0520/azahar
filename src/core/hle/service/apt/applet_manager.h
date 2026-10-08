@@ -567,7 +567,6 @@ private:
     std::shared_ptr<Kernel::Process> GetProcessForSlot(AppletSlot slot);
     void ResumeSlotProcess(AppletSlot slot);
     void SuspendProcessAfterIPC(const std::shared_ptr<Kernel::Process>& process);
-    void SuspendSlotProcessAfterIPC(AppletSlot slot);
     void ProcessSuspendEvent(std::uintptr_t user_data, s64 cycles_late);
 
     void CaptureFrameBuffers();
