@@ -649,6 +649,9 @@ private:
     void ProcessPendingStreetPassPackets();
     bool InjectStreetPassMessage(u32 program_id, const std::array<u8, 6>& sender_mac,
                                  std::vector<u8> message);
+    // Keep the Inbox index and unread flags consistent with the on-disk message files.
+    // Recovers stale counts after the title consumes/deletes a StreetPass message.
+    bool ReconcileInboxBoxInfo(u32 program_id);
     void CacheStreetPassMessage(u32 program_id, const std::vector<u8>& message);
     void SendStreetPassMessage(const std::shared_ptr<Network::RoomMember>& member, u32 program_id,
                                const std::vector<u8>& message,
