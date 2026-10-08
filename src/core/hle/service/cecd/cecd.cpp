@@ -92,11 +92,12 @@ RoomCecTimestamp GetCurrentRoomCecTimestamp() {
 }
 
 std::array<u8, 8> MakeRoomStreetPassMessageId(const std::array<u8, 8>& original_message_id,
-                                               const std::array<u8, 6>& sender_mac) {
-    // CECD message IDs can be identical when users clone a save/NAND. For room-delivered
-    // StreetPass, derive a stable local ID from both the original message ID and sender MAC.
-    // This makes retries from the same sender deduplicate while allowing another virtual 3DS
-    // with the same cloned message ID to be treated as a distinct encounter.
+                                               const std::array<u8, 6>& sender_mac,
+                                               std::span<const u8> original_message) {
+    // Original CECD IDs may be reused when players update the registered team or scan
+    // a special QR code. Include the message contents so a new payload from the same
+    // sender does not get discarded as an already received StreetPass encounter.
+    // Identical retries still deduplicate, and cloned NANDs remain distinct by MAC.
     u64 hash = 14695981039346656037ULL;
     constexpr u64 fnv_prime = 1099511628211ULL;
 
@@ -109,6 +110,9 @@ std::array<u8, 8> MakeRoomStreetPassMessageId(const std::array<u8, 8>& original_
         mix(byte);
     }
     for (const u8 byte : sender_mac) {
+        mix(byte);
+    }
+    for (const u8 byte : original_message) {
         mix(byte);
     }
 
@@ -147,8 +151,17 @@ void Module::BindRoomMember(const std::shared_ptr<Network::RoomMember>& member) 
                 return;
             }
 
-            LOG_INFO(Service_CECD, "Answering UDS-triggered StreetPass exchange request");
-            self->SendCachedStreetPassMessages(room, packet.transmitter_address);
+            // CECD's NAND archive is owned by the emulation thread. Reading cached files
+            // here would be unsafe and could reply with data from before QR/party updates.
+            {
+                std::lock_guard lock(self->streetpass_mutex);
+                const auto& pending = self->pending_streetpass_requests;
+                if (std::find(pending.begin(), pending.end(), packet.transmitter_address) ==
+                    pending.end()) {
+                    self->pending_streetpass_requests.push_back(packet.transmitter_address);
+                }
+            }
+            LOG_INFO(Service_CECD, "Queued UDS-triggered StreetPass exchange request");
         }
     });
 
@@ -208,9 +221,11 @@ void Module::ProcessPendingStreetPassPackets() {
     }
 
     std::vector<PendingStreetPassMessage> pending;
+    std::vector<std::array<u8, 6>> requests;
     {
         std::lock_guard lock(streetpass_mutex);
         pending.swap(pending_streetpass_messages);
+        requests.swap(pending_streetpass_requests);
     }
 
     if (!pending.empty()) {
@@ -223,6 +238,20 @@ void Module::ProcessPendingStreetPassPackets() {
             LOG_DEBUG(Service_CECD,
                       "StreetPass room message for program {:#010x} was not installed "
                       "(possibly duplicate or invalid)", packet.program_id);
+        }
+    }
+
+    if (!requests.empty()) {
+        // The send payload may have changed since CECD was initialized, especially after
+        // a special QR scan and an update at the Wayfarer Manor manager.
+        BroadcastAllOutboxMessages();
+        if (const auto member = room_member.lock(); member && member->IsConnected()) {
+            for (const auto& peer_mac : requests) {
+                LOG_INFO(Service_CECD,
+                         "Answering UDS-triggered StreetPass exchange request with refreshed "
+                         "OutBox cache");
+                SendCachedStreetPassMessages(member, peer_mac);
+            }
         }
     }
 }
@@ -287,7 +316,7 @@ bool Module::InjectStreetPassMessage(const u32 program_id,
     std::memcpy(original_message_id.data(), message_header.message_id.data(),
                 original_message_id.size());
     const std::array<u8, 8> message_id =
-        MakeRoomStreetPassMessageId(original_message_id, sender_mac);
+        MakeRoomStreetPassMessageId(original_message_id, sender_mac, message);
     std::memcpy(message_header.message_id.data(), message_id.data(), message_id.size());
 
     const FileSys::Path inbox_message_path(
