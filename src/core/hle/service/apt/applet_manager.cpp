@@ -12,7 +12,6 @@
 #include "core/hle/applets/mii_selector.h"
 #include "core/hle/applets/mint.h"
 #include "core/hle/applets/swkbd.h"
-#include "core/hle/kernel/process.h"
 #include "core/hle/service/am/am.h"
 #include "core/hle/service/apt/applet_manager.h"
 #include "core/hle/service/apt/errors.h"
@@ -460,74 +459,14 @@ Result AppletManager::Enable(AppletAttributes attributes) {
                   slot_data->attributes.raw);
     }
 
-    // Send any outstanding parameters to the newly-registered application.
+    // Send any outstanding parameters to the newly-registered application
     if (delayed_parameter && delayed_parameter->destination_id == slot_data->applet_id) {
-        // Home Menu launches an application first and waits for it to register before completing
-        // the transition. Switch the active slot only when the newly registered application is
-        // about to receive its initial wakeup.
-        if (slot == AppletSlot::Application &&
-            delayed_parameter->signal == SignalType::Wakeup) {
-            LOG_DEBUG(Service_APT,
-                      "Application registered; activating applet slot before initial wakeup");
-            active_slot = AppletSlot::Application;
-        }
-
         // TODO: Real APT would loop trying to send the parameter until it succeeds,
         // essentially waiting for existing parameters to be delivered.
         CancelAndSendParameter(*delayed_parameter);
         delayed_parameter.reset();
     }
 
-    return ResultSuccess;
-}
-
-Result AppletManager::NotifyToWait(
-    const AppletId app_id, const std::shared_ptr<Kernel::Process>& process) {
-    if (!process) {
-        LOG_WARNING(Service_APT, "NotifyToWait called without a client process, app_id={:03X}",
-                    app_id);
-        return ResultSuccess;
-    }
-
-    auto slot = GetAppletSlotFromId(app_id);
-
-    // Some callers can use a generic applet ID. Resolve the real slot from the IPC caller
-    // process as a fallback so we suspend the process that actually declared itself ready to wait.
-    if (slot == AppletSlot::Error || !GetAppletSlot(slot)->registered || !process->codeset ||
-        GetAppletSlot(slot)->title_id != process->codeset->program_id) {
-        slot = AppletSlot::Error;
-        if (process->codeset) {
-            for (std::size_t i = 0; i < applet_slots.size(); ++i) {
-                auto candidate = static_cast<AppletSlot>(i);
-                const auto candidate_data = GetAppletSlot(candidate);
-                if (candidate_data->registered &&
-                    candidate_data->title_id == process->codeset->program_id) {
-                    slot = candidate;
-                    break;
-                }
-            }
-        }
-    }
-
-    if (slot == AppletSlot::Error) {
-        LOG_WARNING(Service_APT,
-                    "NotifyToWait could not resolve applet {:03X} for process={}, title={:016X}",
-                    app_id, process->process_id,
-                    process->codeset ? process->codeset->program_id : 0);
-        return ResultSuccess;
-    }
-
-    if (slot == active_slot) {
-        LOG_DEBUG(Service_APT,
-                  "NotifyToWait ignored for active applet {:03X}, process={}",
-                  app_id, process->process_id);
-        return ResultSuccess;
-    }
-
-    LOG_DEBUG(Service_APT,
-              "NotifyToWait scheduling suspension for applet {:03X}, process={}",
-              app_id, process->process_id);
-    SuspendProcessAfterIPC(process);
     return ResultSuccess;
 }
 
@@ -1064,7 +1003,6 @@ Result AppletManager::JumpToHomeMenu(std::shared_ptr<Kernel::Object> object,
 
             switch (slot_data->attributes.applet_pos) {
             case AppletPos::Application:
-                ResumeSlotProcess(AppletSlot::HomeMenu);
                 active_slot = AppletSlot::HomeMenu;
 
                 param.destination_id = AppletId::HomeMenu;
@@ -1120,7 +1058,6 @@ Result AppletManager::PrepareToLeaveHomeMenu() {
 
 Result AppletManager::LeaveHomeMenu(std::shared_ptr<Kernel::Object> object,
                                     const std::vector<u8>& buffer) {
-    ResumeSlotProcess(AppletSlot::Application);
     active_slot = AppletSlot::Application;
 
     SendParameter({
@@ -1164,7 +1101,6 @@ Result AppletManager::OrderToCloseApplication() {
     }
 
     ordered_to_close_application = true;
-    ResumeSlotProcess(AppletSlot::Application);
     active_slot = AppletSlot::Application;
 
     SendParameter({
@@ -1240,9 +1176,6 @@ Result AppletManager::CloseApplication(std::shared_ptr<Kernel::Object> object,
             !GetAppletSlot(application_close_target)->registered) {
             system.RequestShutdown();
         } else {
-            if (application_close_target == AppletSlot::HomeMenu) {
-                ResumeSlotProcess(AppletSlot::HomeMenu);
-            }
             active_slot = application_close_target;
 
             CancelAndSendParameter({
@@ -1568,10 +1501,8 @@ Result AppletManager::StartApplication(const std::vector<u8>& parameter,
     // PM::LaunchTitle. We should research more about that.
     ASSERT_MSG(app_start_parameters, "Trying to start an application without preparing it first.");
 
-    // Keep the Home Menu active while the application process is launching. On hardware the
-    // Home Menu waits for AppID 0x300 to register (APT::Enable) before finishing the GSP/display
-    // handoff. Marking the application active here makes the Home Menu look inactive too early.
-    // Activation is performed when the application is actually ready to receive its wakeup.
+    active_slot = AppletSlot::Application;
+
     // Launch the title directly.
     auto process = NS::LaunchTitle(system, app_start_parameters->next_media_type,
                                    app_start_parameters->next_title_id);
@@ -1594,16 +1525,6 @@ Result AppletManager::WakeupApplication(std::shared_ptr<Kernel::Object> object,
     // Send a Wakeup signal via the apt parameter to the application once it registers itself.
     // The real APT service does this by spin waiting on another thread until the application is
     // registered.
-    ResumeSlotProcess(AppletSlot::Application);
-
-    // If the application is already registered (for example StartApplication(paused=true)
-    // followed by a later WakeupApplication), the handoff can become active now. Otherwise
-    // Enable() will activate the slot immediately before delivering this queued wakeup.
-    if (GetAppletSlot(AppletSlot::Application)->registered) {
-        LOG_DEBUG(Service_APT, "Activating registered application before wakeup");
-        active_slot = AppletSlot::Application;
-    }
-
     SendApplicationParameterAfterRegistration({
         .sender_id = AppletId::HomeMenu,
         .destination_id = AppletId::Application,
@@ -1683,70 +1604,6 @@ void AppletManager::SendApplicationParameterAfterRegistration(const MessageParam
 
     // Otherwise queue it until the Application calls APT::Enable
     delayed_parameter = parameter;
-}
-
-std::shared_ptr<Kernel::Process> AppletManager::GetProcessForSlot(const AppletSlot slot) {
-    if (slot == AppletSlot::Error) {
-        return nullptr;
-    }
-
-    const auto slot_data = GetAppletSlot(slot);
-    if (!slot_data->registered || slot_data->title_id == 0) {
-        return nullptr;
-    }
-
-    std::shared_ptr<Kernel::Process> newest_process;
-    for (const auto& process : system.Kernel().GetProcessList()) {
-        if (!process || !process->codeset || process->status == Kernel::ProcessStatus::Exited ||
-            process->codeset->program_id != slot_data->title_id) {
-            continue;
-        }
-
-        if (!newest_process ||
-            process->creation_time_ticks > newest_process->creation_time_ticks) {
-            newest_process = process;
-        }
-    }
-    return newest_process;
-}
-
-void AppletManager::ResumeSlotProcess(const AppletSlot slot) {
-    const auto process = GetProcessForSlot(slot);
-    if (!process) {
-        return;
-    }
-
-    LOG_DEBUG(Service_APT, "Resuming process {} for applet slot {:02X}", process->process_id, slot);
-    process->ClearUnscheduleMode(Kernel::UnscheduleMode::APT);
-}
-
-void AppletManager::SuspendProcessAfterIPC(
-    const std::shared_ptr<Kernel::Process>& process) {
-    if (!process) {
-        return;
-    }
-
-    // Do not deschedule the process while its APT IPC request is still executing. Defer the
-    // scheduler change until CoreTiming regains control, after the service call has returned.
-    system.CoreTiming().ScheduleEvent(1, process_suspend_event, process->process_id);
-}
-
-
-void AppletManager::ProcessSuspendEvent(const std::uintptr_t user_data, s64) {
-    const auto process = system.Kernel().GetProcessById(static_cast<u32>(user_data));
-    if (!process || process->status == Kernel::ProcessStatus::Exited) {
-        return;
-    }
-
-    // A stale transition event must never suspend whichever applet has since become active.
-    if (const auto active_process = GetProcessForSlot(active_slot);
-        active_process && active_process == process) {
-        return;
-    }
-
-    LOG_DEBUG(Service_APT, "Suspending process {} after APT applet transition",
-              process->process_id);
-    process->SetUnscheduleMode(Kernel::UnscheduleMode::APT);
 }
 
 void AppletManager::EnsureHomeMenuLoaded() {
@@ -1929,17 +1786,12 @@ AppletManager::AppletManager(Core::System& system) : system(system) {
         "APT Button Update Event", [this](std::uintptr_t user_data, s64 cycles_late) {
             ButtonUpdateEvent(user_data, cycles_late);
         });
-    process_suspend_event = system.CoreTiming().RegisterEvent(
-        "APT Process Suspend Event", [this](std::uintptr_t user_data, s64 cycles_late) {
-            ProcessSuspendEvent(user_data, cycles_late);
-        });
     system.CoreTiming().ScheduleEvent(usToCycles(button_update_interval_us), button_update_event);
 }
 
 AppletManager::~AppletManager() {
     system.CoreTiming().RemoveEvent(hle_applet_update_event);
     system.CoreTiming().RemoveEvent(button_update_event);
-    system.CoreTiming().RemoveEvent(process_suspend_event);
 }
 
 void AppletManager::ReloadInputDevices() {
