@@ -1,124 +1,84 @@
-# Azahar YW Compatibility Fork
+# Azahar YW Compatibility Fork v0.2.0
 
-Unofficial Azahar fork focused on **Yo-kai Watch 2 / Yo-kai Watch 3 compatibility**.
+> [!WARNING]
+> **非公式・試験版（Prerelease）です。** セーブデータとAzaharのユーザーデータ／NANDはバックアップしてから使用してください。これはAzahar公式のリリースではありません。
 
-This build is based on the YW2 local-play work from `utosa123/azahar` and includes additional fixes maintained in this fork.
+**『妖怪ウォッチ2』のローカル通信・すれちがい通信・HOME復帰の互換性改善を含むWindows向けテストリリースです。**
 
-## Included fixes
+## v0.1.0からの主な変更
 
-- YW2 local-play compatibility fixes from utosa123's `yw2-local-play-v3-beta`
-- YW2 local multiplayer / trading / battle related compatibility work
-- Qt system-camera lifecycle fixes
-- Shared system-camera reference counting
-- Linux fix for the in-game camera showing a solid green image
-  - Confirmed working with **Yo-kai Watch 2 Fushigi Lens**
+### 1. すれちがい通信（CECD / Multiplayer Room）
 
-> This is an unofficial compatibility-focused fork. It is not an official Azahar release.
+- Azahar Multiplayer Room内で、双方がゲームを起動した状態になると、CECD OutBoxのメッセージを相手へ転送する実験的な処理を実装しました。
+- すれちがい通信のために対戦・交換などのUDSセッションを開始する必要はありません。両端末で異なるゲームを起動していても転送条件の対象になります。
+- 受信メッセージのメタデータ調整、Inboxへの格納、重複排除などに対応します。
+- **ローカルで実際に動作確認済み：** 2インスタンスで『妖怪ウォッチ2 真打』を使用し、すれちがいデータ受信後、**ツチノコパンダがVIPルームに実際に出現**しました。セーブフラグの直接書き換えではありません。
 
-## Windows
+### 2. HOME復帰のNDSP競合対策（[#13](https://github.com/AlexanderGG-0520/azahar/pull/13)）
 
-Two Windows packages are provided in the Release assets.
+- HOME遷移時、YW2のNDSPワーカーが破棄済みIRQイベントに対して待機し、`InvalidHandle`によるFatalが発生する問題への限定的な回避策を追加しました。
+- **ローカルで実際に動作確認済み：** JPN HOMEメニューが表示され、そこからYW2へ戻って通常のプレイを継続できました。関連ログでは`ResultTimeout`へのフォールバックが動作し、従来のFatalは再現しませんでした。
+- 対象をYW2のタイトル・`handle == 0`・`9,776,000 ns`・ゲストPC `0x00181448` に限定。**一般の無効ハンドルを無視する変更ではありません。**
+- 繰り返しのHOME往復・音声の長時間動作・自転車クラッシュ等の網羅的な検証は未完了です。HOME関連の全問題が解決したという保証はありません。
 
-### Installer — recommended
+### 3. 引き継ぎ機能
 
-Download:
+- [utosa123](https://github.com/utosa123/azahar)による『妖怪ウォッチ2』のローカル通信NWMワーカーポーリング修正
+- カメラのQtスレッド処理と共有キャプチャの参照カウント調整
+- Linuxでの『ふしぎなレンズ』の緑一色表示への修正（ローカルテストで確認済み）
+- CECD / APT の互換性改善と診断ログ
 
-`azahar-yw-v0.1.0-windows-msys2-installer.exe`
+**検証範囲について：** 上記のすれちがい通信とHOME復帰の成功結果は開発者のローカル環境のものです。今回配布する**Windowsビルドでの再検証は別途必要**で、動作を保証しません。
 
-Run the installer and launch Azahar normally.
+## ダウンロード（Windows）
 
-### Portable ZIP
+- **インストーラー:** `azahar-yw-v0.2.0-windows-msys2-installer.exe`
+- **ポータブルZIP:** `azahar-yw-v0.2.0-windows-msys2.zip`
 
-Download:
+インストーラーはそのまま実行してください。ZIP版は任意のフォルダに展開し、`azahar.exe` を起動してください。古いデータを上書きする前に、セーブ／NAND／`user` ディレクトリのバックアップを推奨します。
 
-`azahar-yw-v0.1.0-windows-msys2.zip`
+**Linux / macOS / Androidのバイナリは今回配布しません。**
 
-Extract the ZIP to a folder and run `azahar.exe`.
-
-The portable ZIP does not require installation.
-
-## Linux
-
-Linux binaries are not distributed in this release. Build the fork from source.
-
-### 1. Clone
+## Linuxでソースビルド
 
 ```bash
 git clone --recursive https://github.com/AlexanderGG-0520/azahar.git
 cd azahar
-git switch integration/yw
+git switch release/yw-v0.2.0
 git submodule update --init --recursive
 ```
 
-If you already cloned the repository:
-
-```bash
-git fetch origin
-git switch integration/yw
-git pull --ff-only
-git submodule sync --recursive
-git submodule update --init --recursive
-```
-
-### 2. Configure
-
-Azahar requires CMake 3.25 or newer, Ninja, a C/C++ compiler, Qt 6 development packages, and the normal Azahar Linux build dependencies.
+AzaharのLinuxビルド依存（CMake 3.25以降、Ninja、Qt 6の開発パッケージ等）を用意します。
 
 ```bash
 cmake -S . -B build -G Ninja \
   -DCMAKE_BUILD_TYPE=Release \
   -DENABLE_ROOM_STANDALONE=OFF \
   -DENABLE_DISCORD_RPC=ON
-```
-
-### 3. Build
-
-```bash
 cmake --build build -j "$(nproc)"
-```
-
-### 4. Run
-
-```bash
 ./build/bin/Release/azahar
 ```
 
-If CMake reports missing vendored libraries such as Boost, Catch2, dynarmic, fmt, SDL, or compatibility_list, run:
+Linuxのカメラは **Emulation → Configure → System → Camera** から **System Camera (qt)** とWebカメラを選択してください。
 
-```bash
-git submodule sync --recursive
-git submodule update --init --recursive
-rm -rf build
-```
+## 通信時の注意
 
-and configure again.
+1. 双方で互換性のあるAzaharビルドを使い、同じMultiplayer Roomへ参加する。
+2. ユーザー名・MACアドレス・コンソールアドレスを使い回さない。
+3. 対戦・交換はゲーム内から通常どおり開始する。日本版では必要に応じてリージョンをJPNへ設定する。
+4. すれちがい通信の実験では、双方のゲームで対応機能を登録し、両方がゲームを起動している状態にする。
 
-## Camera configuration on Linux
+再現性のある不具合報告には、OS・ソースのコミット・ゲームのバージョン・再現手順・`azahar_log.txt`（機密情報除去済み）を記載してください。
 
-For a real webcam:
+## Credits / English summary
 
-1. Open **Emulation → Configure → System → Camera**.
-2. Select **System Camera (qt)**.
-3. Select your webcam.
-4. Apply the settings.
-5. Start the game and open its camera feature.
+**Azahar YW Compatibility Fork v0.2.0** is an unofficial **Windows prerelease**.
 
-The Linux green-camera issue that affected the in-game feed while the settings Preview worked is fixed in this fork.
+- Experimental **StreetPass over multiplayer rooms**: **locally verified** with a visible Pandanoko spawn in the VIP room of Yo-kai Watch 2 Shin'uchi.
+- **PR #13 — YW2 NDSP zero-IRQ HOME race workaround**: **locally verified** that HOME opened and the game resumed without the previous fatal. This is a targeted workaround, not a general kernel invalid-handle bypass.
+- Windows installer + portable ZIP, with the original local-play fixes and camera lifecycle fixes.
+- **Windows runtime results are not yet established** from the local tests. Back up saves/NAND before trying the prerelease.
 
-## YW2 local play
+Maintained by [AlexanderGG](https://github.com/AlexanderGG-0520). Based on [Azahar](https://github.com/azahar-emu/azahar) and [utosa123's YW2 work](https://github.com/utosa123/azahar). Research, coding assistance, and documentation have used ChatGPT/OpenAI Codex with local human runtime testing. License information is in `license.txt`.
 
-The fork preserves utosa123's YW2 local-play v3 workaround. It is intentionally kept separate from unrelated game-speed modifications such as the experimental 120 FPS branch.
-
-## Source
-
-The release is built from the `integration/yw` line of development:
-
-https://github.com/AlexanderGG-0520/azahar/tree/integration/yw
-
-Upstream Azahar:
-
-https://github.com/azahar-emu/azahar
-
-YW2 local-play work:
-
-https://github.com/utosa123/azahar
+Source: [release/yw-v0.2.0](https://github.com/AlexanderGG-0520/azahar/tree/release/yw-v0.2.0) · [development](https://github.com/AlexanderGG-0520/azahar/tree/integration/yw) · [PR #13](https://github.com/AlexanderGG-0520/azahar/pull/13)
