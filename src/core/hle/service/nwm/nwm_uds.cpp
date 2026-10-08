@@ -89,19 +89,6 @@ void SendPacket(Network::WifiPacket& packet) {
     }
 }
 
-// Only a completed UDS peer connection may initiate a StreetPass exchange. Room membership
-// and UDS discovery beacons alone must not trigger it.
-void RequestStreetPassExchange(const Network::MacAddress& peer_mac) {
-    Network::WifiPacket request{};
-    request.type = Network::WifiPacket::PacketType::StreetPassRequest;
-    request.channel = 0;
-    request.destination_address = peer_mac;
-    SendPacket(request);
-    LOG_INFO(Service_NWM, "Requesting StreetPass exchange with UDS peer "
-                          "{:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}",
-             peer_mac[0], peer_mac[1], peer_mac[2], peer_mac[3], peer_mac[4], peer_mac[5]);
-}
-
 u16 NWM_UDS::GetNextAvailableNodeId() {
     for (u16 index = 0; index < connection_status.max_nodes; ++index) {
         if ((connection_status.node_bitmask & (1 << index)) == 0)
@@ -286,10 +273,6 @@ void NWM_UDS::HandleEAPoLPacket(const Network::WifiPacket& packet) {
 
         SendPacket(eapol_logoff);
 
-        if (eapol_start.connection_type == ConnectionType::Client) {
-            RequestStreetPassExchange(packet.transmitter_address);
-        }
-
         connection_status_event->Signal();
     } else if (connection_status.status == NetworkStatus::Connecting) {
         auto logoff = ParseEAPoLLogoffFrame(packet.data);
@@ -332,9 +315,6 @@ void NWM_UDS::HandleEAPoLPacket(const Network::WifiPacket& packet) {
         // otherwise it might cause deadlocks
         connection_status_event->Signal();
         connection_event->Signal();
-        if (conn_type == ConnectionType::Client) {
-            RequestStreetPassExchange(packet.transmitter_address);
-        }
     } else if (connection_status.status == NetworkStatus::ConnectedAsClient ||
                connection_status.status == NetworkStatus::ConnectedAsSpectator) {
         // TODO(B3N30): Remove that section and send/receive a proper connection_status packet
