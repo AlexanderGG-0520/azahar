@@ -471,6 +471,45 @@ Result AppletManager::Enable(AppletAttributes attributes) {
     return ResultSuccess;
 }
 
+Result AppletManager::NotifyToWait(
+    const AppletId app_id, const std::shared_ptr<Kernel::Process>& process) {
+    if (!process) {
+        LOG_WARNING(Service_APT, "NotifyToWait called without a client process, app_id={:03X}",
+                    app_id);
+        return ResultSuccess;
+    }
+
+    const auto slot = GetAppletSlotFromId(app_id);
+    if (slot == AppletSlot::Error) {
+        LOG_WARNING(Service_APT, "NotifyToWait called for unknown applet {:03X}, process={}",
+                    app_id, process->process_id);
+        return ResultSuccess;
+    }
+
+    const auto slot_data = GetAppletSlot(slot);
+    if (!slot_data->registered || !process->codeset ||
+        slot_data->title_id != process->codeset->program_id) {
+        LOG_WARNING(Service_APT,
+                    "NotifyToWait applet/process mismatch: app_id={:03X}, process={}, title={:016X}",
+                    app_id, process->process_id,
+                    process->codeset ? process->codeset->program_id : 0);
+        return ResultSuccess;
+    }
+
+    if (slot == active_slot) {
+        LOG_DEBUG(Service_APT,
+                  "NotifyToWait ignored for active applet {:03X}, process={}",
+                  app_id, process->process_id);
+        return ResultSuccess;
+    }
+
+    LOG_DEBUG(Service_APT,
+              "NotifyToWait scheduling suspension for applet {:03X}, process={}",
+              app_id, process->process_id);
+    SuspendProcessAfterIPC(process);
+    return ResultSuccess;
+}
+
 Result AppletManager::Finalize(AppletId app_id) {
     auto slot = GetAppletSlotFromId(app_id);
     if (slot == AppletSlot::Error) {
@@ -1011,7 +1050,6 @@ Result AppletManager::JumpToHomeMenu(std::shared_ptr<Kernel::Object> object,
                 param.sender_id = AppletId::Application;
                 param.signal = SignalType::WakeupByPause;
                 SendParameter(param);
-                SuspendSlotProcessAfterIPC(AppletSlot::Application);
                 break;
             case AppletPos::Library:
                 param.destination_id = slot_data->applet_id;
@@ -1071,7 +1109,6 @@ Result AppletManager::LeaveHomeMenu(std::shared_ptr<Kernel::Object> object,
         .object = std::move(object),
         .buffer = buffer,
     });
-    SuspendSlotProcessAfterIPC(AppletSlot::HomeMenu);
 
     return ResultSuccess;
 }
@@ -1114,7 +1151,6 @@ Result AppletManager::OrderToCloseApplication() {
         .destination_id = AppletId::Application,
         .signal = SignalType::WakeupByCancel,
     });
-    SuspendSlotProcessAfterIPC(AppletSlot::HomeMenu);
 
     return ResultSuccess;
 }
@@ -1544,10 +1580,6 @@ Result AppletManager::WakeupApplication(std::shared_ptr<Kernel::Object> object,
         .buffer = buffer,
     });
 
-    if (GetAppletSlot(AppletSlot::HomeMenu)->registered) {
-        SuspendSlotProcessAfterIPC(AppletSlot::HomeMenu);
-    }
-
     return ResultSuccess;
 }
 
@@ -1656,8 +1688,8 @@ void AppletManager::ResumeSlotProcess(const AppletSlot slot) {
     process->ClearUnscheduleMode(Kernel::UnscheduleMode::APT);
 }
 
-void AppletManager::SuspendSlotProcessAfterIPC(const AppletSlot slot) {
-    const auto process = GetProcessForSlot(slot);
+void AppletManager::SuspendProcessAfterIPC(
+    const std::shared_ptr<Kernel::Process>& process) {
     if (!process) {
         return;
     }
@@ -1665,6 +1697,10 @@ void AppletManager::SuspendSlotProcessAfterIPC(const AppletSlot slot) {
     // Do not deschedule the process while its APT IPC request is still executing. Defer the
     // scheduler change until CoreTiming regains control, after the service call has returned.
     system.CoreTiming().ScheduleEvent(1, process_suspend_event, process->process_id);
+}
+
+void AppletManager::SuspendSlotProcessAfterIPC(const AppletSlot slot) {
+    SuspendProcessAfterIPC(GetProcessForSlot(slot));
 }
 
 void AppletManager::ProcessSuspendEvent(const std::uintptr_t user_data, s64) {
