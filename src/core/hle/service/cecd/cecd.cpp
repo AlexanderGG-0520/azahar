@@ -155,6 +155,11 @@ void Module::BindRoomMember(const std::shared_ptr<Network::RoomMember>& member) 
     // Cache already-registered CECD outboxes without sending. Joining a room alone must not
     // generate a StreetPass encounter; a completed UDS association triggers the unicast reply.
     BroadcastAllOutboxMessages();
+    {
+        std::lock_guard lock(streetpass_mutex);
+        LOG_INFO(Service_CECD, "Initialized StreetPass OutBox cache with {} message(s)",
+                 cached_streetpass_messages.size());
+    }
 }
 
 void Module::QueueStreetPassPacket(const Network::WifiPacket& packet) {
@@ -215,9 +220,9 @@ void Module::ProcessPendingStreetPassPackets() {
     for (auto& packet : pending) {
         if (!InjectStreetPassMessage(packet.program_id, packet.sender_mac,
                                      std::move(packet.message))) {
-            LOG_WARNING(Service_CECD,
-                        "Unable to commit StreetPass room message for program {:#010x}; see "
-                        "previous CECD logs for reason", packet.program_id);
+            LOG_DEBUG(Service_CECD,
+                      "StreetPass room message for program {:#010x} was not installed "
+                      "(possibly duplicate or invalid)", packet.program_id);
         }
     }
 }
@@ -252,8 +257,9 @@ bool Module::InjectStreetPassMessage(const u32 program_id,
         GetCecDataPathTypeAsString(CecDataPathType::InboxInfo, program_id).data());
     auto info_result = cecd_system_save_data_archive->OpenFile(inbox_info_path, info_mode);
     if (info_result.Failed()) {
-        LOG_DEBUG(Service_CECD,
-                  "Ignoring StreetPass message for inactive CECD program {:#010x}", program_id);
+        LOG_WARNING(Service_CECD,
+                    "Dropping StreetPass message: no Inbox mailbox registered for CECD "
+                    "program {:#010x}", program_id);
         return false;
     }
 
@@ -294,8 +300,8 @@ bool Module::InjectStreetPassMessage(const u32 program_id,
         auto existing_file = std::move(existing_result).Unwrap();
         existing_file->Close();
         info_file->Close();
-        LOG_DEBUG(Service_CECD,
-                  "Ignoring duplicate StreetPass room message for program {:#010x}", program_id);
+        LOG_INFO(Service_CECD,
+                 "Skipping duplicate StreetPass room message for program {:#010x}", program_id);
         return false;
     }
 
