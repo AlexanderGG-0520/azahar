@@ -751,6 +751,25 @@ void Module::BroadcastOutboxMessages(const u32 program_id) {
             continue;
         }
 
+        // Recover OutBoxes written by older HLE builds: a shorter replacement message
+        // could overwrite the start of an existing file without truncating its old tail.
+        // Only strip the extra bytes when the CECD header gives a self-consistent, valid
+        // shorter size. Preserve the on-disk file for rollback and forensic comparison.
+        CecMessageHeader header{};
+        std::memcpy(&header, message.data(), sizeof(header));
+        const u64 expected_size =
+            static_cast<u64>(header.header_size) + header.body_size + StreetPassHmacSize;
+        const u32 declared_size = header.message_size;
+        if (header.magic == 0x6060 && header.title_id == program_id &&
+            header.header_size >= sizeof(CecMessageHeader) && expected_size == declared_size &&
+            declared_size >= sizeof(CecMessageHeader) && declared_size < message.size()) {
+            LOG_WARNING(Service_CECD,
+                        "Ignoring {} stale trailing byte(s) in OutBox message for "
+                        "program {:#010x} (on-disk size {}, declared size {})",
+                        message.size() - declared_size, program_id, message.size(), declared_size);
+            message.resize(declared_size);
+        }
+
         BroadcastStreetPassMessage(program_id, message);
     }
 }
