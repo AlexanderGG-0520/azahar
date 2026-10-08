@@ -574,7 +574,8 @@ void NWM_UDS::OnWifiPacketReceived(const Network::WifiPacket& packet) {
         HandleNodeMapPacket(packet);
         break;
     case Network::WifiPacket::PacketType::StreetPass:
-        // CECD binds to the same room packet stream and consumes StreetPass frames.
+    case Network::WifiPacket::PacketType::StreetPassRequest:
+        // CECD binds to the same room packet stream and consumes these private frames.
         break;
     }
 }

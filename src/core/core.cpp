@@ -487,6 +487,21 @@ System::ResultStatus System::Load(Frontend::EmuWindow& emu_window, const std::st
     // Reset counters and set time origin to current frame
     [[maybe_unused]] const PerfStats::Results result = GetAndResetPerfStats();
     perf_stats->BeginSystemFrame();
+
+    // Publish game presence even in frontends that do not explicitly update room game info.
+    // RoomMember remembers this information before joining and rebroadcasts it on join,
+    // so the StreetPass trigger does not depend on room-join versus game-boot order.
+    if (title_id != 0) {
+        if (auto room_member = Network::GetRoomMember().lock()) {
+            Network::GameInfo game_info{};
+            game_info.id = title_id;
+            if (app_loader->ReadTitle(game_info.name) != Loader::ResultStatus::Success ||
+                game_info.name.empty()) {
+                game_info.name = "Running title";
+            }
+            room_member->SendGameInfo(game_info);
+        }
+    }
     return status;
 }
 

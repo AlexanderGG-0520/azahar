@@ -4,10 +4,13 @@
 
 #pragma once
 
+#include <set>
+
 #include <array>
 #include <memory>
 #include <mutex>
 #include <span>
+#include "core/core_timing.h"
 #include "common/bit_field.h"
 #include "common/common_funcs.h"
 #include "core/hle/kernel/event.h"
@@ -648,10 +651,19 @@ private:
     void ProcessPendingStreetPassPackets();
     bool InjectStreetPassMessage(u32 program_id, const std::array<u8, 6>& sender_mac,
                                  std::vector<u8> message);
+    // Keep the Inbox index and unread flags consistent with the on-disk message files.
+    // Recovers stale counts after the title consumes/deletes a StreetPass message.
+    bool ReconcileInboxBoxInfo(u32 program_id);
+    // A zero outgoing CECD message ID requests a fresh, unique per-title ID.
+    // Update both the caller's read/write ID buffer and the saved message header.
+    bool AllocateOutboxMessageId(u32 program_id, std::vector<u8>& message_id,
+                                 std::vector<u8>& message);
     void CacheStreetPassMessage(u32 program_id, const std::vector<u8>& message);
     void SendStreetPassMessage(const std::shared_ptr<Network::RoomMember>& member, u32 program_id,
-                               const std::vector<u8>& message);
-    void BroadcastCachedStreetPassMessages(const std::shared_ptr<Network::RoomMember>& member);
+                               const std::vector<u8>& message,
+                               const std::array<u8, 6>& destination);
+    void SendCachedStreetPassMessages(const std::shared_ptr<Network::RoomMember>& member,
+                                      const std::array<u8, 6>& destination);
     void BroadcastStreetPassMessage(u32 program_id, const std::vector<u8>& message);
     void BroadcastOutboxMessages(u32 program_id);
     void BroadcastAllOutboxMessages();
@@ -663,9 +675,17 @@ private:
     std::shared_ptr<Kernel::Event> change_state_event;
 
     std::mutex streetpass_mutex;
+    // Peers eligible in the last room-game-presence snapshot; rearm on game stop/leave.
+    std::set<std::array<u8, 6>> active_streetpass_peers;
     std::vector<PendingStreetPassMessage> pending_streetpass_messages;
+    // Requests arrive on the ENet thread; read the latest OutBoxes on the emulation thread.
+    std::vector<std::array<u8, 6>> pending_streetpass_requests;
     std::vector<CachedStreetPassMessage> cached_streetpass_messages;
     std::weak_ptr<Network::RoomMember> room_member;
+
+    // Network packet callbacks only enqueue data; this emulation-thread event commits it to
+    // the CECD NAND archive even if the title does not make another CECD IPC call.
+    Core::TimingEventType* streetpass_delivery_event = nullptr;
 
     Core::System& system;
 

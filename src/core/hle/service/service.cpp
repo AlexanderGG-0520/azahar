@@ -198,6 +198,14 @@ std::string ServiceFrameworkBase::GetFunctionName(IPC::Header header) const {
 }
 
 static bool AttemptLLE(const ServiceModuleInfo& service_module, u64 loading_titleid) {
+    // Multiplayer-room StreetPass hooks live in the HLE CECD service. Loading the real
+    // CECD sysmodule bypasses those hooks, even when the rest of the online LLE services
+    // are needed for Pretendo. Select HLE for CECD only; do not disable online LLE globally.
+    if (service_module.name == "CECD") {
+        LOG_INFO(Service, "Using HLE CECD for room StreetPass (online LLE services remain enabled)");
+        return false;
+    }
+
     const bool enable_recommended_lle_modules = Common::Hacks::hack_manager.OverrideBooleanSetting(
         Common::Hacks::HackType::ONLINE_LLE_REQUIRED, loading_titleid,
         Settings::values.enable_required_online_lle_modules.GetValue());
