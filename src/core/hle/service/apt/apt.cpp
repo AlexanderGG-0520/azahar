@@ -354,12 +354,14 @@ void Module::APTInterface::GetWirelessRebootInfo(Kernel::HLERequestContext& ctx)
 
 void Module::APTInterface::NotifyToWait(Kernel::HLERequestContext& ctx) {
     IPC::RequestParser rp(ctx);
-    const auto app_id = rp.Pop<u32>();
+    const auto app_id = rp.PopEnum<AppletId>();
+    const auto process = ctx.ClientThread()->owner_process.lock();
 
     IPC::RequestBuilder rb = rp.MakeBuilder(1, 0);
-    rb.Push(ResultSuccess); // No error
+    rb.Push(apt->applet_manager->NotifyToWait(app_id, process));
 
-    LOG_WARNING(Service_APT, "(STUBBED) app_id={}", app_id);
+    LOG_DEBUG(Service_APT, "called app_id={:03X}, process={}", app_id,
+              process ? process->process_id : 0);
 }
 
 void Module::APTInterface::GetLockHandle(Kernel::HLERequestContext& ctx) {
