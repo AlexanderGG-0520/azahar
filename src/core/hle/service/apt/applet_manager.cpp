@@ -460,8 +460,18 @@ Result AppletManager::Enable(AppletAttributes attributes) {
                   slot_data->attributes.raw);
     }
 
-    // Send any outstanding parameters to the newly-registered application
+    // Send any outstanding parameters to the newly-registered application.
     if (delayed_parameter && delayed_parameter->destination_id == slot_data->applet_id) {
+        // Home Menu launches an application first and waits for it to register before completing
+        // the transition. Switch the active slot only when the newly registered application is
+        // about to receive its initial wakeup.
+        if (slot == AppletSlot::Application &&
+            delayed_parameter->signal == SignalType::Wakeup) {
+            LOG_DEBUG(Service_APT,
+                      "Application registered; activating applet slot before initial wakeup");
+            active_slot = AppletSlot::Application;
+        }
+
         // TODO: Real APT would loop trying to send the parameter until it succeeds,
         // essentially waiting for existing parameters to be delivered.
         CancelAndSendParameter(*delayed_parameter);
@@ -1558,8 +1568,10 @@ Result AppletManager::StartApplication(const std::vector<u8>& parameter,
     // PM::LaunchTitle. We should research more about that.
     ASSERT_MSG(app_start_parameters, "Trying to start an application without preparing it first.");
 
-    active_slot = AppletSlot::Application;
-
+    // Keep the Home Menu active while the application process is launching. On hardware the
+    // Home Menu waits for AppID 0x300 to register (APT::Enable) before finishing the GSP/display
+    // handoff. Marking the application active here makes the Home Menu look inactive too early.
+    // Activation is performed when the application is actually ready to receive its wakeup.
     // Launch the title directly.
     auto process = NS::LaunchTitle(system, app_start_parameters->next_media_type,
                                    app_start_parameters->next_title_id);
@@ -1583,6 +1595,15 @@ Result AppletManager::WakeupApplication(std::shared_ptr<Kernel::Object> object,
     // The real APT service does this by spin waiting on another thread until the application is
     // registered.
     ResumeSlotProcess(AppletSlot::Application);
+
+    // If the application is already registered (for example StartApplication(paused=true)
+    // followed by a later WakeupApplication), the handoff can become active now. Otherwise
+    // Enable() will activate the slot immediately before delivering this queued wakeup.
+    if (GetAppletSlot(AppletSlot::Application)->registered) {
+        LOG_DEBUG(Service_APT, "Activating registered application before wakeup");
+        active_slot = AppletSlot::Application;
+    }
+
     SendApplicationParameterAfterRegistration({
         .sender_id = AppletId::HomeMenu,
         .destination_id = AppletId::Application,
