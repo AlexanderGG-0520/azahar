@@ -311,6 +311,7 @@ public:
     ResultVal<InitializeResult> Initialize(AppletId app_id, AppletAttributes attributes);
 
     Result Enable(AppletAttributes attributes);
+    Result NotifyToWait(AppletId app_id, const std::shared_ptr<Kernel::Process>& process);
     Result Finalize(AppletId app_id);
     u32 CountRegisteredApplet();
     bool IsRegistered(AppletId app_id);
@@ -565,7 +566,7 @@ private:
 
     std::shared_ptr<Kernel::Process> GetProcessForSlot(AppletSlot slot);
     void ResumeSlotProcess(AppletSlot slot);
-    void SuspendSlotProcessAfterIPC(AppletSlot slot);
+    void SuspendProcessAfterIPC(const std::shared_ptr<Kernel::Process>& process);
     void ProcessSuspendEvent(std::uintptr_t user_data, s64 cycles_late);
 
     void CaptureFrameBuffers();
