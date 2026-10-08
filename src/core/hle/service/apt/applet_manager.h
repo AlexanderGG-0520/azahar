@@ -23,10 +23,6 @@ namespace Core {
 class System;
 }
 
-namespace Kernel {
-class Process;
-}
-
 namespace HLE::Applets {
 class Applet;
 }
@@ -311,7 +307,6 @@ public:
     ResultVal<InitializeResult> Initialize(AppletId app_id, AppletAttributes attributes);
 
     Result Enable(AppletAttributes attributes);
-    Result NotifyToWait(AppletId app_id, const std::shared_ptr<Kernel::Process>& process);
     Result Finalize(AppletId app_id);
     u32 CountRegisteredApplet();
     bool IsRegistered(AppletId app_id);
@@ -533,7 +528,6 @@ private:
     Core::TimingEventType* hle_applet_update_event;
 
     Core::TimingEventType* button_update_event;
-    Core::TimingEventType* process_suspend_event;
     std::atomic<bool> is_device_reload_pending{true};
     std::unique_ptr<Input::ButtonDevice> home_button;
     std::unique_ptr<Input::ButtonDevice> power_button;
@@ -563,11 +557,6 @@ private:
     void SendNotificationToAll(Notification notification);
 
     void EnsureHomeMenuLoaded();
-
-    std::shared_ptr<Kernel::Process> GetProcessForSlot(AppletSlot slot);
-    void ResumeSlotProcess(AppletSlot slot);
-    void SuspendProcessAfterIPC(const std::shared_ptr<Kernel::Process>& process);
-    void ProcessSuspendEvent(std::uintptr_t user_data, s64 cycles_late);
 
     void CaptureFrameBuffers();
     void TransferCapturedFramebuffers();
