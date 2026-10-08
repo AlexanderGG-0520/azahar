@@ -814,6 +814,22 @@ private:
 /// Wait for a handle to synchronize, timeout after the specified nanoseconds
 Result SVC::WaitSynchronization1(Handle handle, s64 nano_seconds) {
     const auto process = kernel.GetCurrentProcess();
+
+    // YW2's NDSP worker can race with the DSP sleep callback on HOME transitions:
+    // the callback closes and zeroes the IRQ event while the worker is preparing
+    // to wait for two audio frames (9.776 ms). The resulting InvalidHandle is
+    // incorrectly escalated to err:f by the guest audio library.
+    // Treat only this confirmed call site as a missed IRQ timeout; never relax
+    // invalid-handle validation for other callers.
+    if (handle == 0 && nano_seconds == 9'776'000 && GetReg(15) == 0x00181448 &&
+        process && process->codeset && IsYoKaiWatch2Title(process->codeset->program_id)) {
+        LOG_WARNING(Kernel_SVC,
+                    "[HOME-HANDOFF] YW2 NDSP sleep race: ignoring zero IRQ handle "
+                    "pid={} pc=0x{:08X} timeout={} -> ResultTimeout",
+                    process->process_id, GetReg(15), nano_seconds);
+        return ResultTimeout;
+    }
+
     auto object = process->handle_table.Get<WaitObject>(handle);
     Thread* thread = kernel.GetCurrentThreadManager().GetCurrentThread();
 
