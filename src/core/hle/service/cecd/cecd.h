@@ -667,6 +667,8 @@ private:
 
     std::mutex streetpass_mutex;
     std::vector<PendingStreetPassMessage> pending_streetpass_messages;
+    // Requests arrive on the ENet thread; read the latest OutBoxes on the emulation thread.
+    std::vector<std::array<u8, 6>> pending_streetpass_requests;
     std::vector<CachedStreetPassMessage> cached_streetpass_messages;
     std::weak_ptr<Network::RoomMember> room_member;
 
