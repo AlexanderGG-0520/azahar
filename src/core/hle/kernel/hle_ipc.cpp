@@ -11,6 +11,7 @@
 #include "common/archives.h"
 #include "common/assert.h"
 #include "common/common_types.h"
+#include "common/logging/log.h"
 #include "core/core.h"
 #include "core/hle/kernel/event.h"
 #include "core/hle/kernel/handle_table.h"
@@ -304,6 +305,17 @@ Result HLERequestContext::WriteToOutgoingCommandBuffer(u32_le* dst_cmdbuf,
         default:
             UNIMPLEMENTED_MSG("Unsupported handle translation: {:#010X}", descriptor);
         }
+    }
+
+    if (CommandID() == 0x2 && session && session->GetName().starts_with("APT:") &&
+        header.normal_params_size == 1 && header.translate_params_size == 3) {
+        LOG_INFO(Kernel_SVC,
+                 "[HOME-HANDOFF] APT Initialize reply translated: session={} pid={} "
+                 "title={:016X} descriptor=0x{:08X} notification_handle=0x{:08X} "
+                 "resume_handle=0x{:08X}",
+                 session->GetName(), dst_process.process_id,
+                 dst_process.codeset ? dst_process.codeset->program_id : 0, dst_cmdbuf[2],
+                 dst_cmdbuf[3], dst_cmdbuf[4]);
     }
 
     if (should_record) {
