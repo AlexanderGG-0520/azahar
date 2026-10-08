@@ -181,6 +181,12 @@ void Module::QueueStreetPassPacket(const Network::WifiPacket& packet) {
         pending_streetpass_messages.push_back({program_id, sender_mac, std::move(message)});
     }
 
+    LOG_DEBUG(Service_CECD,
+              "Queued StreetPass room message for program {:#010x} from "
+              "{:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}",
+              program_id, sender_mac[0], sender_mac[1], sender_mac[2], sender_mac[3],
+              sender_mac[4], sender_mac[5]);
+
     // Room callbacks run on the network thread. As with NWM::UDS, take the HLE lock before
     // signaling kernel events from that thread. The actual NAND/CECD writes stay deferred until
     // the emulation thread enters CECD again.
@@ -702,6 +708,7 @@ void Module::Interface::Open(Kernel::HLERequestContext& ctx) {
 }
 
 void Module::Interface::Read(Kernel::HLERequestContext& ctx) {
+    cecd->ProcessPendingStreetPassPackets();
     IPC::RequestParser rp(ctx);
     const u32 write_buffer_size = rp.Pop<u32>();
     auto& write_buffer = rp.PopMappedBuffer();
@@ -1206,6 +1213,7 @@ void Module::Interface::SetData(Kernel::HLERequestContext& ctx) {
 }
 
 void Module::Interface::ReadData(Kernel::HLERequestContext& ctx) {
+    cecd->ProcessPendingStreetPassPackets();
     IPC::RequestParser rp(ctx);
     const auto dest_buffer_size = rp.Pop<u32>();
     const auto info_type = rp.PopEnum<CecSystemInfoType>();
@@ -1272,6 +1280,7 @@ void Module::Interface::Stop(Kernel::HLERequestContext& ctx) {
 }
 
 void Module::Interface::GetCecInfoBuffer(Kernel::HLERequestContext& ctx) {
+    cecd->ProcessPendingStreetPassPackets();
     IPC::RequestParser rp(ctx);
     const u32 possible_info_type = rp.Pop<u32>();
     const u32 buffer_size = rp.Pop<u32>();
@@ -1286,6 +1295,7 @@ void Module::Interface::GetCecInfoBuffer(Kernel::HLERequestContext& ctx) {
 }
 
 void Module::Interface::GetCecdState(Kernel::HLERequestContext& ctx) {
+    cecd->ProcessPendingStreetPassPackets();
     IPC::RequestParser rp(ctx);
 
     IPC::RequestBuilder rb = rp.MakeBuilder(2, 0);
@@ -1296,6 +1306,7 @@ void Module::Interface::GetCecdState(Kernel::HLERequestContext& ctx) {
 }
 
 void Module::Interface::GetCecInfoEventHandle(Kernel::HLERequestContext& ctx) {
+    cecd->ProcessPendingStreetPassPackets();
     IPC::RequestParser rp(ctx);
 
     IPC::RequestBuilder rb = rp.MakeBuilder(1, 2);
@@ -1306,6 +1317,7 @@ void Module::Interface::GetCecInfoEventHandle(Kernel::HLERequestContext& ctx) {
 }
 
 void Module::Interface::GetChangeStateEventHandle(Kernel::HLERequestContext& ctx) {
+    cecd->ProcessPendingStreetPassPackets();
     IPC::RequestParser rp(ctx);
 
     IPC::RequestBuilder rb = rp.MakeBuilder(1, 2);
@@ -1434,6 +1446,7 @@ void Module::Interface::OpenAndRead(Kernel::HLERequestContext& ctx) {
 }
 
 void Module::Interface::GetCecInfoEventHandleSys(Kernel::HLERequestContext& ctx) {
+    cecd->ProcessPendingStreetPassPackets();
     IPC::RequestParser rp(ctx);
     rp.PopPID();
 
