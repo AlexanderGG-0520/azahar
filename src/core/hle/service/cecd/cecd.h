@@ -146,14 +146,16 @@ public:
             u32_le year;
             u8 month;
             u8 day;
+            u8 week_day;
             u8 hour;
             u8 minute;
             u8 second;
-            u8 millisecond;
-            u8 microsecond;
-            u8 padding;
+            u16_le millisecond;
         } last_accessed;
-        INSERT_PADDING_BYTES(4);
+        u8 flag_unread;
+        u8 flag_new;
+        u8 flag5;
+        u8 flag6;
         Time last_received;
         INSERT_PADDING_BYTES(4);
         Time unknown_time;
@@ -198,12 +200,11 @@ public:
             u32_le year;
             u8 month;
             u8 day;
+            u8 week_day;
             u8 hour;
             u8 minute;
             u8 second;
-            u8 millisecond;
-            u8 microsecond;
-            u8 padding;
+            u16_le millisecond;
         } send_time, recv_time, create_time;
         u8 send_count;
         u8 forward_count;
@@ -637,10 +638,20 @@ private:
         std::vector<u8> message;
     };
 
+    struct CachedStreetPassMessage {
+        u32 program_id{};
+        std::array<u8, 8> message_id{};
+        std::vector<u8> message;
+    };
+
     void QueueStreetPassPacket(const Network::WifiPacket& packet);
     void ProcessPendingStreetPassPackets();
     bool InjectStreetPassMessage(u32 program_id, const std::array<u8, 6>& sender_mac,
                                  std::vector<u8> message);
+    void CacheStreetPassMessage(u32 program_id, const std::vector<u8>& message);
+    void SendStreetPassMessage(const std::shared_ptr<Network::RoomMember>& member, u32 program_id,
+                               const std::vector<u8>& message);
+    void BroadcastCachedStreetPassMessages(const std::shared_ptr<Network::RoomMember>& member);
     void BroadcastStreetPassMessage(u32 program_id, const std::vector<u8>& message);
     void BroadcastOutboxMessages(u32 program_id);
     void BroadcastAllOutboxMessages();
@@ -653,6 +664,7 @@ private:
 
     std::mutex streetpass_mutex;
     std::vector<PendingStreetPassMessage> pending_streetpass_messages;
+    std::vector<CachedStreetPassMessage> cached_streetpass_messages;
     std::weak_ptr<Network::RoomMember> room_member;
 
     Core::System& system;

@@ -4,6 +4,8 @@
 
 #include <algorithm>
 #include <charconv>
+#include <chrono>
+#include <ctime>
 #include <boost/serialization/shared_ptr.hpp>
 #include <boost/serialization/unique_ptr.hpp>
 #include <cryptopp/base64.h>
@@ -53,6 +55,41 @@ using CecSystemInfoType = Module::CecSystemInfoType;
 
 constexpr std::size_t MaxRoomStreetPassMessageSize = 0x20000;
 constexpr std::size_t StreetPassRoomHeaderSize = sizeof(u32);
+constexpr std::size_t StreetPassHmacSize = 0x20;
+
+struct RoomCecTimestamp {
+    u32_le year;
+    u8 month;
+    u8 day;
+    u8 week_day;
+    u8 hour;
+    u8 minute;
+    u8 second;
+    u16_le millisecond;
+};
+static_assert(sizeof(RoomCecTimestamp) == 0x0C);
+
+RoomCecTimestamp GetCurrentRoomCecTimestamp() {
+    RoomCecTimestamp timestamp{};
+    const auto now = std::chrono::system_clock::now();
+    const std::time_t current_time = std::chrono::system_clock::to_time_t(now);
+    const std::tm* utc_time = std::gmtime(&current_time);
+    if (!utc_time) {
+        return timestamp;
+    }
+
+    timestamp.year = static_cast<u32>(utc_time->tm_year + 1900);
+    timestamp.month = static_cast<u8>(utc_time->tm_mon + 1);
+    timestamp.day = static_cast<u8>(utc_time->tm_mday);
+    timestamp.week_day = static_cast<u8>(utc_time->tm_wday);
+    timestamp.hour = static_cast<u8>(utc_time->tm_hour);
+    timestamp.minute = static_cast<u8>(utc_time->tm_min);
+    timestamp.second = static_cast<u8>(utc_time->tm_sec);
+    const auto milliseconds =
+        std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
+    timestamp.millisecond = static_cast<u16>(milliseconds % 1000);
+    return timestamp;
+}
 
 std::array<u8, 8> MakeRoomStreetPassMessageId(const std::array<u8, 8>& original_message_id,
                                                const std::array<u8, 6>& sender_mac) {
@@ -101,6 +138,25 @@ void Module::BindRoomMember(const std::shared_ptr<Network::RoomMember>& member) 
             self->QueueStreetPassPacket(packet);
         }
     });
+
+    const std::weak_ptr<Network::RoomMember> weak_member = member;
+    member->BindOnStateChanged(
+        [weak_self, weak_member](const Network::RoomMember::State& state) {
+            if (state != Network::RoomMember::State::Joined &&
+                state != Network::RoomMember::State::Moderator) {
+                return;
+            }
+
+            const auto self = weak_self.lock();
+            const auto current_member = weak_member.lock();
+            if (self && current_member) {
+                self->BroadcastCachedStreetPassMessages(current_member);
+            }
+        });
+
+    // Populate the cache even while disconnected. Existing StreetPass outbox data often predates
+    // joining a multiplayer room, so relying only on new CECD writes misses the common case.
+    BroadcastAllOutboxMessages();
 }
 
 void Module::QueueStreetPassPacket(const Network::WifiPacket& packet) {
@@ -123,6 +179,12 @@ void Module::QueueStreetPassPacket(const Network::WifiPacket& packet) {
         std::lock_guard lock(streetpass_mutex);
         pending_streetpass_messages.push_back({program_id, sender_mac, std::move(message)});
     }
+
+    LOG_DEBUG(Service_CECD,
+              "Queued StreetPass room message for program {:#010x} from "
+              "{:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}",
+              program_id, sender_mac[0], sender_mac[1], sender_mac[2], sender_mac[3],
+              sender_mac[4], sender_mac[5]);
 
     // Room callbacks run on the network thread. As with NWM::UDS, take the HLE lock before
     // signaling kernel events from that thread. The actual NAND/CECD writes stay deferred until
@@ -161,8 +223,13 @@ bool Module::InjectStreetPassMessage(const u32 program_id,
 
     CecMessageHeader message_header{};
     std::memcpy(&message_header, message.data(), sizeof(message_header));
+    const u64 payload_end =
+        static_cast<u64>(message_header.header_size) + message_header.body_size;
+    const u64 expected_message_size = payload_end + StreetPassHmacSize;
     if (message_header.magic != 0x6060 || message_header.header_size < sizeof(CecMessageHeader) ||
-        static_cast<u64>(message_header.header_size) + message_header.body_size > message.size()) {
+        message_header.title_id != program_id ||
+        static_cast<u64>(message_header.message_size) != expected_message_size ||
+        expected_message_size != message.size()) {
         LOG_WARNING(Service_CECD,
                     "Dropping malformed StreetPass message for program {:#010x}", program_id);
         return false;
@@ -207,7 +274,6 @@ bool Module::InjectStreetPassMessage(const u32 program_id,
     const std::array<u8, 8> message_id =
         MakeRoomStreetPassMessageId(original_message_id, sender_mac);
     std::memcpy(message_header.message_id.data(), message_id.data(), message_id.size());
-    std::memcpy(message.data(), &message_header, sizeof(message_header));
 
     const FileSys::Path inbox_message_path(
         GetCecDataPathTypeAsString(CecDataPathType::InboxMsg, program_id, message_id).data());
@@ -219,6 +285,8 @@ bool Module::InjectStreetPassMessage(const u32 program_id,
         auto existing_file = std::move(existing_result).Unwrap();
         existing_file->Close();
         info_file->Close();
+        LOG_DEBUG(Service_CECD,
+                  "Ignoring duplicate StreetPass room message for program {:#010x}", program_id);
         return false;
     }
 
@@ -226,20 +294,66 @@ bool Module::InjectStreetPassMessage(const u32 program_id,
         static_cast<u32>((info_buffer.size() - sizeof(CecBoxInfoHeader)) / sizeof(CecMessageHeader));
     info_header.message_num = existing_count;
 
+    const u32 stored_message_size = static_cast<u32>(message_header.message_size);
     if ((info_header.max_message_num != 0 &&
          info_header.message_num >= info_header.max_message_num) ||
-        (info_header.max_message_size != 0 && message.size() > info_header.max_message_size) ||
+        (info_header.max_message_size != 0 &&
+         stored_message_size > info_header.max_message_size) ||
         (info_header.max_box_size != 0 &&
-         static_cast<u64>(info_header.box_size) + message.size() > info_header.max_box_size)) {
+         static_cast<u64>(info_header.box_size) + stored_message_size > info_header.max_box_size)) {
         LOG_WARNING(Service_CECD,
                     "StreetPass inbox is full for program {:#010x}; dropping message", program_id);
         info_file->Close();
         return false;
     }
 
+    const FileSys::Path mbox_info_path(
+        GetCecDataPathTypeAsString(CecDataPathType::MboxInfo, program_id).data());
+    auto mbox_result = cecd_system_save_data_archive->OpenFile(mbox_info_path, info_mode);
+    if (mbox_result.Failed()) {
+        LOG_WARNING(Service_CECD,
+                    "StreetPass mailbox metadata is missing for program {:#010x}", program_id);
+        info_file->Close();
+        return false;
+    }
+
+    auto mbox_file = std::move(mbox_result).Unwrap();
+    const u32 mbox_size = static_cast<u32>(mbox_file->GetSize());
+    if (mbox_size < sizeof(CecMBoxInfoHeader)) {
+        mbox_file->Close();
+        info_file->Close();
+        return false;
+    }
+
+    std::vector<u8> mbox_buffer(mbox_size);
+    if (mbox_file->Read(0, mbox_size, mbox_buffer.data()).Failed()) {
+        mbox_file->Close();
+        info_file->Close();
+        return false;
+    }
+
+    CecMBoxInfoHeader mbox_header{};
+    std::memcpy(&mbox_header, mbox_buffer.data(), sizeof(mbox_header));
+    if (mbox_header.magic != 0x6363) {
+        mbox_file->Close();
+        info_file->Close();
+        return false;
+    }
+
+    const RoomCecTimestamp received_timestamp = GetCurrentRoomCecTimestamp();
     message_header.is_unopen = 1;
     message_header.is_new = 1;
+    std::memcpy(&message_header.recv_time, &received_timestamp, sizeof(received_timestamp));
     std::memcpy(message.data(), &message_header, sizeof(message_header));
+
+    // Match CECD/NetPass receive semantics by recalculating the title's message HMAC.
+    // The HMAC key is title-specific and shared across consoles; this is protocol fidelity rather
+    // than a workaround for per-console keys.
+    using namespace CryptoPP;
+    HMAC<SHA256> hmac(mbox_header.hmac_key.data(), mbox_header.hmac_key.size());
+    hmac.CalculateDigest(message.data() + payload_end,
+                         message.data() + message_header.header_size,
+                         message_header.body_size);
 
     FileSys::Mode message_mode;
     message_mode.write_flag.Assign(1);
@@ -247,6 +361,7 @@ bool Module::InjectStreetPassMessage(const u32 program_id,
     auto message_result =
         cecd_system_save_data_archive->OpenFile(inbox_message_path, message_mode);
     if (message_result.Failed()) {
+        mbox_file->Close();
         info_file->Close();
         return false;
     }
@@ -257,6 +372,7 @@ bool Module::InjectStreetPassMessage(const u32 program_id,
         message_file->Write(0, message.size(), true, false, message.data());
     message_file->Close();
     if (write_result.Failed()) {
+        mbox_file->Close();
         info_file->Close();
         return false;
     }
@@ -268,7 +384,7 @@ bool Module::InjectStreetPassMessage(const u32 program_id,
     std::memcpy(info_buffer.data() + header_offset, &message_header, sizeof(message_header));
 
     info_header.message_num++;
-    info_header.box_size += static_cast<u32>(message.size());
+    info_header.box_size += stored_message_size;
     info_header.box_info_size = static_cast<u32>(info_buffer.size());
     std::memcpy(info_buffer.data(), &info_header, sizeof(info_header));
 
@@ -277,7 +393,23 @@ bool Module::InjectStreetPassMessage(const u32 program_id,
         info_file->Write(0, info_buffer.size(), true, false, info_buffer.data());
     info_file->Close();
     if (info_write_result.Failed()) {
+        mbox_file->Close();
         return false;
+    }
+
+    // Match the receive-side mailbox state used by real CECD clients such as NetPass.
+    std::memcpy(&mbox_header.last_received, &received_timestamp, sizeof(received_timestamp));
+    mbox_header.flag_unread = 1;
+    mbox_header.flag_new = 1;
+    std::memcpy(mbox_buffer.data(), &mbox_header, sizeof(mbox_header));
+
+    const auto mbox_write_result =
+        mbox_file->Write(0, mbox_buffer.size(), true, false, mbox_buffer.data());
+    mbox_file->Close();
+    if (mbox_write_result.Failed()) {
+        LOG_WARNING(Service_CECD,
+                    "Failed to update StreetPass mailbox metadata for program {:#010x}",
+                    program_id);
     }
 
     cecinfo_event->Signal();
@@ -290,22 +422,39 @@ bool Module::InjectStreetPassMessage(const u32 program_id,
     return true;
 }
 
-void Module::BroadcastStreetPassMessage(const u32 program_id,
-                                        const std::vector<u8>& message) {
-    if (message.size() < sizeof(CecMessageHeader) ||
-        message.size() > MaxRoomStreetPassMessageSize) {
+void Module::CacheStreetPassMessage(const u32 program_id,
+                                    const std::vector<u8>& message) {
+    if (message.size() < sizeof(CecMessageHeader)) {
         return;
     }
 
-    auto member = room_member.lock();
-    if (!member) {
-        member = Network::GetRoomMember().lock();
-        if (member) {
-            BindRoomMember(member);
-        }
-    }
+    CecMessageHeader header{};
+    std::memcpy(&header, message.data(), sizeof(header));
 
-    if (!member || !member->IsConnected()) {
+    CachedStreetPassMessage cached{};
+    cached.program_id = program_id;
+    std::copy(header.message_id.begin(), header.message_id.end(), cached.message_id.begin());
+    cached.message = message;
+
+    std::lock_guard lock(streetpass_mutex);
+    const auto existing =
+        std::find_if(cached_streetpass_messages.begin(), cached_streetpass_messages.end(),
+                     [&cached](const CachedStreetPassMessage& entry) {
+                         return entry.program_id == cached.program_id &&
+                                entry.message_id == cached.message_id;
+                     });
+    if (existing != cached_streetpass_messages.end()) {
+        *existing = std::move(cached);
+    } else {
+        cached_streetpass_messages.push_back(std::move(cached));
+    }
+}
+
+void Module::SendStreetPassMessage(const std::shared_ptr<Network::RoomMember>& member,
+                                   const u32 program_id,
+                                   const std::vector<u8>& message) {
+    if (!member || message.size() < sizeof(CecMessageHeader) ||
+        message.size() > MaxRoomStreetPassMessageSize) {
         return;
     }
 
@@ -322,14 +471,66 @@ void Module::BroadcastStreetPassMessage(const u32 program_id,
     packet.data.insert(packet.data.end(), message.begin(), message.end());
 
     member->SendWifiPacket(packet);
+    LOG_DEBUG(Service_CECD,
+              "Sent StreetPass room message for program {:#010x}, {} bytes", program_id,
+              message.size());
 }
 
-void Module::BroadcastOutboxMessages(const u32 program_id) {
-    auto member = room_member.lock();
-    if (!member || !member->IsConnected()) {
+void Module::BroadcastCachedStreetPassMessages(
+    const std::shared_ptr<Network::RoomMember>& member) {
+    if (!member) {
         return;
     }
 
+    const auto state = member->GetState();
+    if (state != Network::RoomMember::State::Joined &&
+        state != Network::RoomMember::State::Moderator) {
+        return;
+    }
+
+    std::vector<CachedStreetPassMessage> cached;
+    {
+        std::lock_guard lock(streetpass_mutex);
+        cached = cached_streetpass_messages;
+    }
+
+    LOG_INFO(Service_CECD, "Broadcasting {} cached StreetPass room message(s)", cached.size());
+    for (const auto& entry : cached) {
+        SendStreetPassMessage(member, entry.program_id, entry.message);
+    }
+}
+
+void Module::BroadcastStreetPassMessage(const u32 program_id,
+                                        const std::vector<u8>& message) {
+    if (message.size() < sizeof(CecMessageHeader) ||
+        message.size() > MaxRoomStreetPassMessageSize) {
+        return;
+    }
+
+    CacheStreetPassMessage(program_id, message);
+
+    auto member = room_member.lock();
+    if (!member) {
+        member = Network::GetRoomMember().lock();
+        if (member) {
+            BindRoomMember(member);
+        }
+    }
+
+    if (!member) {
+        return;
+    }
+
+    const auto state = member->GetState();
+    if (state != Network::RoomMember::State::Joined &&
+        state != Network::RoomMember::State::Moderator) {
+        return;
+    }
+
+    SendStreetPassMessage(member, program_id, message);
+}
+
+void Module::BroadcastOutboxMessages(const u32 program_id) {
     const FileSys::Path outbox_path(
         GetCecDataPathTypeAsString(CecDataPathType::OutboxDir, program_id).data());
     auto dir_result = cecd_system_save_data_archive->OpenDirectory(outbox_path);
@@ -379,17 +580,6 @@ void Module::BroadcastOutboxMessages(const u32 program_id) {
 }
 
 void Module::BroadcastAllOutboxMessages() {
-    auto member = room_member.lock();
-    if (!member) {
-        member = Network::GetRoomMember().lock();
-        if (member) {
-            BindRoomMember(member);
-        }
-    }
-    if (!member || !member->IsConnected()) {
-        return;
-    }
-
     const FileSys::Path root_path(GetCecDataPathTypeAsString(CecDataPathType::RootDir, 0).data());
     auto dir_result = cecd_system_save_data_archive->OpenDirectory(root_path);
     if (dir_result.Failed()) {
@@ -509,6 +699,7 @@ void Module::Interface::Open(Kernel::HLERequestContext& ctx) {
 }
 
 void Module::Interface::Read(Kernel::HLERequestContext& ctx) {
+    cecd->ProcessPendingStreetPassPackets();
     IPC::RequestParser rp(ctx);
     const u32 write_buffer_size = rp.Pop<u32>();
     auto& write_buffer = rp.PopMappedBuffer();
@@ -1013,6 +1204,7 @@ void Module::Interface::SetData(Kernel::HLERequestContext& ctx) {
 }
 
 void Module::Interface::ReadData(Kernel::HLERequestContext& ctx) {
+    cecd->ProcessPendingStreetPassPackets();
     IPC::RequestParser rp(ctx);
     const auto dest_buffer_size = rp.Pop<u32>();
     const auto info_type = rp.PopEnum<CecSystemInfoType>();
@@ -1079,6 +1271,7 @@ void Module::Interface::Stop(Kernel::HLERequestContext& ctx) {
 }
 
 void Module::Interface::GetCecInfoBuffer(Kernel::HLERequestContext& ctx) {
+    cecd->ProcessPendingStreetPassPackets();
     IPC::RequestParser rp(ctx);
     const u32 possible_info_type = rp.Pop<u32>();
     const u32 buffer_size = rp.Pop<u32>();
@@ -1093,6 +1286,7 @@ void Module::Interface::GetCecInfoBuffer(Kernel::HLERequestContext& ctx) {
 }
 
 void Module::Interface::GetCecdState(Kernel::HLERequestContext& ctx) {
+    cecd->ProcessPendingStreetPassPackets();
     IPC::RequestParser rp(ctx);
 
     IPC::RequestBuilder rb = rp.MakeBuilder(2, 0);
@@ -1103,6 +1297,7 @@ void Module::Interface::GetCecdState(Kernel::HLERequestContext& ctx) {
 }
 
 void Module::Interface::GetCecInfoEventHandle(Kernel::HLERequestContext& ctx) {
+    cecd->ProcessPendingStreetPassPackets();
     IPC::RequestParser rp(ctx);
 
     IPC::RequestBuilder rb = rp.MakeBuilder(1, 2);
@@ -1113,6 +1308,7 @@ void Module::Interface::GetCecInfoEventHandle(Kernel::HLERequestContext& ctx) {
 }
 
 void Module::Interface::GetChangeStateEventHandle(Kernel::HLERequestContext& ctx) {
+    cecd->ProcessPendingStreetPassPackets();
     IPC::RequestParser rp(ctx);
 
     IPC::RequestBuilder rb = rp.MakeBuilder(1, 2);
@@ -1241,6 +1437,7 @@ void Module::Interface::OpenAndRead(Kernel::HLERequestContext& ctx) {
 }
 
 void Module::Interface::GetCecInfoEventHandleSys(Kernel::HLERequestContext& ctx) {
+    cecd->ProcessPendingStreetPassPackets();
     IPC::RequestParser rp(ctx);
     rp.PopPID();
 
