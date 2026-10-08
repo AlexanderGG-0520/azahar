@@ -747,9 +747,24 @@ static Result ReceiveIPCRequest(Kernel::KernelSystem& kernel, Memory::MemorySyst
 
 class SVC_SyncCallback : public Kernel::WakeupCallback {
 public:
-    explicit SVC_SyncCallback(bool do_output_) : do_output(do_output_) {}
+    explicit SVC_SyncCallback(bool do_output_, bool trace_dsp_irq_ = false)
+        : do_output(do_output_), trace_dsp_irq(trace_dsp_irq_) {}
     void WakeUp(ThreadWakeupReason reason, std::shared_ptr<Thread> thread,
                 std::shared_ptr<WaitObject> object) {
+
+        // This callback runs before the waiting list is cleared, also on timeouts
+        // where the signaled object argument is null. Normal infinite audio waits
+        // are excluded from tracing.
+        if (trace_dsp_irq) {
+            const auto& wait_objects = thread->wait_objects;
+            LOG_INFO(Kernel_SVC,
+                     "[DSP-IRQ-TRACE] wake reason={} thread={} event={} wait_objects={}",
+                     reason == ThreadWakeupReason::Timeout ? "timeout" : "signal",
+                     thread->thread_id,
+                     wait_objects.empty() ? std::string("<none>")
+                                          : wait_objects.front()->GetName(),
+                     wait_objects.size());
+        }
 
         if (reason == ThreadWakeupReason::Timeout) {
             thread->SetWaitSynchronizationResult(ResultTimeout);
@@ -768,12 +783,14 @@ public:
 
 private:
     bool do_output;
+    bool trace_dsp_irq = false;
 
     SVC_SyncCallback() = default;
     template <class Archive>
     void serialize(Archive& ar, const unsigned int) {
         ar& boost::serialization::base_object<Kernel::WakeupCallback>(*this);
         ar & do_output;
+        ar & trace_dsp_irq;
     }
     friend class boost::serialization::access;
 };
@@ -840,6 +857,16 @@ Result SVC::WaitSynchronization1(Handle handle, s64 nano_seconds) {
               object->GetTypeName(), object->GetName(), nano_seconds);
 
     const bool actual_should_wait = object->ShouldWait(thread);
+    const bool trace_dsp_irq =
+        nano_seconds >= 0 && object->GetHandleType() == HandleType::Event &&
+        object->GetName().rfind("DSP_IRQ:", 0) == 0;
+    if (trace_dsp_irq) {
+        LOG_INFO(Kernel_SVC,
+                 "[DSP-IRQ-TRACE] wait thread={} event={} handle=0x{:08X} "
+                 "timeout={} should_wait={}",
+                 thread->thread_id, object->GetName(), handle, nano_seconds, actual_should_wait);
+    }
+
     bool apply_yw2_worker_ordering_workaround = false;
     if (!actual_should_wait && nano_seconds == 0 &&
         object->GetHandleType() == HandleType::Thread) {
@@ -876,7 +903,7 @@ Result SVC::WaitSynchronization1(Handle handle, s64 nano_seconds) {
         // Create an event to wake the thread up after the specified nanosecond delay has passed
         thread->WakeAfterDelay(nano_seconds);
 
-        thread->wakeup_callback = std::make_shared<SVC_SyncCallback>(false);
+        thread->wakeup_callback = std::make_shared<SVC_SyncCallback>(false, trace_dsp_irq);
 
         system.PrepareReschedule();
 
