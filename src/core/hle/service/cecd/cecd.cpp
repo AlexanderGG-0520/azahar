@@ -1238,6 +1238,11 @@ void Module::Interface::WriteMessage(Kernel::HLERequestContext& ctx) {
 
     std::vector<u8> id_buffer(message_id_size);
     message_id_buffer.Read(id_buffer.data(), 0, message_id_size);
+    std::vector<u8> buffer(buffer_size);
+    read_buffer.Read(buffer.data(), 0, buffer_size);
+    if (is_outbox && cecd->AllocateOutboxMessageId(ncch_program_id, id_buffer, buffer)) {
+        message_id_buffer.Write(id_buffer.data(), 0, id_buffer.size());
+    }
 
     FileSys::Path message_path =
         cecd->GetCecDataPathTypeAsString(is_outbox ? CecDataPathType::OutboxMsg
@@ -1250,9 +1255,6 @@ void Module::Interface::WriteMessage(Kernel::HLERequestContext& ctx) {
     IPC::RequestBuilder rb = rp.MakeBuilder(1, 4);
     if (message_result.Succeeded()) {
         auto message = std::move(message_result).Unwrap();
-
-        std::vector<u8> buffer(buffer_size);
-        read_buffer.Read(buffer.data(), 0, buffer_size);
 
         CecMessageHeader msg_header;
         std::memcpy(&msg_header, buffer.data(), sizeof(CecMessageHeader));
@@ -1320,6 +1322,11 @@ void Module::Interface::WriteMessageWithHMAC(Kernel::HLERequestContext& ctx) {
 
     std::vector<u8> id_buffer(message_id_size);
     message_id_buffer.Read(id_buffer.data(), 0, message_id_size);
+    std::vector<u8> buffer(buffer_size);
+    read_buffer.Read(buffer.data(), 0, buffer_size);
+    if (is_outbox && cecd->AllocateOutboxMessageId(ncch_program_id, id_buffer, buffer)) {
+        message_id_buffer.Write(id_buffer.data(), 0, id_buffer.size());
+    }
 
     FileSys::Path message_path =
         cecd->GetCecDataPathTypeAsString(is_outbox ? CecDataPathType::OutboxMsg
@@ -1332,9 +1339,6 @@ void Module::Interface::WriteMessageWithHMAC(Kernel::HLERequestContext& ctx) {
     IPC::RequestBuilder rb = rp.MakeBuilder(1, 6);
     if (message_result.Succeeded()) {
         auto message = std::move(message_result).Unwrap();
-
-        std::vector<u8> buffer(buffer_size);
-        read_buffer.Read(buffer.data(), 0, buffer_size);
 
         CecMessageHeader msg_header;
         std::memcpy(&msg_header, buffer.data(), sizeof(CecMessageHeader));
