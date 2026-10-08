@@ -1,0 +1,5 @@
+Release: yw-v0.2.0
+Source: release/yw-v0.2.0
+Contents: YW2 local-play, CECD room StreetPass, PR #13 targeted NDSP HOME recovery
+Local runtime validation: Shin'uchi Pandanoko VIP spawn and YW2 HOME open/return without previous fatal
+Windows outputs: installer.exe and portable.zip
