@@ -25,6 +25,7 @@ struct WifiPacket {
         Deauthentication,
         NodeMap,
         StreetPass,
+        StreetPassRequest, ///< CECD exchange requested after a real UDS peer connects.
     };
     PacketType type;      ///< The type of 802.11 frame.
     std::vector<u8> data; ///< Raw 802.11 frame data, starting at the management frame header
