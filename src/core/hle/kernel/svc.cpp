@@ -2465,14 +2465,37 @@ void SVC::CallSVC(u32 immediate) {
                      "Running threads from exiting processes is unimplemented");
 
     const FunctionDef* info = GetSVCInfo(immediate);
+    if (!info) {
+        system.perf_stats->EndSVCProcessing();
+        return;
+    }
+
+    const auto process = kernel.GetCurrentProcess();
+    const u32 in_r0 = GetReg(0);
+    const u32 in_r1 = GetReg(1);
+    const u32 in_r2 = GetReg(2);
+    const u32 in_r3 = GetReg(3);
+    const u32 in_pc = GetReg(15);
+
     LOG_TRACE(Kernel_SVC, "calling {}", info->name);
-    if (info) {
-        if (info->func) {
-            system.GetRunningCore().GetTimer().AddTicks(info->cycles);
-            (this->*(info->func))();
-        } else {
-            LOG_ERROR(Kernel_SVC, "unimplemented SVC function {:02X} {}(..)", info->id, info->name);
+    if (info->func) {
+        system.GetRunningCore().GetTimer().AddTicks(info->cycles);
+        (this->*(info->func))();
+
+        const u32 out_r0 = GetReg(0);
+        if (out_r0 == ResultInvalidHandle.raw) {
+            const auto thread = kernel.GetCurrentThreadManager().GetCurrentThread();
+            LOG_CRITICAL(
+                Kernel_SVC,
+                "[HOME-HANDOFF] INVALID HANDLE SVC: svc=0x{:02X} name={} pid={} title={:016X} "
+                "thread={} pc=0x{:08X} in_r0=0x{:08X} in_r1=0x{:08X} "
+                "in_r2=0x{:08X} in_r3=0x{:08X} out_r0=0x{:08X}",
+                info->id, info->name, process ? process->process_id : 0,
+                process && process->codeset ? process->codeset->program_id : 0,
+                thread ? thread->thread_id : 0, in_pc, in_r0, in_r1, in_r2, in_r3, out_r0);
         }
+    } else {
+        LOG_ERROR(Kernel_SVC, "unimplemented SVC function {:02X} {}(..)", info->id, info->name);
     }
     system.perf_stats->EndSVCProcessing();
 }
