@@ -1653,37 +1653,57 @@ void Module::CheckAndUpdateFile(const CecDataPathType path_type, const u32 ncch_
                         mbox_list_header.num_boxes++;
                     }
                 }
-            } else { // ncch_program_id == 0, remove/update activated boxes
-                /// We need to read the /CEC directory to find out which titles, if any,
-                /// are activated. The num_of_titles = (total_read_count) - 1, to adjust for
-                /// the MBoxList____ file that is present in the directory as well.
+            } else { // ncch_program_id == 0, rebuild the registered title list
+                // The input header can already contain registrations. Appending the directories
+                // again would duplicate entries and eventually overflow the 24-slot array.
                 FileSys::Path root_path(
                     GetCecDataPathTypeAsString(CecDataPathType::RootDir, 0).data());
-
                 auto dir_result = cecd_system_save_data_archive->OpenDirectory(root_path);
+                if (dir_result.Failed()) {
+                    LOG_WARNING(Service_CECD,
+                                "Could not rebuild StreetPass title list: /CEC is unavailable");
+                    break;
+                }
 
+                constexpr u32 max_directory_entries = 128;
                 auto root_dir = std::move(dir_result).Unwrap();
-                std::vector<FileSys::Entry> entries(max_num_boxes + 1); // + 1 mboxlist
-                const u32 entry_count = root_dir->Read(max_num_boxes + 1, entries.data());
+                std::vector<FileSys::Entry> entries(max_directory_entries);
+                const u32 entry_count = root_dir->Read(max_directory_entries, entries.data());
                 root_dir->Close();
 
-                LOG_DEBUG(Service_CECD, "Number of entries found in /CEC: {}", entry_count);
-
-                std::string mbox_list_name("MBoxList____");
-                std::string file_name;
-                std::u16string u16_filename;
-
-                // Loop through entries but don't add mboxlist____ to itself.
-                for (u32 i = 0; i < entry_count; i++) {
-                    u16_filename = std::u16string(entries[i].filename);
-                    file_name = Common::UTF16ToUTF8(u16_filename);
-
-                    if (mbox_list_name.compare(file_name) != 0) {
-                        LOG_DEBUG(Service_CECD, "Adding title to mboxlist____: {}", file_name);
-                        std::memcpy(&mbox_list_header.box_names[mbox_list_header.num_boxes++],
-                                    file_name.data(), valid_name_size);
+                mbox_list_header.num_boxes = 0;
+                mbox_list_header.box_names = {};
+                for (u32 i = 0; i < entry_count; ++i) {
+                    if (!entries[i].is_directory) {
+                        continue;
                     }
+
+                    const std::string file_name =
+                        Common::UTF16ToUTF8(std::u16string(entries[i].filename));
+                    if (file_name.size() != valid_name_size) {
+                        continue;
+                    }
+
+                    u32 title_id{};
+                    const auto [end, error] = std::from_chars(
+                        file_name.data(), file_name.data() + file_name.size(), title_id, 16);
+                    if (error != std::errc{} || end != file_name.data() + file_name.size()) {
+                        continue;
+                    }
+
+                    if (mbox_list_header.num_boxes >= max_num_boxes) {
+                        LOG_WARNING(Service_CECD,
+                                    "StreetPass title list reached {} entries; ignoring {}",
+                                    max_num_boxes, file_name);
+                        break;
+                    }
+
+                    std::memcpy(mbox_list_header.box_names[mbox_list_header.num_boxes].data(),
+                                file_name.data(), valid_name_size);
+                    ++mbox_list_header.num_boxes;
                 }
+                LOG_INFO(Service_CECD, "Rebuilt StreetPass title list with {} registered title(s)",
+                         mbox_list_header.num_boxes);
             }
         }
         std::memcpy(file_buffer.data(), &mbox_list_header, sizeof(CecMBoxListHeader));
