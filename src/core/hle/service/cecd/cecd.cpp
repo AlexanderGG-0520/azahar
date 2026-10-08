@@ -346,7 +346,9 @@ bool Module::InjectStreetPassMessage(const u32 program_id,
     std::memcpy(&message_header.recv_time, &received_timestamp, sizeof(received_timestamp));
     std::memcpy(message.data(), &message_header, sizeof(message_header));
 
-    // Real CECD receive paths re-sign an incoming tag with the receiver mailbox key.
+    // Match CECD/NetPass receive semantics by recalculating the title's message HMAC.
+    // The HMAC key is title-specific and shared across consoles; this is protocol fidelity rather
+    // than a workaround for per-console keys.
     using namespace CryptoPP;
     HMAC<SHA256> hmac(mbox_header.hmac_key.data(), mbox_header.hmac_key.size());
     hmac.CalculateDigest(message.data() + payload_end,
