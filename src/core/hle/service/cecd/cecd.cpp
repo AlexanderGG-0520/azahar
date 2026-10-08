@@ -169,6 +169,22 @@ void Module::BindRoomMember(const std::shared_ptr<Network::RoomMember>& member) 
     // title (or joins/leaves). Match pairs of running titles, irrespective of join order.
     // Room membership by itself must not create a StreetPass encounter.
     const std::weak_ptr<Network::RoomMember> weak_member = member;
+    // Reconnecting to a room must allow the same pair to exchange again.
+    member->BindOnStateChanged(
+        [weak_self, weak_member](const Network::RoomMember::State& state) {
+            const auto self = weak_self.lock();
+            const auto current_member = weak_member.lock();
+            if (!self || !current_member ||
+                self->room_member.lock().get() != current_member.get()) {
+                return;
+            }
+            if (state != Network::RoomMember::State::Joined &&
+                state != Network::RoomMember::State::Moderator) {
+                std::lock_guard lock(self->streetpass_mutex);
+                self->active_streetpass_peers.clear();
+            }
+        });
+
     member->BindOnRoomInformationChanged(
         [weak_self, weak_member](const Network::RoomInformation&) {
             const auto self = weak_self.lock();
