@@ -1,0 +1,2 @@
+Alternate push-event trigger via PR merge into release/yw-v0.2.1.
+Expected: Windows installer EXE, portable ZIP and v0.2.1 prerelease.
