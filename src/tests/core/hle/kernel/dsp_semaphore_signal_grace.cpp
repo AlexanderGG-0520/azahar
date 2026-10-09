@@ -96,4 +96,23 @@ TEST_CASE("DSP semaphore grace cannot arm from unrelated event or closer", "[cor
     }
 }
 
+TEST_CASE("DSP semaphore signal grace never crosses guest process boundaries",
+          "[core][kernel][dsp]") {
+    Core::Timing timing(1, 100);
+    Core::System system;
+    Memory::MemorySystem memory{system};
+    KernelSystem kernel(memory, timing, [] {}, MemoryMode::NewProd, 1);
+
+    auto process_a = kernel.CreateProcess(kernel.CreateCodeSet("dsp-a", 0));
+    auto process_b = kernel.CreateProcess(kernel.CreateCodeSet("dsp-b", 0));
+
+    // The service may expose the same underlying semaphore object to both
+    // guest processes, but their handle tables and grace tokens remain separate.
+    process_a->RememberDspSemaphoreSignal(77, 40);
+    REQUIRE(process_a->RetireDspSemaphoreSignal(77, 31, 100000, 500));
+
+    CHECK_FALSE(process_b->ConsumeDspSemaphoreSignalGrace(40, 100001));
+    CHECK(process_a->ConsumeDspSemaphoreSignalGrace(40, 100001));
+}
+
 } // namespace Kernel
