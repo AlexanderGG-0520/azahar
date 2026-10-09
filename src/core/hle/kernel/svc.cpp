@@ -750,6 +750,27 @@ Result SVC::CloseHandle(Handle handle) {
         }
     }
 
+    // A guest NDSP worker may still be about to signal dspSem after a
+    // concurrent sleep callback has closed it. Arm a bounded token only if
+    // the exact DSP semaphore was previously signaled by a different thread.
+    const auto closing_object = process->handle_table.GetGeneric(handle);
+    if (closing_object && closing_object->GetHandleType() == HandleType::Event &&
+        closing_object->GetName() == "DSP_DSP::semaphore_event") {
+        const auto* current_thread = kernel.GetCurrentThreadManager().GetCurrentThread();
+        if (current_thread) {
+            constexpr s64 DspSemaphoreGraceTicks = msToCycles(5);
+            const s64 now = system.CoreTiming().GetGlobalTicks();
+            const bool armed = process->RetireDspSemaphoreSignal(
+                closing_object->GetObjectId(), current_thread->thread_id, now,
+                DspSemaphoreGraceTicks);
+            LOG_INFO(Kernel_SVC,
+                     "[DSP-SEM-GRACE] Close DSP semaphore: pid={} thread={} "
+                     "handle=0x{:08X} object_id={} armed={} ticks={}",
+                     process->process_id, current_thread->thread_id, handle,
+                     closing_object->GetObjectId(), armed, now);
+        }
+    }
+
     LOG_TRACE(Kernel_SVC, "Closing handle 0x{:08X}", handle);
     return process->handle_table.Close(handle);
 }
@@ -1665,17 +1686,24 @@ Result SVC::SignalEvent(Handle handle) {
     LOG_TRACE(Kernel_SVC, "called event=0x{:08X}", handle);
 
     const auto process = kernel.GetCurrentProcess();
+    const auto* current_thread = kernel.GetCurrentThreadManager().GetCurrentThread();
     std::shared_ptr<Event> evt = process->handle_table.Get<Event>(handle);
-    // Record only the suspected YW2 zero-handle path. This does not claim the
-    // handle was a DSP semaphore; correlate with the close and handout logs.
-    if (!evt && handle == 0 && process->codeset &&
-        IsYoKaiWatch2Title(process->codeset->program_id)) {
-        const auto* current_thread = kernel.GetCurrentThreadManager().GetCurrentThread();
+
+    if (evt && current_thread && evt->GetName() == "DSP_DSP::semaphore_event") {
+        process->RememberDspSemaphoreSignal(evt->GetObjectId(), current_thread->thread_id);
+    }
+
+    // Compatibility-only: permit exactly one missed signal on the *retired*
+    // DSP semaphore from its prior signaler, within five ms of another
+    // thread closing it. Unrelated invalid handles still return an error.
+    if (!evt && handle == 0 && current_thread &&
+        process->ConsumeDspSemaphoreSignalGrace(current_thread->thread_id,
+                                                 system.CoreTiming().GetGlobalTicks())) {
         LOG_WARNING(Kernel_SVC,
-                    "[DSP-SEM-RACE] Invalid zero-handle SignalEvent: pid={} thread={} "
-                    "pc=0x{:08X} handle=0x{:08X} ticks={} -> ResultInvalidHandle",
-                    process->process_id, current_thread ? current_thread->thread_id : 0,
-                    GetReg(15), handle, system.CoreTiming().GetGlobalTicks());
+                    "[DSP-SEM-GRACE] Consumed retired semaphore signal: pid={} "
+                    "thread={} pc=0x{:08X} -> ResultSuccess",
+                    process->process_id, current_thread->thread_id, GetReg(15));
+        return ResultSuccess;
     }
     R_UNLESS(evt, ResultInvalidHandle);
 

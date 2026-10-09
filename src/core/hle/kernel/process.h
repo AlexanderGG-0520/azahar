@@ -177,6 +177,51 @@ public:
     // Creation time in ticks of the process.
     u64 creation_time_ticks;
 
+    // Process-scoped, one-shot compatibility for DSP semaphore teardown.
+    // The original signaler, not the closer, may consume one invalid zero
+    // handle signal within a short window of emulated time.
+    // Transient only: no expired token survives a savestate reload.
+    void RememberDspSemaphoreSignal(u32 object_id, u32 thread_id) {
+        last_dsp_semaphore_signal_object_id = object_id;
+        last_dsp_semaphore_signal_thread_id = thread_id;
+        dsp_semaphore_signal_grace_thread_id = 0;
+        dsp_semaphore_signal_grace_start_ticks = 0;
+        dsp_semaphore_signal_grace_deadline_ticks = 0;
+    }
+
+    bool RetireDspSemaphoreSignal(u32 object_id, u32 closing_thread_id, s64 current_ticks,
+                                  s64 grace_ticks) {
+        const bool eligible = object_id != 0 && last_dsp_semaphore_signal_object_id == object_id &&
+                              last_dsp_semaphore_signal_thread_id != 0 &&
+                              last_dsp_semaphore_signal_thread_id != closing_thread_id;
+        dsp_semaphore_signal_grace_thread_id =
+            eligible ? last_dsp_semaphore_signal_thread_id : 0;
+        dsp_semaphore_signal_grace_start_ticks = eligible ? current_ticks : 0;
+        dsp_semaphore_signal_grace_deadline_ticks =
+            eligible ? current_ticks + grace_ticks : 0;
+        last_dsp_semaphore_signal_object_id = 0;
+        last_dsp_semaphore_signal_thread_id = 0;
+        return eligible;
+    }
+
+    bool ConsumeDspSemaphoreSignalGrace(u32 signaling_thread_id, s64 current_ticks) {
+        if (dsp_semaphore_signal_grace_thread_id == 0) {
+            return false;
+        }
+        const bool within_window =
+            current_ticks >= dsp_semaphore_signal_grace_start_ticks &&
+            current_ticks <= dsp_semaphore_signal_grace_deadline_ticks;
+        if (!within_window) {
+            dsp_semaphore_signal_grace_thread_id = 0;
+            return false;
+        }
+        if (signaling_thread_id != dsp_semaphore_signal_grace_thread_id) {
+            return false;
+        }
+        dsp_semaphore_signal_grace_thread_id = 0;
+        return true;
+    }
+
     /**
      * Parses a list of kernel capability descriptors (as found in the ExHeader) and applies them
      * to this process.
@@ -248,6 +293,13 @@ private:
     void FreeAllMemory();
 
     KernelSystem& kernel;
+
+    // Runtime-only state: intentionally excluded from Process::serialize.
+    u32 last_dsp_semaphore_signal_object_id = 0;
+    u32 last_dsp_semaphore_signal_thread_id = 0;
+    u32 dsp_semaphore_signal_grace_thread_id = 0;
+    s64 dsp_semaphore_signal_grace_start_ticks = 0;
+    s64 dsp_semaphore_signal_grace_deadline_ticks = 0;
 
     friend class boost::serialization::access;
     template <class Archive>
