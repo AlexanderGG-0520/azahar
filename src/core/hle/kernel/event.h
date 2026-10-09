@@ -5,6 +5,7 @@
 #pragma once
 
 #include <boost/serialization/export.hpp>
+#include <boost/serialization/version.hpp>
 #include "core/hle/kernel/object.h"
 #include "core/hle/kernel/resource_limit.h"
 #include "core/hle/kernel/wait_object.h"
@@ -60,7 +61,8 @@ private:
     bool signaled;    ///< Whether the event has already been signaled
     std::string name; ///< Name of event (optional)
 
-    // Transient: existing savestate layouts stay unchanged for this experiment.
+    // Serialized from Event v1. For older saves, DSP_DSP reconstructs the
+    // active registration marker from its saved audio pipe event pointer.
     bool dsp_audio_irq_registered = false;
 
     friend class KernelSystem;
@@ -72,5 +74,6 @@ private:
 
 } // namespace Kernel
 
+BOOST_CLASS_VERSION(Kernel::Event, 1)
 BOOST_CLASS_EXPORT_KEY(Kernel::Event)
 CONSTRUCT_KERNEL_OBJECT(Kernel::Event)
