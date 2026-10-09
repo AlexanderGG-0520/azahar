@@ -6,6 +6,7 @@ on:
       - "release/**"
     paths:
       - ".github/release-trigger/**"
+      - ".github/release-dry-run/**"
   workflow_dispatch:
     inputs:
       dry_run:
@@ -26,16 +27,39 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.version.outputs.version }}
+      should_publish: ${{ steps.version.outputs.should_publish }}
     steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 2
       - name: Validate release branch and version
         id: version
         shell: bash
+        env:
+          REQUESTED_DRY_RUN: ${{ inputs.dry_run }}
         run: |
+          set -euo pipefail
           if [[ ! "$GITHUB_REF_NAME" =~ ^release/yw-v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo "::error::Run from a release/yw-vX.Y.Z branch."
             exit 1
           fi
-          echo "version=${GITHUB_REF_NAME#release/}" >> "$GITHUB_OUTPUT"
+          version="${GITHUB_REF_NAME#release/}"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+          # Fail closed. A dry-run marker must never publish a release.
+          should_publish=false
+          if [[ "$GITHUB_EVENT_NAME" == "push" ]]; then
+            # Only an explicitly changed release-trigger marker may publish.
+            # Checkout depth 2 is needed to compare with the parent commit.
+            if git diff --name-only HEAD^ HEAD | grep -Fxq ".github/release-trigger/$version"; then
+              should_publish=true
+            fi
+          elif [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" &&
+                  "$REQUESTED_DRY_RUN" == "false" ]]; then
+            should_publish=true
+          fi
+          echo "should_publish=$should_publish" >> "$GITHUB_OUTPUT"
+          echo "Version: $version, publish: $should_publish"
 
   windows-msys2:
     needs: prepare
@@ -217,7 +241,7 @@ jobs:
           if-no-files-found: error
 
   publish:
-    if: ${{ github.event_name == 'push' || inputs.dry_run == false }}
+    if: ${{ needs.prepare.outputs.should_publish == 'true' }}
     needs: [prepare, verify-assets]
     runs-on: ubuntu-latest
     permissions:
