@@ -61,12 +61,17 @@ void Event::WakeupAllWaitingThreads() {
 }
 
 template <class Archive>
-void Event::serialize(Archive& ar, const unsigned int) {
+void Event::serialize(Archive& ar, const unsigned int file_version) {
     ar& boost::serialization::base_object<WaitObject>(*this);
     ar & reset_type;
     ar & signaled;
     ar & name;
     ar & resource_limit;
+    if (file_version >= 1) {
+        ar & dsp_audio_irq_registered;
+    } else if constexpr (Archive::is_loading::value) {
+        dsp_audio_irq_registered = false;
+    }
 }
 SERIALIZE_IMPL(Event)
 
