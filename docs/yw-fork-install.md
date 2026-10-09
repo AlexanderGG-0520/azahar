@@ -1,56 +1,54 @@
-# Azahar YW Compatibility Fork v0.2.0
+# Azahar YW Compatibility Fork v0.2.1
 
 > [!WARNING]
-> **非公式・試験版（Prerelease）です。** セーブデータとAzaharのユーザーデータ／NANDはバックアップしてから使用してください。これはAzahar公式のリリースではありません。
+> **非公式の試験版（Prerelease）です。** 既存のセーブデータ、NAND、Azaharのユーザーデータを必ずバックアップしてください。Azahar公式リリースではありません。
 
-**『妖怪ウォッチ2』のローカル通信・すれちがい通信・HOME復帰の互換性改善を含むWindows向けテストリリースです。**
+**Windows向けの互換性改善リリースです。** v0.2.0から、HOME復帰時のNDSP/DSP割り込み競合に対する処理を、タイトル・プログラムカウンターに依存しない方式へ変更しました（[PR #17](https://github.com/AlexanderGG-0520/azahar/pull/17)）。
 
-## v0.1.0からの主な変更
+## v0.2.0 からの変更 — PR #17
 
-### 1. すれちがい通信（CECD / Multiplayer Room）
+### DSP音声IRQの破棄競合に対する汎用ワンショット回避策
 
-- Azahar Multiplayer Room内で、双方がゲームを起動した状態になると、CECD OutBoxのメッセージを相手へ転送する実験的な処理を実装しました。
-- すれちがい通信のために対戦・交換などのUDSセッションを開始する必要はありません。両端末で異なるゲームを起動していても転送条件の対象になります。
-- 受信メッセージのメタデータ調整、Inboxへの格納、重複排除などに対応します。
-- **ローカルで実際に動作確認済み：** 2インスタンスで『妖怪ウォッチ2 真打』を使用し、すれちがいデータ受信後、**ツチノコパンダがVIPルームに実際に出現**しました。セーブフラグの直接書き換えではありません。
+v0.2.0の[PR #13](https://github.com/AlexanderGG-0520/azahar/pull/13)では、特定のYW2タイトル、ゲストPC、および9.776ms待機を条件として処理していました。**v0.2.1ではその限定的な処理を削除し、以下のイベント履歴に基づく実験的な回避策に置き換えました。**
 
-### 2. HOME復帰のNDSP競合対策（[#13](https://github.com/AlexanderGG-0520/azahar/pull/13)）
+- DSP音声IRQイベントを実際に待機したスレッドとイベントの対応を記録。
+- 同じイベントが登録解除されたときだけ、そのスレッドに一度限りのgrace tokenを付与。
+- **50msのエミュレート時間内**に、同一スレッドが正の有限タイムアウトで`handle=0`の待機を行ったときだけ、`ResultTimeout`で終了。
+- 別の`WaitSynchronization1`、トークン消費、または期限切れで通常の無効ハンドル判定に戻します。
+- `Kernel::Thread`と`Kernel::Event`の情報をバージョン付きでシリアライズ。旧バージョンのステート読込時には欠けている状態を初期化・復元する処理を追加。
+- PR中に判明した**Windows/MSVCのC4456コンパイルエラー**を修正。
 
-- HOME遷移時、YW2のNDSPワーカーが破棄済みIRQイベントに対して待機し、`InvalidHandle`によるFatalが発生する問題への限定的な回避策を追加しました。
-- **ローカルで実際に動作確認済み：** JPN HOMEメニューが表示され、そこからYW2へ戻って通常のプレイを継続できました。関連ログでは`ResultTimeout`へのフォールバックが動作し、従来のFatalは再現しませんでした。
-- 対象をYW2のタイトル・`handle == 0`・`9,776,000 ns`・ゲストPC `0x00181448` に限定。**一般の無効ハンドルを無視する変更ではありません。**
-- 繰り返しのHOME往復・音声の長時間動作・自転車クラッシュ等の網羅的な検証は未完了です。HOME関連の全問題が解決したという保証はありません。
+一般の無効なハンドルを広く無視する変更ではありません。ただし、**実機の3DSカーネルの厳密な再現ではなく互換性向上のための回避策**です。
 
-### 3. 引き継ぎ機能
+### ローカル検証と未検証範囲
 
-- [utosa123](https://github.com/utosa123/azahar)による『妖怪ウォッチ2』のローカル通信NWMワーカーポーリング修正
-- カメラのQtスレッド処理と共有キャプチャの参照カウント調整
-- Linuxでの『ふしぎなレンズ』の緑一色表示への修正（ローカルテストで確認済み）
-- CECD / APT の互換性改善と診断ログ
+**開発者のローカル検証:** PR #17の初期版で、**HOMEメニュー表示 → 妖怪ウォッチ2へ復帰**を3回連続で確認し、各回で音声が正常で、従来のFatalが再現しなかったことを確認しています。ログでは`[DSP-IRQ-GRACE]`が3回の回避処理を記録しています。
 
-**検証範囲について：** 上記のすれちがい通信とHOME復帰の成功結果は開発者のローカル環境のものです。今回配布する**Windowsビルドでの再検証は別途必要**で、動作を保証しません。
+**重要:** 上記の3回の成功は**50ms期限・セーブステート対応・MSVC修正を追加する前のコード**での結果です。**今回の最終ソースについては再テスト未実施**であり、他作品への影響、セーブステート互換性、Windows配布版の実際のゲーム動作は未検証です。Windows版のコンパイル成功はGitHub Actionsのビルド結果で個別に確認します。
 
-## ダウンロード（Windows）
+## 引き継ぐ機能
 
-- **インストーラー:** `azahar-yw-v0.2.0-windows-msys2-installer.exe`
-- **ポータブルZIP:** `azahar-yw-v0.2.0-windows-msys2.zip`
+- 『妖怪ウォッチ2』ローカル通信（対戦・交換・バスターズ等）：[utosa123/azahar](https://github.com/utosa123/azahar)のNWM worker-polling workaroundを継承。
+- **すれちがい通信（CECD / Multiplayer Room）**：両端末でゲームが動作している場合にメッセージを交換。ローカル2インスタンスの『妖怪ウォッチ2 真打』で**ツチノコパンダのVIPルーム出現を確認済み**。
+- Qtカメラの開始停止と共有キャプチャ処理の改善。Linuxの『妖怪ウォッチ2 ふしぎなレンズ』で緑一色表示の改善をローカル確認。
+- APT / HOME関連の診断ログ。
 
-インストーラーはそのまま実行してください。ZIP版は任意のフォルダに展開し、`azahar.exe` を起動してください。古いデータを上書きする前に、セーブ／NAND／`user` ディレクトリのバックアップを推奨します。
+## Windowsダウンロード
 
-**Linux / macOS / Androidのバイナリは今回配布しません。**
+- **インストーラー：** `azahar-yw-v0.2.1-windows-msys2-installer.exe`
+- **ポータブル版：** `azahar-yw-v0.2.1-windows-msys2.zip`
 
-## Linuxでソースビルド
+インストーラーはEXEを実行してください。ZIPは適当なフォルダーに展開し、`azahar.exe`を起動します。既存のユーザーデータを移動・上書きする前にバックアップしてください。
+
+**今回はWindowsのみ配布します。Linux / macOS / Androidの同バージョンのバイナリは含まれません。**
+
+## Linuxソースビルド
 
 ```bash
 git clone --recursive https://github.com/AlexanderGG-0520/azahar.git
 cd azahar
-git switch release/yw-v0.2.0
+git switch release/yw-v0.2.1
 git submodule update --init --recursive
-```
-
-AzaharのLinuxビルド依存（CMake 3.25以降、Ninja、Qt 6の開発パッケージ等）を用意します。
-
-```bash
 cmake -S . -B build -G Ninja \
   -DCMAKE_BUILD_TYPE=Release \
   -DENABLE_ROOM_STANDALONE=OFF \
@@ -59,26 +57,26 @@ cmake --build build -j "$(nproc)"
 ./build/bin/Release/azahar
 ```
 
-Linuxのカメラは **Emulation → Configure → System → Camera** から **System Camera (qt)** とWebカメラを選択してください。
+ビルドにはCMake 3.25以降、Ninja、Qt 6開発パッケージ、およびAzaharの通常の依存関係が必要です。
 
-## 通信時の注意
+## 通信・不具合報告
 
-1. 双方で互換性のあるAzaharビルドを使い、同じMultiplayer Roomへ参加する。
-2. ユーザー名・MACアドレス・コンソールアドレスを使い回さない。
-3. 対戦・交換はゲーム内から通常どおり開始する。日本版では必要に応じてリージョンをJPNへ設定する。
-4. すれちがい通信の実験では、双方のゲームで対応機能を登録し、両方がゲームを起動している状態にする。
+同じAzahar Multiplayer Roomに参加し、各仮想本体のユーザー名・MACアドレス・コンソールアドレスが重複しないよう設定してください。すれちがい通信では双方でゲームを起動してください。
 
-再現性のある不具合報告には、OS・ソースのコミット・ゲームのバージョン・再現手順・`azahar_log.txt`（機密情報除去済み）を記載してください。
+不具合を報告する際は、OS、ゲームの版、再現手順、ビルドのコミット、`azahar_log.txt`（機密情報を除去したもの）を添えてください。
 
-## Credits / English summary
+---
 
-**Azahar YW Compatibility Fork v0.2.0** is an unofficial **Windows prerelease**.
+## English summary
 
-- Experimental **StreetPass over multiplayer rooms**: **locally verified** with a visible Pandanoko spawn in the VIP room of Yo-kai Watch 2 Shin'uchi.
-- **PR #13 — YW2 NDSP zero-IRQ HOME race workaround**: **locally verified** that HOME opened and the game resumed without the previous fatal. This is a targeted workaround, not a general kernel invalid-handle bypass.
-- Windows installer + portable ZIP, with the original local-play fixes and camera lifecycle fixes.
-- **Windows runtime results are not yet established** from the local tests. Back up saves/NAND before trying the prerelease.
+**Azahar YW Compatibility Fork v0.2.1** is an unofficial **Windows prerelease** (installer and portable ZIP).
 
-Maintained by [AlexanderGG](https://github.com/AlexanderGG-0520). Based on [Azahar](https://github.com/azahar-emu/azahar) and [utosa123's YW2 work](https://github.com/utosa123/azahar). Research, coding assistance, and documentation have used ChatGPT/OpenAI Codex with local human runtime testing. License information is in `license.txt`.
+The primary change since v0.2.0 is [PR #17](https://github.com/AlexanderGG-0520/azahar/pull/17), which replaces PR #13's YW2 title/PC-specific NDSP HOME workaround with a **one-shot DSP audio IRQ retirement grace mechanism** based on per-thread event history, a 50 ms emulated-time expiry, and versioned savestate fields. It also fixes a reported MSVC C4456 build error.
 
-Source: [release/yw-v0.2.0](https://github.com/AlexanderGG-0520/azahar/tree/release/yw-v0.2.0) · [development](https://github.com/AlexanderGG-0520/azahar/tree/integration/yw) · [PR #13](https://github.com/AlexanderGG-0520/azahar/pull/13)
+**Local runtime evidence:** Three successful HOME round-trips with normal audio were reported on an *earlier PR #17 revision*. **The final hardened revision has not yet had equivalent runtime testing**, and Windows game-level compatibility remains unverified.
+
+The fork also retains YW2 local multiplayer fixes, experimental room-based StreetPass (**Pandanoko VIP appearance locally confirmed**), and Qt camera improvements.
+
+Project maintained by [AlexanderGG](https://github.com/AlexanderGG-0520), based on [Azahar](https://github.com/azahar-emu/azahar) and [utosa123's YW2 changes](https://github.com/utosa123/azahar). ChatGPT/OpenAI Codex assisted with investigation and implementation; in-game runtime evidence was verified locally by the maintainer. For licensing see `license.txt`.
+
+Source: [release/yw-v0.2.1](https://github.com/AlexanderGG-0520/azahar/tree/release/yw-v0.2.1) · [PR #17](https://github.com/AlexanderGG-0520/azahar/pull/17) · [previous release v0.2.0](https://github.com/AlexanderGG-0520/azahar/releases/tag/yw-v0.2.0)
