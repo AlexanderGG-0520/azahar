@@ -7,6 +7,12 @@ on:
     paths:
       - ".github/release-trigger/**"
   workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Build and check artifacts without publishing a GitHub Release
+        type: boolean
+        required: true
+        default: true
 
 permissions:
   contents: read
@@ -179,6 +185,7 @@ jobs:
           if-no-files-found: error
 
   publish:
+    if: ${{ github.event_name == 'push' || inputs.dry_run == false }}
     needs: [prepare, windows-msys2, macos-universal, android-vanilla]
     runs-on: ubuntu-latest
     permissions:
