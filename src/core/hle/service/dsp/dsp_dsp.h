@@ -276,6 +276,16 @@ private:
         ar & interrupt_zero;
         ar & interrupt_one;
         ar & pipes;
+        if constexpr (Archive::is_loading::value) {
+            // Restores active audio IRQ registration for legacy (Event v0)
+            // savestates that did not serialize the emulator-only marker.
+            // In new saves this also reconciles the marker with DSP's actual
+            // registered event slot.
+            const auto& audio_irq = pipes[static_cast<std::size_t>(AudioCore::DspPipe::Audio)];
+            if (audio_irq) {
+                audio_irq->SetDspAudioIrqRegistered(true);
+            }
+        }
     }
     friend class boost::serialization::access;
 };

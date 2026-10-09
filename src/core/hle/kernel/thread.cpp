@@ -81,6 +81,13 @@ void Thread::serialize(Archive& ar, const unsigned int file_version) {
     }
     ar & wakeup_callback;
     ar & unschedule_mode;
+    if (file_version >= 1) {
+        ar & last_dsp_audio_irq_object_id;
+        ar & dsp_audio_irq_grace_pending;
+        ar & dsp_audio_irq_grace_deadline_ticks;
+    } else if constexpr (Archive::is_loading::value) {
+        ClearDspAudioIrqWait();
+    }
 }
 SERIALIZE_IMPL(Thread)
 

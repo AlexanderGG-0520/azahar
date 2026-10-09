@@ -815,23 +815,36 @@ private:
 Result SVC::WaitSynchronization1(Handle handle, s64 nano_seconds) {
     const auto process = kernel.GetCurrentProcess();
 
-    // YW2's NDSP worker can race with the DSP sleep callback on HOME transitions:
-    // the callback closes and zeroes the IRQ event while the worker is preparing
-    // to wait for two audio frames (9.776 ms). The resulting InvalidHandle is
-    // incorrectly escalated to err:f by the guest audio library.
-    // Treat only this confirmed call site as a missed IRQ timeout; never relax
-    // invalid-handle validation for other callers.
-    if (handle == 0 && nano_seconds == 9'776'000 && GetReg(15) == 0x00181448 &&
-        process && process->codeset && IsYoKaiWatch2Title(process->codeset->program_id)) {
+    Thread* thread = kernel.GetCurrentThreadManager().GetCurrentThread();
+
+    // A guest DSP audio worker may race with the teardown callback: it has
+    // previously waited on the registered audio IRQ, but the callback has now
+    // closed and zeroed its handle. Allow only that same thread's next finite
+    // zero-handle wait to complete as a missed IRQ timeout.
+    //
+    // This is an explicit, one-shot compatibility workaround, NOT real 3DS
+    // kernel behavior. All other invalid handles keep ResultInvalidHandle.
+    if (handle == 0 && nano_seconds > 0 && process && thread &&
+        thread->owner_process.lock() == process &&
+        thread->ConsumeDspAudioIrqGrace(system.CoreTiming().GetGlobalTicks())) {
         LOG_WARNING(Kernel_SVC,
-                    "[HOME-HANDOFF] YW2 NDSP sleep race: ignoring zero IRQ handle "
-                    "pid={} pc=0x{:08X} timeout={} -> ResultTimeout",
-                    process->process_id, GetReg(15), nano_seconds);
+                    "[DSP-IRQ-GRACE] Consumed retired audio IRQ wait: pid={} thread={} "
+                    "timeout={} -> ResultTimeout",
+                    process->process_id, thread->thread_id, nano_seconds);
         return ResultTimeout;
     }
 
     auto object = process->handle_table.Get<WaitObject>(handle);
-    Thread* thread = kernel.GetCurrentThreadManager().GetCurrentThread();
+    if (thread) {
+        if (object && object->GetHandleType() == HandleType::Event &&
+            std::static_pointer_cast<Event>(object)->IsDspAudioIrqRegistered()) {
+            thread->RememberDspAudioIrqWait(object->GetObjectId());
+        } else {
+            // A different wait breaks the association with the DSP audio IRQ,
+            // preventing a stale retirement token from affecting other waits.
+            thread->ClearDspAudioIrqWait();
+        }
+    }
 
     if (process && process->codeset && IsYoKaiWatch2Title(process->codeset->program_id)) {
         if (object) {
@@ -858,7 +871,6 @@ Result SVC::WaitSynchronization1(Handle handle, s64 nano_seconds) {
     bool apply_yw2_worker_ordering_workaround = false;
     if (!actual_should_wait && nano_seconds == 0 &&
         object->GetHandleType() == HandleType::Thread) {
-        const auto process = kernel.GetCurrentProcess();
         if (process && process->codeset && IsYoKaiWatch2Title(process->codeset->program_id)) {
             const auto target_thread = std::static_pointer_cast<Thread>(object);
             const auto target_process = target_thread->owner_process.lock();

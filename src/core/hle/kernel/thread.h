@@ -15,6 +15,7 @@
 #include <vector>
 #include <boost/container/flat_set.hpp>
 #include <boost/serialization/export.hpp>
+#include <boost/serialization/version.hpp>
 #include <queue>
 #include "common/common_types.h"
 #include "common/thread_queue_list.h"
@@ -320,6 +321,42 @@ public:
      */
     void SetWaitSynchronizationResult(Result result);
 
+    // Transient, one-shot compatibility state. Only dsp::DSP can retire a
+    // registered audio IRQ, and only a thread that actually waited on that
+    // event can consume the subsequent zero-handle sleep-probe grace.
+    void RememberDspAudioIrqWait(u32 object_id) {
+        last_dsp_audio_irq_object_id = object_id;
+        dsp_audio_irq_grace_pending = false;
+    }
+
+    void ClearDspAudioIrqWait() {
+        last_dsp_audio_irq_object_id = 0;
+        dsp_audio_irq_grace_pending = false;
+        dsp_audio_irq_grace_deadline_ticks = 0;
+    }
+
+    // A grace token expires after 50 ms of *emulated* time, regardless of
+    // how long the host machine is paused. This is only a compatibility guard,
+    // not an attempt to emulate actual DSP/kernel invalid-handle semantics.
+    static constexpr s64 DspAudioIrqGraceTicks = msToCycles(50);
+
+    bool RetireDspAudioIrqWait(u32 object_id, s64 current_ticks) {
+        if (last_dsp_audio_irq_object_id != object_id) {
+            return false;
+        }
+        dsp_audio_irq_grace_pending = true;
+        dsp_audio_irq_grace_deadline_ticks = current_ticks + DspAudioIrqGraceTicks;
+        return true;
+    }
+
+    bool ConsumeDspAudioIrqGrace(s64 current_ticks) {
+        const bool within_grace =
+            dsp_audio_irq_grace_pending && current_ticks <= dsp_audio_irq_grace_deadline_ticks &&
+            current_ticks >= dsp_audio_irq_grace_deadline_ticks - DspAudioIrqGraceTicks;
+        ClearDspAudioIrqWait();
+        return within_grace;
+    }
+
     /**
      * Sets the output parameter value after the thread awakens (from WaitSynchronizationN SVC only)
      * @param output Value to set to the output parameter
@@ -415,6 +452,12 @@ public:
     const u32 core_id;
 
 private:
+    // Versioned as of Thread v1 to support resume both before and after
+    // DSP audio IRQ retirement. Older states default to no pending grace.
+    u32 last_dsp_audio_irq_object_id = 0;
+    bool dsp_audio_irq_grace_pending = false;
+    s64 dsp_audio_irq_grace_deadline_ticks = 0;
+
     ThreadManager& thread_manager;
 
     // Does not represent how real HW works, instead it mimics behaviour
@@ -439,6 +482,7 @@ std::shared_ptr<Thread> SetupMainThread(KernelSystem& kernel, u32 entry_point, u
 
 } // namespace Kernel
 
+BOOST_CLASS_VERSION(Kernel::Thread, 1)
 BOOST_CLASS_EXPORT_KEY(Kernel::Thread)
 BOOST_CLASS_EXPORT_KEY(Kernel::WakeupCallback)
 
