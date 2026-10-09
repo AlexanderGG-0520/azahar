@@ -9,7 +9,7 @@ Maintained by **[AlexanderGG](https://github.com/AlexanderGG-0520)**.
 >
 > **`integration/yw` には実験的な開発が含まれます。** 配布済みビルドと開発ブランチの違いを確認してください。
 
-[**Windows向け v0.2.0 プレリリース**](https://github.com/AlexanderGG-0520/azahar/releases/tag/yw-v0.2.0) · [**開発ブランチ**](https://github.com/AlexanderGG-0520/azahar/tree/integration/yw) · [**インストールガイド**](https://github.com/AlexanderGG-0520/azahar/blob/integration/yw/docs/yw-fork-install.md) · [**English**](#english)
+[**Windows向け v0.2.1 プレリリース**](https://github.com/AlexanderGG-0520/azahar/releases/tag/yw-v0.2.1) · [**開発ブランチ**](https://github.com/AlexanderGG-0520/azahar/tree/integration/yw) · [**インストールガイド**](https://github.com/AlexanderGG-0520/azahar/blob/integration/yw/docs/yw-fork-install.md) · [**English**](#english)
 
 ## このフォークについて
 
@@ -26,10 +26,10 @@ Maintained by **[AlexanderGG](https://github.com/AlexanderGG-0520)**.
 | YW2 ローカル通信（対戦・交換・バスターズ等） | **実装済み**。日本版の通信成功は元フォークで確認済み。各環境での再検証は必要 | 元フォーク由来の修正／`integration/yw` |
 | Linux のシステムカメラ（ふしぎなレンズで緑一色になる問題） | **修正・実機能確認済み** | `integration/yw`・`yw-v0.1.0` |
 | Azahar Multiplayer Room 経由のすれちがい通信 | **ローカル検証成功／実験機能**。2インスタンスで真打のツチノコパンダVIP出現を確認（Windows配布版では未検証） | `yw-v0.2.0`・`integration/yw` |
-| HOMEメニュー復帰（PR #13） | **ローカル検証成功／実験的修正**。HOME表示→YW2へ復帰しゲームを継続、従来のFatalなし。繰り返しの遷移等は未検証 | `yw-v0.2.0`・`integration/yw` |
+| HOMEメニュー復帰（[PR #17](https://github.com/AlexanderGG-0520/azahar/pull/17)） | **従来のPC/タイトル限定回避策をDSP IRQ履歴に基づくワンショット処理へ変更**。初期版でHOME往復3回と音声正常をローカル確認。50ms期限・ステート対応を加えた最終版は再検証が必要 | `yw-v0.2.1`・`integration/yw` |
 | YW2 の高フレームレート化 | **別ブランチの実験**。つつく・おはらい等の副作用があり常用非推奨 | `yw2-120fps-v1-beta` |
 
-すれちがい通信もHOME復帰も、**開発者がローカル環境で動作を確認した成果**です。一方、**Windows配布版の実機能検証や全タイトル・全パターンの安定動作は未確認**です。v0.1.0にはこの新しい実装は含まれません。
+すれちがい通信は開発者がローカルで出現を確認しています。HOME復帰は**PR #17初期版で3回連続の往復と音声正常を確認**していますが、**50ms期限・セーブステート対応を追加した最終版では同じ実機能テストを再実施していません**。Windows配布版での動作と全タイトルでの互換性も未検証です。
 
 ## ブランチの使い分け
 
@@ -37,7 +37,8 @@ Maintained by **[AlexanderGG](https://github.com/AlexanderGG-0520)**.
 | --- | --- |
 | [`master`](https://github.com/AlexanderGG-0520/azahar/tree/master) | リポジトリのデフォルトブランチ。元フォーク由来の状態が中心で、最新の独自修正は未統合 |
 | [`integration/yw`](https://github.com/AlexanderGG-0520/azahar/tree/integration/yw) | **現在の主要開発ブランチ**。カメラ・CECDすれちがい・APT等の変更を統合 |
-| [`release/yw-v0.2.0`](https://github.com/AlexanderGG-0520/azahar/tree/release/yw-v0.2.0) | v0.2.0 Windowsプレリリースのソース |
+| [`release/yw-v0.2.1`](https://github.com/AlexanderGG-0520/azahar/tree/release/yw-v0.2.1) | **最新v0.2.1 Windowsプレリリースのソース** |
+| [`release/yw-v0.2.0`](https://github.com/AlexanderGG-0520/azahar/tree/release/yw-v0.2.0) | 旧v0.2.0のリリース系列 |
 | [`release/yw-v0.1.0`](https://github.com/AlexanderGG-0520/azahar/tree/release/yw-v0.1.0) | 旧v0.1.0のリリース系列 |
 | [`yw2-120fps-v1-beta`](https://github.com/AlexanderGG-0520/azahar/tree/yw2-120fps-v1-beta) | フレームレート実験。通常の通信修正とは分離 |
 
@@ -47,14 +48,14 @@ Maintained by **[AlexanderGG](https://github.com/AlexanderGG-0520)**.
 
 ### Windows
 
-[**Azahar YW Compatibility Fork v0.2.0（プレリリース）**](https://github.com/AlexanderGG-0520/azahar/releases/tag/yw-v0.2.0) はWindows向けに次の2形式を配布します。
+[**Azahar YW Compatibility Fork v0.2.1（プレリリース）**](https://github.com/AlexanderGG-0520/azahar/releases/tag/yw-v0.2.1) はWindows向けに次の2形式を配布します。
 
-- **インストーラー:** `azahar-yw-v0.2.0-windows-msys2-installer.exe`
-- **ポータブル版:** `azahar-yw-v0.2.0-windows-msys2.zip`
+- **インストーラー:** `azahar-yw-v0.2.1-windows-msys2-installer.exe`
+- **ポータブル版:** `azahar-yw-v0.2.1-windows-msys2.zip`
 
 ポータブル版は ZIP を任意のフォルダーに展開して `azahar.exe` を起動してください。OneDrive 管理下などの複雑なパスは問題切り分けのため避けると無難です。
 
-**注意:** v0.2.0にはすれちがい通信の実験機能と[PR #13](https://github.com/AlexanderGG-0520/azahar/pull/13)のHOME復帰回避策が含まれます。使用前にセーブ/NANDをバックアップしてください。Linux／macOS／Android用の同バージョンのバイナリは配布しません。旧版は[v0.1.0](https://github.com/AlexanderGG-0520/azahar/releases/tag/yw-v0.1.0)から入手できます。
+**注意:** v0.2.1はすれちがい通信の実験機能と[PR #17](https://github.com/AlexanderGG-0520/azahar/pull/17)の汎用DSP音声IRQ破棄競合回避策を含みます。**最終コードの実機能テストは未完了**です。使用前にセーブ/NANDをバックアップしてください。Linux／macOS／Android用の同バージョンのバイナリは配布しません。旧版は[v0.2.0](https://github.com/AlexanderGG-0520/azahar/releases/tag/yw-v0.2.0)から入手できます。
 
 ### Linux（ソースからビルド）
 
@@ -99,7 +100,7 @@ CMake、Ninja、Qt 6 と Azahar のビルド依存関係が必要です。具体
 - **NWM / UDS:** 元フォークの YW2 worker-polling workaround を継承。`WaitSynchronization1(timeout=0)` と完了済み worker の処理順序に起因する通信問題を回避します。
 - **Qt カメラ:** キャプチャ開始・停止のスレッド処理と共有カメラの参照カウントを修正。Linux のふしぎなレンズで確認しています。
 - **CECD / Network:** Multiplayer Room の通信路ですれちがいデータを交換。OutBox／Inbox、重複排除、配信タイミングなどを調査・改善しています。
-- **APT / HOME:** [PR #13](https://github.com/AlexanderGG-0520/azahar/pull/13)は、YW2のNDSPワーカーがHOME遷移時に無効化済みIRQイベントを待機する競合を対象にした限定的な修正です。対象をYW2タイトル・`handle == 0`・`9,776,000 ns`・ゲストPC `0x00181448` に限定して `ResultTimeout` として扱います。**ローカルではHOME表示→ゲーム復帰・継続とFatal解消を確認済み**ですが、すべてのHOME関連不具合の修正を意味しません。
+- **DSP / APT / HOME:** [PR #17](https://github.com/AlexanderGG-0520/azahar/pull/17)で、v0.2.0の[PR #13](https://github.com/AlexanderGG-0520/azahar/pull/13)のYW2タイトル・ゲストPC・固定タイムアウト依存を削除し、DSP音声IRQイベントを実際に待機したスレッドに対して**50msのエミュレート時間に限定した1回限りのgrace**を提供します。別の待機や期限切れでは通常の無効ハンドル処理を維持します。`Kernel::Event`/`Kernel::Thread`の状態はバージョン付きでシリアライズします。**PR #17初期版のHOME往復3回は成功しましたが、最終版の再テストは未実施**です。
 
 問題を調査するときは、再現手順、OS、ブランチとコミット、ゲームの版、関連する `azahar_log.txt` の抜粋を揃えると原因を絞りやすくなります。**ログに含まれる個人情報・認証情報は共有前に削除してください。**
 
@@ -123,16 +124,16 @@ CMake、Ninja、Qt 6 と Azahar のビルド依存関係が必要です。具体
 
 - **YW2 local multiplayer:** Inherits utosa123's v3 NWM worker-polling workaround. Japanese editions' local play was confirmed by the original fork's maintainer; broader compatibility is not guaranteed.
 - **Linux camera:** Qt camera lifecycle and shared-capture fixes, including a verified fix for the green feed in YW2's Fushigi Lens.
-- **StreetPass over multiplayer rooms:** Experimental game-presence-triggered CECD message exchange in **v0.2.0** and `integration/yw`. **Locally verified:** Two Yo-kai Watch 2 Shin'uchi instances produced a **visible Pandanoko in the VIP room**. Windows prerelease runtime testing remains pending; the feature was **not included in v0.1.0**.
-- **HOME Menu / APT:** **Locally verified:** [PR #13](https://github.com/AlexanderGG-0520/azahar/pull/13) allowed the JPN HOME Menu to open and return to running YW2 without the previous fatal. It narrowly handles the YW2 NDSP zero-IRQ sleep race. Repeated HOME cycles and Windows runtime behavior remain unverified.
+- **StreetPass over multiplayer rooms:** Experimental game-presence-triggered CECD message exchange in **v0.2.1** and `integration/yw`. **Locally verified:** Two Yo-kai Watch 2 Shin'uchi instances produced a **visible Pandanoko in the VIP room**. Windows prerelease runtime testing remains pending; the feature was **not included in v0.1.0**.
+- **HOME Menu / APT:** [PR #17](https://github.com/AlexanderGG-0520/azahar/pull/17) replaces PR #13's YW2 title/PC-specific workaround with one-shot DSP audio IRQ retirement grace and a 50 ms emulated-time deadline. **Three HOME round-trips with sound were locally verified on an earlier PR #17 revision**; the final hardened version (including versioned savestate support) has not yet been retested. Windows runtime behavior remains unverified.
 - **120 FPS experiments:** Separate experimental branch; not part of the recommended compatibility build.
 - **Yo-kai Watch 3:** An area of interest, not a blanket compatibility claim.
 
 ### Get started
 
-- **Windows v0.2.0 prerelease (installer and portable ZIP):** [Release assets](https://github.com/AlexanderGG-0520/azahar/releases/tag/yw-v0.2.0) · [Previous v0.1.0](https://github.com/AlexanderGG-0520/azahar/releases/tag/yw-v0.1.0)
+- **Windows v0.2.1 prerelease (installer and portable ZIP):** [Release assets](https://github.com/AlexanderGG-0520/azahar/releases/tag/yw-v0.2.1) · [Previous v0.2.0](https://github.com/AlexanderGG-0520/azahar/releases/tag/yw-v0.2.0)
 - **Current development:** [`integration/yw`](https://github.com/AlexanderGG-0520/azahar/tree/integration/yw)
-- **Linux:** Build from source; see the [installation and camera guide](https://github.com/AlexanderGG-0520/azahar/blob/integration/yw/docs/yw-fork-install.md). No Linux binary is provided with v0.2.0.
+- **Linux:** Build from source; see the [installation and camera guide](https://github.com/AlexanderGG-0520/azahar/blob/integration/yw/docs/yw-fork-install.md). No Linux binary is provided with v0.2.1.
 - **Original projects:** [Azahar](https://github.com/azahar-emu/azahar) and [utosa123's YW2 local-play fork](https://github.com/utosa123/azahar).
 
 Join the same Azahar multiplayer room with non-duplicated console identities for local play. For experimental StreetPass, run the current development build on both peers, ensure StreetPass is registered in the games, and back up save/NAND data first.
