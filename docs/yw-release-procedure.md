@@ -46,13 +46,18 @@ git push
 ```
 
 A manual `workflow_dispatch` run is also supported, but it must select the
-`release/yw-vX.Y.Z` branch. Other branches fail version validation.
+`release/yw-vX.Y.Z` branch. Other branches fail version validation. The
+manual trigger defaults to **`dry_run=true`**, which compiles each target and
+verifies/archives the complete release payload **without publishing**. Only
+explicit `dry_run=false` (or the marker-file push trigger) publishes it.
 
 The parallel Windows, macOS, and Android jobs must **all succeed** before
-the publish job runs. It validates the four expected payloads, produces
-`SHA256SUMS.txt`, and publishes the release as a **prerelease**. If Android
-signing secrets are missing, the release fails closed instead of publishing an
-APK signed with a debug key. A failed or incomplete job means **no new release**.
+the `verify-assets` job runs. It validates the four expected payloads,
+produces `SHA256SUMS.txt`, and preserves a verified artifact that can be
+inspected even in dry runs. Only then may the `publish` job create a
+**prerelease**. If Android signing secrets are missing, the release fails
+closed instead of publishing an APK signed with a debug key. A failed or
+incomplete job means **no new release**.
 
 ## After the workflow
 
