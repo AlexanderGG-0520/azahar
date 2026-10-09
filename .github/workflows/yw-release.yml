@@ -1,4 +1,4 @@
-name: YW fork cross-platform prerelease
+name: YW fork desktop prerelease
 
 on:
   push:
@@ -150,66 +150,8 @@ jobs:
           path: artifacts/azahar-*.zip
           if-no-files-found: error
 
-  android-vanilla:
-    needs: prepare
-    runs-on: ubuntu-latest
-    env:
-      OS: android
-      TARGET: vanilla
-      VERSION: ${{ needs.prepare.outputs.version }}
-      GIT_TAG_NAME: ${{ needs.prepare.outputs.version }}
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          submodules: recursive
-      - name: Verify release signing configuration
-        shell: bash
-        env:
-          ANDROID_KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
-          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-          ANDROID_KEYSTORE_PASS: ${{ secrets.ANDROID_KEYSTORE_PASS }}
-        run: |
-          if [[ -z "$ANDROID_KEYSTORE_B64" || -z "$ANDROID_KEY_ALIAS" || -z "$ANDROID_KEYSTORE_PASS" ]]; then
-            echo "::error::ANDROID_KEYSTORE_B64, ANDROID_KEY_ALIAS and ANDROID_KEYSTORE_PASS must all be set. Refusing to release a debug-key-signed APK."
-            exit 1
-          fi
-      - name: Install tools
-        run: |
-          sudo apt-get update -y
-          sudo apt-get install ccache apksigner -y
-      - name: Update Android SDK CMake version
-        run: |
-          echo "y" | "${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/sdkmanager" "cmake;3.30.3"
-      - name: Build signed vanilla Android APK
-        env:
-          ANDROID_KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
-          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-          ANDROID_KEYSTORE_PASS: ${{ secrets.ANDROID_KEYSTORE_PASS }}
-        run: JAVA_HOME="$JAVA_HOME_17_X64" ./.ci/android.sh
-      - name: Pack Android APK
-        working-directory: src/android/app
-        env:
-          UNPACKED: "1"
-        run: ../../../.ci/pack.sh
-      - name: Normalize APK and verify signature
-        working-directory: src/android/app
-        shell: bash
-        run: |
-          mapfile -t apks < <(find artifacts -maxdepth 1 -type f -name '*.apk')
-          if (( ${#apks[@]} != 1 )); then
-            echo "::error::Expected exactly one vanilla release APK; found ${#apks[@]}."
-            exit 1
-          fi
-          mv "${apks[0]}" "artifacts/azahar-${VERSION}-android-vanilla.apk"
-          apksigner verify --verbose "artifacts/azahar-${VERSION}-android-vanilla.apk"
-      - uses: actions/upload-artifact@v7
-        with:
-          name: azahar-${{ env.VERSION }}-android
-          path: src/android/app/artifacts/azahar-*.apk
-          if-no-files-found: error
-
   verify-assets:
-    needs: [prepare, windows-msys2, macos-universal, android-vanilla]
+    needs: [prepare, windows-msys2, macos-universal]
     runs-on: ubuntu-latest
     env:
       VERSION: ${{ needs.prepare.outputs.version }}
@@ -227,12 +169,11 @@ jobs:
           for asset in \
             "azahar-${VERSION}-windows-msys2-installer.exe" \
             "azahar-${VERSION}-windows-msys2.zip" \
-            "azahar-${VERSION}-macos-universal.zip" \
-            "azahar-${VERSION}-android-vanilla.apk"; do
+            "azahar-${VERSION}-macos-universal.zip"; do
             test -s "release-assets/${asset}" || { echo "::error::Missing ${asset}"; exit 1; }
           done
           test -s "docs/releases/${VERSION}.md" || { echo "::error::Missing release notes"; exit 1; }
-          (cd release-assets && sha256sum *.exe *.zip *.apk > SHA256SUMS.txt)
+          (cd release-assets && sha256sum *.exe *.zip > SHA256SUMS.txt)
           cat release-assets/SHA256SUMS.txt
       - uses: actions/upload-artifact@v7
         with:
