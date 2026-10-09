@@ -825,7 +825,8 @@ Result SVC::WaitSynchronization1(Handle handle, s64 nano_seconds) {
     // This is an explicit, one-shot compatibility workaround, NOT real 3DS
     // kernel behavior. All other invalid handles keep ResultInvalidHandle.
     if (handle == 0 && nano_seconds > 0 && process && thread &&
-        thread->owner_process.lock() == process && thread->ConsumeDspAudioIrqGrace()) {
+        thread->owner_process.lock() == process &&
+        thread->ConsumeDspAudioIrqGrace(system.CoreTiming().GetGlobalTicks())) {
         LOG_WARNING(Kernel_SVC,
                     "[DSP-IRQ-GRACE] Consumed retired audio IRQ wait: pid={} thread={} "
                     "timeout={} -> ResultTimeout",
@@ -870,7 +871,6 @@ Result SVC::WaitSynchronization1(Handle handle, s64 nano_seconds) {
     bool apply_yw2_worker_ordering_workaround = false;
     if (!actual_should_wait && nano_seconds == 0 &&
         object->GetHandleType() == HandleType::Thread) {
-        const auto process = kernel.GetCurrentProcess();
         if (process && process->codeset && IsYoKaiWatch2Title(process->codeset->program_id)) {
             const auto target_thread = std::static_pointer_cast<Thread>(object);
             const auto target_process = target_thread->owner_process.lock();
