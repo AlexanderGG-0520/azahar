@@ -735,6 +735,19 @@ Result SVC::CloseHandle(Handle handle) {
                  GetReg(15), handle, object != nullptr,
                  object ? object->GetTypeName() : "<invalid>",
                  object ? object->GetName() : "<invalid>");
+        // Diagnostic only: the guest NDSP sleep callback closes the DSP semaphore
+        // while another guest thread may still try to signal it. Do not change
+        // handle validity or SVC results here.
+        if (object && object->GetHandleType() == HandleType::Event &&
+            object->GetName() == "DSP_DSP::semaphore_event") {
+            const auto* current_thread = kernel.GetCurrentThreadManager().GetCurrentThread();
+            LOG_WARNING(Kernel_SVC,
+                        "[DSP-SEM-RACE] Close DSP semaphore: pid={} thread={} pc=0x{:08X} "
+                        "handle=0x{:08X} object_id={} ticks={}",
+                        process->process_id, current_thread ? current_thread->thread_id : 0,
+                        GetReg(15), handle, object->GetObjectId(),
+                        system.CoreTiming().GetGlobalTicks());
+        }
     }
 
     // A guest NDSP worker may still be about to signal dspSem after a
