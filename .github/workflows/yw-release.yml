@@ -184,16 +184,11 @@ jobs:
           path: src/android/app/artifacts/azahar-*.apk
           if-no-files-found: error
 
-  publish:
-    if: ${{ github.event_name == 'push' || inputs.dry_run == false }}
+  verify-assets:
     needs: [prepare, windows-msys2, macos-universal, android-vanilla]
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
     env:
       VERSION: ${{ needs.prepare.outputs.version }}
-      GH_TOKEN: ${{ github.token }}
-      GH_REPO: ${{ github.repository }}
     steps:
       - uses: actions/checkout@v6
       - uses: actions/download-artifact@v7
@@ -215,6 +210,28 @@ jobs:
           test -s "docs/releases/${VERSION}.md" || { echo "::error::Missing release notes"; exit 1; }
           (cd release-assets && sha256sum *.exe *.zip *.apk > SHA256SUMS.txt)
           cat release-assets/SHA256SUMS.txt
+      - uses: actions/upload-artifact@v7
+        with:
+          name: azahar-${{ env.VERSION }}-verified-release-payload
+          path: release-assets/*
+          if-no-files-found: error
+
+  publish:
+    if: ${{ github.event_name == 'push' || inputs.dry_run == false }}
+    needs: [prepare, verify-assets]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/download-artifact@v7
+        with:
+          name: azahar-${{ env.VERSION }}-verified-release-payload
+          path: release-assets
       - name: Create/update GitHub prerelease
         shell: bash
         run: |
