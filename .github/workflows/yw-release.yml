@@ -1,4 +1,4 @@
-name: YW fork Windows release
+name: YW fork cross-platform prerelease
 
 on:
   push:
@@ -7,38 +7,51 @@ on:
     paths:
       - ".github/release-trigger/**"
   workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Build and check artifacts without publishing a GitHub Release
+        type: boolean
+        required: true
+        default: true
 
 permissions:
-  contents: write
+  contents: read
+
+concurrency:
+  group: yw-release-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Validate release branch and version
+        id: version
+        shell: bash
+        run: |
+          if [[ ! "$GITHUB_REF_NAME" =~ ^release/yw-v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Run from a release/yw-vX.Y.Z branch."
+            exit 1
+          fi
+          echo "version=${GITHUB_REF_NAME#release/}" >> "$GITHUB_OUTPUT"
+
   windows-msys2:
+    needs: prepare
     runs-on: windows-latest
     env:
       OS: windows
       TARGET: msys2
-
+      VERSION: ${{ needs.prepare.outputs.version }}
     defaults:
       run:
         shell: msys2 {0}
-
     steps:
       - uses: actions/checkout@v6
         with:
           submodules: recursive
-
-      - name: Resolve release version
-        shell: pwsh
-        run: |
-          $version = "${{ github.ref_name }}".Replace("release/", "")
-          if ([string]::IsNullOrWhiteSpace($version)) {
-            throw "Could not derive release version from branch name."
-          }
-          "VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Append
-          Write-Host "Release version: $version"
-
-      - name: Set up MSYS2
-        uses: msys2/setup-msys2@v2
+      - uses: msys2/setup-msys2@v2
         with:
           msystem: clang64
           update: true
@@ -46,17 +59,13 @@ jobs:
           pacboy: >-
             toolchain:p ccache:p cmake:p ninja:p spirv-tools:p
             qt6-base:p qt6-multimedia:p qt6-multimedia-wmf:p qt6-tools:p qt6-translations:p
-
       - name: Install NSIS
         shell: pwsh
         run: choco install nsis --yes --no-progress
-
       - name: Disable line ending translation
         run: git config --global core.autocrlf input
-
       - name: Build Windows MSYS2
         run: ./.ci/windows.sh
-
       - name: Generate installer
         shell: cmd
         run: |
@@ -64,42 +73,173 @@ jobs:
           "C:\Program Files (x86)\NSIS\makensis.exe" /DPRODUCT_VARIANT=msys2 /DPRODUCT_VERSION=%VERSION% citra.nsi
           if not exist ..\..\artifacts mkdir ..\..\artifacts
           move /y *.exe ..\..\artifacts\
-
       - name: Pack portable ZIP
         run: ./.ci/pack.sh
-
       - name: Normalize artifact names
         shell: pwsh
         run: |
-          $zip = Get-ChildItem artifacts -Filter "*.zip" | Select-Object -First 1
-          if (-not $zip) {
-            throw "Portable ZIP was not generated."
-          }
-          Move-Item -Force $zip.FullName "artifacts/azahar-$env:VERSION-windows-msys2.zip"
+          $zip = @(Get-ChildItem artifacts -Filter "*.zip")
+          if ($zip.Count -ne 1) { throw "Expected exactly one Windows portable ZIP." }
+          Move-Item -Force $zip[0].FullName "artifacts/azahar-$env:VERSION-windows-msys2.zip"
 
-          $installer = Get-ChildItem artifacts -Filter "*installer.exe" | Select-Object -First 1
-          if (-not $installer) {
-            throw "Windows installer was not generated."
-          }
-          Move-Item -Force $installer.FullName "artifacts/azahar-$env:VERSION-windows-msys2-installer.exe"
-
-          Get-ChildItem artifacts
-
-      - name: Upload workflow artifacts
-        uses: actions/upload-artifact@v7
+          $installer = @(Get-ChildItem artifacts -Filter "*installer.exe")
+          if ($installer.Count -ne 1) { throw "Expected exactly one Windows installer." }
+          Move-Item -Force $installer[0].FullName "artifacts/azahar-$env:VERSION-windows-msys2-installer.exe"
+      - uses: actions/upload-artifact@v7
         with:
-          name: azahar-${{ env.VERSION }}-windows-msys2
+          name: azahar-${{ env.VERSION }}-windows
           path: |
-            artifacts/*.zip
-            artifacts/*.exe
+            artifacts/azahar-*.zip
+            artifacts/azahar-*.exe
+          if-no-files-found: error
 
-      - name: Create GitHub prerelease
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ github.token }}
+  macos-universal:
+    needs: prepare
+    runs-on: macos-26
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+      OS: macos
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: recursive
+      - name: Install tools
+        run: brew install ccache ninja spirv-tools
+      - name: Build arm64
+        run: BUILD_ARCH=arm64 ./.ci/macos.sh
+      - name: Build x86_64
+        run: BUILD_ARCH=x86_64 ./.ci/macos.sh
+      - name: Create universal app
+        run: ./.ci/macos-universal.sh
+      - name: Pack universal app
+        shell: bash
         run: |
-          $titleVersion = $env:VERSION.Replace("yw-", "")
-          $title = "Azahar YW Compatibility Fork $titleVersion"
+          test -d build/universal/bundle/Azahar.app
+          mkdir -p artifacts
+          ditto -c -k --sequesterRsrc --keepParent \
+            build/universal/bundle/Azahar.app \
+            "artifacts/azahar-${VERSION}-macos-universal.zip"
+          unzip -t "artifacts/azahar-${VERSION}-macos-universal.zip"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: azahar-${{ env.VERSION }}-macos
+          path: artifacts/azahar-*.zip
+          if-no-files-found: error
 
-          gh release create $env:VERSION --target $env:GITHUB_SHA --title $title --notes-file docs/yw-fork-install.md --prerelease
-          gh release upload $env:VERSION "artifacts/azahar-$env:VERSION-windows-msys2.zip" "artifacts/azahar-$env:VERSION-windows-msys2-installer.exe" --clobber
+  android-vanilla:
+    needs: prepare
+    runs-on: ubuntu-latest
+    env:
+      OS: android
+      TARGET: vanilla
+      VERSION: ${{ needs.prepare.outputs.version }}
+      GIT_TAG_NAME: ${{ needs.prepare.outputs.version }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: recursive
+      - name: Verify release signing configuration
+        shell: bash
+        env:
+          ANDROID_KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEYSTORE_PASS: ${{ secrets.ANDROID_KEYSTORE_PASS }}
+        run: |
+          if [[ -z "$ANDROID_KEYSTORE_B64" || -z "$ANDROID_KEY_ALIAS" || -z "$ANDROID_KEYSTORE_PASS" ]]; then
+            echo "::error::ANDROID_KEYSTORE_B64, ANDROID_KEY_ALIAS and ANDROID_KEYSTORE_PASS must all be set. Refusing to release a debug-key-signed APK."
+            exit 1
+          fi
+      - name: Install tools
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install ccache apksigner -y
+      - name: Update Android SDK CMake version
+        run: |
+          echo "y" | "${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/sdkmanager" "cmake;3.30.3"
+      - name: Build signed vanilla Android APK
+        env:
+          ANDROID_KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEYSTORE_PASS: ${{ secrets.ANDROID_KEYSTORE_PASS }}
+        run: JAVA_HOME="$JAVA_HOME_17_X64" ./.ci/android.sh
+      - name: Pack Android APK
+        working-directory: src/android/app
+        env:
+          UNPACKED: "1"
+        run: ../../../.ci/pack.sh
+      - name: Normalize APK and verify signature
+        working-directory: src/android/app
+        shell: bash
+        run: |
+          mapfile -t apks < <(find artifacts -maxdepth 1 -type f -name '*.apk')
+          if (( ${#apks[@]} != 1 )); then
+            echo "::error::Expected exactly one vanilla release APK; found ${#apks[@]}."
+            exit 1
+          fi
+          mv "${apks[0]}" "artifacts/azahar-${VERSION}-android-vanilla.apk"
+          apksigner verify --verbose "artifacts/azahar-${VERSION}-android-vanilla.apk"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: azahar-${{ env.VERSION }}-android
+          path: src/android/app/artifacts/azahar-*.apk
+          if-no-files-found: error
+
+  verify-assets:
+    needs: [prepare, windows-msys2, macos-universal, android-vanilla]
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/download-artifact@v7
+        with:
+          pattern: azahar-${{ env.VERSION }}-*
+          merge-multiple: true
+          path: release-assets
+      - name: Validate payload and compute checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          for asset in \
+            "azahar-${VERSION}-windows-msys2-installer.exe" \
+            "azahar-${VERSION}-windows-msys2.zip" \
+            "azahar-${VERSION}-macos-universal.zip" \
+            "azahar-${VERSION}-android-vanilla.apk"; do
+            test -s "release-assets/${asset}" || { echo "::error::Missing ${asset}"; exit 1; }
+          done
+          test -s "docs/releases/${VERSION}.md" || { echo "::error::Missing release notes"; exit 1; }
+          (cd release-assets && sha256sum *.exe *.zip *.apk > SHA256SUMS.txt)
+          cat release-assets/SHA256SUMS.txt
+      - uses: actions/upload-artifact@v7
+        with:
+          name: azahar-${{ env.VERSION }}-verified-release-payload
+          path: release-assets/*
+          if-no-files-found: error
+
+  publish:
+    if: ${{ github.event_name == 'push' || inputs.dry_run == false }}
+    needs: [prepare, verify-assets]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/download-artifact@v7
+        with:
+          name: azahar-${{ env.VERSION }}-verified-release-payload
+          path: release-assets
+      - name: Create/update GitHub prerelease
+        shell: bash
+        run: |
+          set -euo pipefail
+          title="Azahar YW Compatibility Fork ${VERSION#yw-}"
+          if ! gh release view "$VERSION" >/dev/null 2>&1; then
+            gh release create "$VERSION" --target "$GITHUB_SHA" \
+              --title "$title" --notes-file "docs/releases/${VERSION}.md" \
+              --prerelease
+          fi
+          gh release upload "$VERSION" release-assets/* --clobber
