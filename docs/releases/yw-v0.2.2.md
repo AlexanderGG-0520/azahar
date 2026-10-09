@@ -18,7 +18,7 @@
 
 **確認済み:** Linux版（開発者環境）で『妖怪ウォッチ2』とLLE HOMEメニュー間の往復を繰り返しても、映像・入力・音声は正常でした。grace状態管理のローカル自動テスト3件はすべて成功しました。
 
-**未確認:** 新しいセマフォgraceの「消費」ログはこの安定動作テストでは発生しておらず、PR #20自体がフリーズを防止したとの因果関係は未確定です。Windows・macOS・Android上での同じゲームのHOME移行・復帰動作も未検証です。各OSのビルド成功は、そのOSでのゲーム動作を保証しません。
+**未確認:** 新しいセマフォgraceの「消費」ログはこの安定動作テストでは発生しておらず、PR #20自体がフリーズを防止したとの因果関係は未確定です。Windows・macOS上での同じゲームのHOME移行・復帰動作も未検証です。各OSのビルド成功は、そのOSでのゲーム動作を保証しません。
 
 ## ダウンロード
 
@@ -27,7 +27,7 @@
 | Windows | `azahar-yw-v0.2.2-windows-msys2-installer.exe` | インストーラー |
 | Windows | `azahar-yw-v0.2.2-windows-msys2.zip` | ポータブル版 |
 | macOS | `azahar-yw-v0.2.2-macos-universal.zip` | Apple Silicon / Intel両対応のUniversalアプリ |
-| Android | `azahar-yw-v0.2.2-android-vanilla.apk` | 直接インストール用のリリース署名APK |
+| Android | 配布なし | 当面APKのビルド・署名・配布を見送ります |
 | Linux | ソースコード | 各ディストリビューションでローカルビルド |
 
 ダウンロードしたファイルは `SHA256SUMS.txt` のSHA-256ハッシュで検証できます。
@@ -36,7 +36,7 @@
 
 - **Windows:** ZIPは任意のフォルダーに展開し、`azahar.exe`を起動してください。インストーラー利用時も既存データをバックアップしてください。
 - **macOS:** Universalアプリはアドホック署名であり、**Apple Developer IDによる署名・公証（notarization）は行っていません**。macOSのGatekeeperによる制限が発生する場合があります。macOS上での実ゲーム動作も未検証です。
-- **Android:** リリースAPKはGitHub Actionsに設定した配布用署名鍵で署名されます。署名鍵が変わると同一パッケージの更新インストールができません。公式Azaharと同じパッケージ名の可能性があるため、異なる署名鍵の既存インストールとの上書き更新は保証しません。Google Play版の配布ではありません。
+- **Android:** 本リリースではAPKをビルド・配布しません。署名鍵を用意してから今後のリリースで再検討します。
 - **Linux:** このリリースではビルド済みLinuxバイナリを添付しません。
 
 ## Linuxソースビルド
@@ -68,8 +68,8 @@ OS、ゲーム名・版、実行手順、ビルドのコミット、機密情報
 
 **Azahar YW Compatibility Fork v0.2.2** is an unofficial **prerelease**. It adds an experimental, process- and thread-scoped one-shot DSP semaphore teardown grace ([PR #20](https://github.com/AlexanderGG-0520/azahar/pull/20)) on top of the DSP audio IRQ grace from [PR #17](https://github.com/AlexanderGG-0520/azahar/pull/17).
 
-Linux local tests of repeated Japanese HOME ↔ Yo-kai Watch 2 transitions reported normal video, input, and audio, and three targeted Catch2 tests passed. The new semaphore grace's actual consume path was **not** observed, so the causal explanation for the improved stability remains unproven. In-game compatibility on Windows, macOS, and Android is not yet verified.
+Linux local tests of repeated Japanese HOME ↔ Yo-kai Watch 2 transitions reported normal video, input, and audio, and three targeted Catch2 tests passed. The new semaphore grace's actual consume path was **not** observed, so the causal explanation for the improved stability remains unproven. In-game compatibility on Windows and macOS is not yet verified; Android is not included in this release.
 
-Release assets: Windows installer and portable ZIP, macOS universal ZIP (ad-hoc-signed, **not notarized**), signed Android vanilla APK, and checksums. Linux users can build from the source tag. No copyrighted Nintendo software or game data is included.
+Release assets: Windows installer and portable ZIP, macOS universal ZIP (ad-hoc-signed, **not notarized**), and checksums. Android APK distribution is deferred. Linux users can build from the source tag. No copyrighted Nintendo software or game data is included.
 
 Maintained by [AlexanderGG](https://github.com/AlexanderGG-0520), based on [Azahar](https://github.com/azahar-emu/azahar) and [utosa123's changes](https://github.com/utosa123/azahar). See `license.txt` for licensing.
