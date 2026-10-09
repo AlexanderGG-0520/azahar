@@ -270,10 +270,11 @@ void DSP_DSP::RegisterInterruptEvents(Kernel::HLERequestContext& ctx) {
         auto& registered_event = GetInterruptEvent(type, pipe);
         if (type == InterruptType::Pipe && pipe == DspPipe::Audio && registered_event) {
             const u32 event_id = registered_event->GetObjectId();
+            const s64 current_ticks = system.CoreTiming().GetGlobalTicks();
             u32 eligible_threads = 0;
             for (u32 core_id = 0; core_id < system.GetNumCores(); ++core_id) {
                 for (const auto& thread : system.Kernel().GetThreadManager(core_id).GetThreadList()) {
-                    if (thread->RetireDspAudioIrqWait(event_id)) {
+                    if (thread->RetireDspAudioIrqWait(event_id, current_ticks)) {
                         ++eligible_threads;
                     }
                 }
