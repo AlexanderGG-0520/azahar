@@ -72,6 +72,29 @@ cp "$log" ~/azahar/azahar-alpha/user/log/azahar_dsp_sem_grace_experiment.txt
 rg -n 'DSP-SEM-GRACE|DSP-IRQ-GRACE|JumpToHomeMenu|LeaveHomeMenu|INVALID HANDLE SVC|Fatal error' "$log" | tail -n 100
 ```
 
+## Automated regression tests
+
+`src/tests/core/hle/kernel/dsp_semaphore_signal_grace.cpp` covers the
+process-scoped guard without relying on an intermittent HOME timing race:
+
+- Same original signaler can consume the token exactly once.
+- Wrong thread cannot consume the token or steal it from the original signaler.
+- The deadline is inclusive and an expired token is rejected.
+- A future token is not accepted before the close timestamp.
+- New successful semaphore signaling invalidates an old grace token.
+- A token is not armed without a prior signal, for the wrong object, or
+  when the closer is the signaler.
+- Closing twice without a new signal cannot rearm the token.
+- Tokens cannot cross guest process boundaries.
+
+These tests prove the token bookkeeping conditions; they do **not** prove
+the game invokes the `SignalEvent(0)` consumption path during real HOME
+transitions, nor prove that the later video/audio freeze is fixed.
+
+Run with `cmake --build build --target tests --parallel 6` followed by
+`ctest --test-dir build --output-on-failure` (for builds configured
+with `ENABLE_TESTS`; verify that CMake enabled the test target).
+
 ## Acceptance criteria
 
 - Repeated HOME->YW2 and YW2->HOME cycles with video, input and audio
