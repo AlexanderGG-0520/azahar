@@ -297,6 +297,10 @@ void DSP_DSP::GetSemaphoreEventHandle(Kernel::HLERequestContext& ctx) {
     rb.Push(ResultSuccess);
     rb.PushCopyObjects(semaphore_event);
 
+    // Diagnostic only: associate the DSP semaphore object with the next
+    // CloseHandle/SignalEvent failure during HOME transitions.
+    LOG_INFO(Service_DSP, "[DSP-SEM-RACE] GetSemaphoreEventHandle object_id={} ticks={}",
+             semaphore_event->GetObjectId(), system.CoreTiming().GetGlobalTicks());
     LOG_WARNING(Service_DSP, "(STUBBED) called");
 }
 
