@@ -735,6 +735,19 @@ Result SVC::CloseHandle(Handle handle) {
                  GetReg(15), handle, object != nullptr,
                  object ? object->GetTypeName() : "<invalid>",
                  object ? object->GetName() : "<invalid>");
+        // Diagnostic only: the guest NDSP sleep callback closes the DSP semaphore
+        // while another guest thread may still try to signal it. Do not change
+        // handle validity or SVC results here.
+        if (object && object->GetHandleType() == HandleType::Event &&
+            object->GetName() == "DSP_DSP::semaphore_event") {
+            const auto* current_thread = kernel.GetCurrentThreadManager().GetCurrentThread();
+            LOG_WARNING(Kernel_SVC,
+                        "[DSP-SEM-RACE] Close DSP semaphore: pid={} thread={} pc=0x{:08X} "
+                        "handle=0x{:08X} object_id={} ticks={}",
+                        process->process_id, current_thread ? current_thread->thread_id : 0,
+                        GetReg(15), handle, object->GetObjectId(),
+                        system.CoreTiming().GetGlobalTicks());
+        }
     }
 
     LOG_TRACE(Kernel_SVC, "Closing handle 0x{:08X}", handle);
@@ -1651,7 +1664,19 @@ Result SVC::DuplicateHandle(Handle* out, Handle handle) {
 Result SVC::SignalEvent(Handle handle) {
     LOG_TRACE(Kernel_SVC, "called event=0x{:08X}", handle);
 
-    std::shared_ptr<Event> evt = kernel.GetCurrentProcess()->handle_table.Get<Event>(handle);
+    const auto process = kernel.GetCurrentProcess();
+    std::shared_ptr<Event> evt = process->handle_table.Get<Event>(handle);
+    // Record only the suspected YW2 zero-handle path. This does not claim the
+    // handle was a DSP semaphore; correlate with the close and handout logs.
+    if (!evt && handle == 0 && process->codeset &&
+        IsYoKaiWatch2Title(process->codeset->program_id)) {
+        const auto* current_thread = kernel.GetCurrentThreadManager().GetCurrentThread();
+        LOG_WARNING(Kernel_SVC,
+                    "[DSP-SEM-RACE] Invalid zero-handle SignalEvent: pid={} thread={} "
+                    "pc=0x{:08X} handle=0x{:08X} ticks={} -> ResultInvalidHandle",
+                    process->process_id, current_thread ? current_thread->thread_id : 0,
+                    GetReg(15), handle, system.CoreTiming().GetGlobalTicks());
+    }
     R_UNLESS(evt, ResultInvalidHandle);
 
     evt->Signal();
