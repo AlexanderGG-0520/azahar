@@ -12,7 +12,7 @@ This fork includes an **experimental, limited** save-close repair:
   verifies the edited save before replacement.
 - If the internal saved calendar day is later than the emulated calendar day,
   rewrites its timestamp to the current emulated local date/time.
-- Keeps the first original file as `game1.yw.before-yw2-datefix.bak`.
+- Keeps the first original file as `../game1.yw.before-yw2-datefix.bak`,\n  outside the emulated save archive.
 - If the backup or atomic replacement fails, leaves the existing save alone.
 
 **Important limitations:** The game may cache the date in memory until restarted.

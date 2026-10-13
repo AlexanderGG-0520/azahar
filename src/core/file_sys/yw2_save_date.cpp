@@ -166,10 +166,10 @@ bool EncryptSave(const std::vector<u8>& original, std::vector<u8>& plain,
 bool EmulatedLocalTime(std::tm& result) {
     // Use the same clock exposed to the guest, including offset/fixed-clock modes
     // and emulated elapsed time. The host wall clock can differ while paused.
-    const u64 elapsed_ms = Core::System::GetInstance()
-                               .Kernel()
-                               .GetSharedPageHandler()
-                               .GetSystemTimeSince2000();
+    auto& system = Core::System::GetInstance();
+    if (!system.KernelRunning())
+        return false;
+    const u64 elapsed_ms = system.Kernel().GetSharedPageHandler().GetSystemTimeSince2000();
     std::tm epoch{};
     epoch.tm_mday = 1;
     epoch.tm_year = 100; // 2000-01-01, local 3DS epoch
@@ -239,7 +239,9 @@ bool NormalizeYw2ShinuchiSaveDate(const std::string& filename) {
         return false;
 
     // Preserve one original backup and never replace it with a subsequently modified save.
-    const std::filesystem::path backup = filename + ".before-yw2-datefix.bak";
+    // Back up outside the emulated archive root so the game never sees this file.
+    const std::filesystem::path backup =
+        path.parent_path().parent_path() / "game1.yw.before-yw2-datefix.bak";
     std::error_code error;
     const bool backup_exists = std::filesystem::exists(backup, error);
     if (error)
