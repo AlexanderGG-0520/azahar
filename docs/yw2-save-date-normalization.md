@@ -16,7 +16,7 @@ This fork includes an **experimental, limited** save-close repair:
 - If the backup or atomic replacement fails, leaves the existing save alone.
 
 **Important limitations:** The game may cache the date in memory until restarted.
-This patch does not operate on fixed-clock mode, other regions, `head.yw`,
+This patch does not operate on other regions, `head.yw`,
 Ganso/Honke version 2.x, or remote Artic save storage. A savestate restored while
 a save handle is open does not retain this experimental post-close hook.
 Keep a separate backup of the whole save directory before using this feature.

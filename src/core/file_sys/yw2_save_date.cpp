@@ -4,8 +4,8 @@
 
 #include "core/file_sys/yw2_save_date.h"
 
+#include <algorithm>
 #include <array>
-#include <chrono>
 #include <cstdint>
 #include <ctime>
 #include <filesystem>
@@ -19,7 +19,9 @@
 #include <cryptopp/ccm.h>
 #include <cryptopp/filters.h>
 #include "common/logging/log.h"
-#include "common/settings.h"
+#include "core/core.h"
+#include "core/hle/kernel/kernel.h"
+#include "core/hle/kernel/shared_page.h"
 
 namespace FileSys {
 namespace {
@@ -162,13 +164,21 @@ bool EncryptSave(const std::vector<u8>& original, std::vector<u8>& plain,
 }
 
 bool EmulatedLocalTime(std::tm& result) {
-    if (Settings::values.init_clock.GetValue() != Settings::InitClock::SystemTime)
+    // Use the same clock exposed to the guest, including offset/fixed-clock modes
+    // and emulated elapsed time. The host wall clock can differ while paused.
+    const u64 elapsed_ms = Core::System::GetInstance()
+                               .Kernel()
+                               .GetSharedPageHandler()
+                               .GetSystemTimeSince2000();
+    std::tm epoch{};
+    epoch.tm_mday = 1;
+    epoch.tm_year = 100; // 2000-01-01, local 3DS epoch
+    epoch.tm_isdst = 0;
+    const std::time_t start = std::mktime(&epoch);
+    if (start == static_cast<std::time_t>(-1))
         return false;
-
-    const auto now = std::chrono::system_clock::now() +
-                     std::chrono::seconds(Settings::values.init_time_offset.GetValue());
-    const std::time_t seconds = std::chrono::system_clock::to_time_t(now);
-    const std::tm* local = std::localtime(&seconds);
+    const std::time_t emulated_time = start + static_cast<std::time_t>(elapsed_ms / 1000);
+    const std::tm* local = std::localtime(&emulated_time);
     if (!local)
         return false;
     result = *local;
@@ -231,7 +241,10 @@ bool NormalizeYw2ShinuchiSaveDate(const std::string& filename) {
     // Preserve one original backup and never replace it with a subsequently modified save.
     const std::filesystem::path backup = filename + ".before-yw2-datefix.bak";
     std::error_code error;
-    if (!std::filesystem::exists(backup)) {
+    const bool backup_exists = std::filesystem::exists(backup, error);
+    if (error)
+        return false;
+    if (!backup_exists) {
         std::filesystem::copy_file(path, backup, std::filesystem::copy_options::none, error);
         if (error) {
             LOG_WARNING(Service_FS, "YW2 save-date normalization skipped: backup failed");
