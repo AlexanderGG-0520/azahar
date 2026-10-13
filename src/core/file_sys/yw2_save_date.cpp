@@ -229,13 +229,15 @@ bool NormalizeYw2ShinuchiSaveDate(const std::string& filename) {
     plain[kDateOffset + 5] = static_cast<u8>(now.tm_min);
     plain[kDateOffset + 6] = static_cast<u8>(now.tm_sec);
 
+    const std::vector<u8> expected_plain = plain;
     std::vector<u8> updated;
     if (!EncryptSave(encrypted, plain, updated))
         return false;
 
     // Refuse to overwrite the save unless the newly encrypted file authenticates.
     std::vector<u8> verification;
-    if (!DecryptSave(updated, verification))
+    if (!DecryptSave(updated, verification) ||
+        !std::equal(expected_plain.begin(), expected_plain.end() - 8, verification.begin()))
         return false;
 
     // Preserve one original backup and never replace it with a subsequently modified save.
@@ -259,7 +261,8 @@ bool NormalizeYw2ShinuchiSaveDate(const std::string& filename) {
         std::ofstream output(temporary, std::ios::binary | std::ios::trunc);
         if (!output)
             return false;
-        output.write(reinterpret_cast<const char*>(updated.data()), updated.size());
+        output.write(reinterpret_cast<const char*>(updated.data()),
+                     static_cast<std::streamsize>(updated.size()));
         output.flush();
         if (!output.good())
             return false;
