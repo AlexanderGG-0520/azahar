@@ -2,6 +2,7 @@
 // Licensed under GPLv2 or any later version
 // Refer to the license.txt file included.
 
+#include <string_view>
 #include "common/archives.h"
 #include "common/file_util.h"
 #include "core/file_sys/disk_archive.h"
@@ -91,7 +92,15 @@ ResultVal<std::unique_ptr<FileBackend>> SaveDataArchive::OpenFile(const Path& pa
     }
 
     std::unique_ptr<DelayGenerator> delay_generator = std::make_unique<SaveDataDelayGenerator>();
-    return std::make_unique<DiskFile>(std::move(file), mode, std::move(delay_generator));
+    // Restrict this experimental workaround to Japanese Shinuchi's main save file.
+    std::string yw2_save_path;
+    constexpr std::string_view shinuchi_title = "/00040000/00155100/data/00000001/";
+    if (mode.write_flag && mount_point.find(shinuchi_title) != std::string::npos &&
+        full_path.substr(full_path.find_last_of("/\\") + 1) == "game1.yw") {
+        yw2_save_path = full_path;
+    }
+    return std::make_unique<DiskFile>(std::move(file), mode, std::move(delay_generator),
+                                      std::move(yw2_save_path));
 }
 
 Result SaveDataArchive::DeleteFile(const Path& path) const {
