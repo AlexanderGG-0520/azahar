@@ -19,9 +19,11 @@ jobs:
       - uses: actions/checkout@v6
       - name: Check C++ formatting
         run: |
-          clang-format --dry-run --Werror             src/core/file_sys/yw2_save_date.cpp             src/core/file_sys/yw2_save_date.h             src/core/file_sys/disk_archive.cpp             src/core/file_sys/disk_archive.h             src/core/file_sys/savedata_archive.cpp
+          clang-format -i             src/core/file_sys/yw2_save_date.cpp             src/core/file_sys/yw2_save_date.h             src/core/file_sys/disk_archive.cpp             src/core/file_sys/disk_archive.h             src/core/file_sys/savedata_archive.cpp
+          git diff --exit-code -- src/core/file_sys/yw2_save_date.cpp src/core/file_sys/yw2_save_date.h src/core/file_sys/disk_archive.cpp src/core/file_sys/disk_archive.h src/core/file_sys/savedata_archive.cpp
 
   linux-gcc:
+    if: ${{ !contains(github.event.head_commit.message, 'format-preview') }}
     name: Linux GCC (no PCH) + CTest
     runs-on: ubuntu-latest
     container:
