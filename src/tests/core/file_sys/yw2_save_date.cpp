@@ -39,16 +39,15 @@ constexpr Key kStaticKey{'5', '+', 'N', 'I', '8', 'W', 'V', 'q',
 // Only non-player cryptographic test vectors are retained.
 constexpr std::array<std::uint32_t, 2> kHeadSeeds{0xC66D84D0, 0xCBCA248F};
 constexpr std::array<Key, 2> kDerivedKeys{{
-    {0xDA, 0x26, 0x9E, 0x60, 0x81, 0x2B, 0xBF, 0x21,
-     0x5C, 0x0E, 0xFE, 0xBB, 0xEC, 0x95, 0x94, 0xA0},
-    {0x4A, 0xE2, 0x2D, 0x28, 0xC8, 0x53, 0x13, 0x04,
-     0xF8, 0xA7, 0xA1, 0x9C, 0x3B, 0x9D, 0x2E, 0xC8},
+    {0xDA, 0x26, 0x9E, 0x60, 0x81, 0x2B, 0xBF, 0x21, 0x5C, 0x0E, 0xFE, 0xBB, 0xEC, 0x95, 0x94,
+     0xA0},
+    {0x4A, 0xE2, 0x2D, 0x28, 0xC8, 0x53, 0x13, 0x04, 0xF8, 0xA7, 0xA1, 0x9C, 0x3B, 0x9D, 0x2E,
+     0xC8},
 }};
 
 std::uint32_t GetU32(const std::uint8_t* p) {
     return static_cast<std::uint32_t>(p[0]) | (static_cast<std::uint32_t>(p[1]) << 8) |
-           (static_cast<std::uint32_t>(p[2]) << 16) |
-           (static_cast<std::uint32_t>(p[3]) << 24);
+           (static_cast<std::uint32_t>(p[2]) << 16) | (static_cast<std::uint32_t>(p[3]) << 24);
 }
 
 void PutU32(std::uint8_t* p, std::uint32_t x) {
@@ -249,8 +248,7 @@ void CheckPreservesOtherBytes(const Bytes& original, const Bytes& updated, const
 
 } // namespace
 
-TEST_CASE("YW2 real-head-derived key vectors and future-date correction",
-          "[core][file_sys][yw2]") {
+TEST_CASE("YW2 real-head-derived key vectors and future-date correction", "[core][file_sys][yw2]") {
     const std::array<std::string, 2> title_ids{"0012f900", "0012f800"};
     for (std::size_t i = 0; i < kHeadSeeds.size(); ++i) {
         DYNAMIC_SECTION("v2.x title " << title_ids[i] << " head vector " << i) {
@@ -276,8 +274,8 @@ TEST_CASE("YW2 fixed-key save date normalization", "[core][file_sys][yw2]") {
         DYNAMIC_SECTION("title " << title) {
             TempSave fixture(title);
             const bool shinuchi = std::string(title) == "00155100";
-            const Bytes original =
-                SampleGame(shinuchi ? kShinuchiSize : kGansoHonkeSize, shinuchi ? 4 : 2, kStaticKey);
+            const Bytes original = SampleGame(shinuchi ? kShinuchiSize : kGansoHonkeSize,
+                                              shinuchi ? 4 : 2, kStaticKey);
             WriteFile(fixture.save, original);
             REQUIRE(NormalizeYw2SaveDateAt(fixture.save.string(), PresentClock()));
             CheckPreservesOtherBytes(original, ReadFile(fixture.save), kStaticKey);
