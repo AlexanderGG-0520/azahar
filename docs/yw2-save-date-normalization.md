@@ -58,3 +58,23 @@ at the fork owner's request. Independent human review, compilation, and
 real-game tests are required before merging or releasing. The implementation
 adapts the original `yw_save` MIT-licensed obfuscation/key-derivation ideas,
 with the original attribution retained in the C++ source.
+
+
+## Automated regression tests
+
+`src/tests/core/file_sys/yw2_save_date.cpp` runs inside the existing Catch2/CTest
+suite. All executable test fixtures are synthetic and contain **no user save
+data**. Fixture dimensions, version markers, day offset, and the two
+independently checked v2.x head-key seed/expected-key pairs were derived
+from two authenticated user-provided saves (70,980-byte `game1.yw`,
+21,812-byte `head.yw`).
+
+The tests cover Ganso and Honke v2.x with two independent head-derived keys,
+Ganso/Honke v1.x fixed-key compatibility, Shinuchi, future-to-present rewrite,
+unmodified gameplay bytes, idempotent/no-op same-day saves, authentication
+failure, and absent `head.yw`. They test the **production**
+`NormalizeYw2SaveDateAt` routine with a fixed emulated time.
+
+The actual uploaded saves were only inspected privately and are not tracked
+in Git. Passing these tests does not prove that all YW2 gameplay daily-reset
+state has been fixed; a follow-up emulator-level test is still needed.

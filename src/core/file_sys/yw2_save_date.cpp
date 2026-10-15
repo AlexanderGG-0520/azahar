@@ -237,11 +237,7 @@ bool EmulatedLocalTime(std::tm& result) {
 
 } // namespace
 
-bool NormalizeYw2SaveDate(const std::string& filename) {
-    std::tm now{};
-    if (!EmulatedLocalTime(now))
-        return false;
-
+bool NormalizeYw2SaveDateAt(const std::string& filename, const std::tm& now) {
     const std::filesystem::path path(filename);
     std::ifstream input(path, std::ios::binary);
     if (!input)
@@ -346,6 +342,11 @@ bool NormalizeYw2SaveDate(const std::string& filename) {
     }
     LOG_INFO(Service_FS, "Normalized future timestamp in YW2 save {}", path.filename().string());
     return true;
+}
+
+bool NormalizeYw2SaveDate(const std::string& filename) {
+    std::tm now{};
+    return EmulatedLocalTime(now) && NormalizeYw2SaveDateAt(filename, now);
 }
 
 } // namespace FileSys
