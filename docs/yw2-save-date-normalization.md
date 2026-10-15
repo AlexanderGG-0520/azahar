@@ -26,6 +26,8 @@ save. The first original is backed up to the parent `data/` directory, outside
 the emulated `00000001/` archive, as
 `gameN.yw.before-yw2-datefix.bak`.
 
+The temporary file is also kept outside the emulated archive.
+
 If any format/authentication/backup/write check fails, the existing save stays
 untouched. This does not alter game executable code or any other title.
 

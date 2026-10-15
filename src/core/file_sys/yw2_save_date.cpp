@@ -330,7 +330,9 @@ bool NormalizeYw2SaveDate(const std::string& filename) {
         }
     }
 
-    const std::filesystem::path temporary = filename + ".yw2-datefix.tmp";
+    // Keep the temporary file out of the emulated save archive as well.
+    const std::filesystem::path temporary =
+        path.parent_path().parent_path() / (path.filename().string() + ".yw2-datefix.tmp");
     {
         std::ofstream output(temporary, std::ios::binary | std::ios::trunc);
         if (!output)
