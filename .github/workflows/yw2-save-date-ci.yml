@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - fix/yw2-future-save-date-normalization
+      - integration/yw
 
 permissions:
   contents: read
@@ -40,3 +41,33 @@ jobs:
           submodules: recursive
       - name: Build and run existing tests
         run: ./.ci/linux.sh
+
+  linux-appimage:
+    name: Linux AppImage for gameplay verification
+    if: github.ref == 'refs/heads/integration/yw'
+    needs: [format, linux-gcc]
+    runs-on: ubuntu-latest
+    container:
+      image: opensauce04/azahar-build-environment:latest
+      options: -u 1001
+    env:
+      OS: linux
+      TARGET: appimage
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_COMPILERCHECK: content
+      CCACHE_SLOPPINESS: time_macros
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: recursive
+      - name: Build Linux AppImage and run CTest
+        run: ./.ci/linux.sh
+      - name: Collect AppImage
+        run: |
+          mkdir -p artifacts
+          mv build/bundle/*.AppImage artifacts/
+      - uses: actions/upload-artifact@v7
+        with:
+          name: azahar-yw2-datefix-linux-appimage
+          path: artifacts/*.AppImage
+          if-no-files-found: error
