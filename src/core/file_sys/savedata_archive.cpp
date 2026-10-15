@@ -92,11 +92,20 @@ ResultVal<std::unique_ptr<FileBackend>> SaveDataArchive::OpenFile(const Path& pa
     }
 
     std::unique_ptr<DelayGenerator> delay_generator = std::make_unique<SaveDataDelayGenerator>();
-    // Restrict this experimental workaround to Japanese Shinuchi's main save file.
+    // Only observe main save slots for the three Japanese Yo-kai Watch 2 releases.
     std::string yw2_save_path;
-    constexpr std::string_view shinuchi_title = "/00040000/00155100/data/00000001/";
-    if (mode.write_flag && mount_point.find(shinuchi_title) != std::string::npos &&
-        full_path.substr(full_path.find_last_of("/\\") + 1) == "game1.yw") {
+    constexpr std::string_view titles[] = {
+        "/00040000/0012f900/data/00000001/", // Ganso
+        "/00040000/0012f800/data/00000001/", // Honke
+        "/00040000/00155100/data/00000001/", // Shinuchi
+    };
+    const std::string filename = full_path.substr(full_path.find_last_of("/\\") + 1);
+    const bool is_save = filename == "game1.yw" || filename == "game2.yw" ||
+                         filename == "game3.yw";
+    if (mode.write_flag && is_save &&
+        std::any_of(std::begin(titles), std::end(titles), [&](std::string_view title) {
+            return mount_point.find(title) != std::string::npos;
+        })) {
         yw2_save_path = full_path;
     }
     return std::make_unique<DiskFile>(std::move(file), mode, std::move(delay_generator),

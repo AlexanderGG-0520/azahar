@@ -53,7 +53,7 @@ bool DiskFile::SetSize(const u64 size) const {
 bool DiskFile::Close() {
     const bool closed = file->Close();
     if (closed && !yw2_save_path.empty()) {
-        NormalizeYw2ShinuchiSaveDate(yw2_save_path);
+        NormalizeYw2SaveDate(yw2_save_path);
     }
     return closed;
 }

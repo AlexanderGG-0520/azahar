@@ -50,10 +50,20 @@ namespace {
 constexpr std::size_t kHeaderSize = 0x20;
 constexpr std::size_t kNonceSize = 12;
 constexpr std::size_t kTagSize = 16;
-constexpr std::size_t kDateOffset = 0x70 - kHeaderSize;
+constexpr std::size_t kDateOffset = 0x70;
+constexpr std::size_t kVersionOffset = 0x10;
+constexpr std::size_t kMinimumSaveSize = 0x2000;
+constexpr std::size_t kMaximumSaveSize = 0x20000;
 constexpr std::size_t kShinuchiSaveSize = 71048;
 // Japanese Shinuchi game1.yw key, not a 3DS hardware key.
 constexpr char kShinuchiKey[] = "5+NI8WVq09V7LI5w";
+using SaveKey = std::array<u8, 16>;
+
+SaveKey StaticSaveKey() {
+    SaveKey key{};
+    std::copy_n(reinterpret_cast<const u8*>(kShinuchiKey), key.size(), key.begin());
+    return key;
+}
 
 u32 Read32(const u8* data) {
     return static_cast<u32>(data[0]) | (static_cast<u32>(data[1]) << 8) |
@@ -134,7 +144,29 @@ u32 Crc32(const std::vector<u8>& data) {
     return crc.checksum();
 }
 
-bool DecryptSave(const std::vector<u8>& input, std::vector<u8>& plain) {
+bool DeriveKeyFromHead(const std::filesystem::path& file, SaveKey& key) {
+    std::ifstream stream(file, std::ios::binary);
+    if (!stream)
+        return false;
+
+    std::vector<u8> head(std::istreambuf_iterator<char>{stream},
+                         std::istreambuf_iterator<char>{});
+    if (head.size() < 0x20 || head.size() > kMaximumSaveSize ||
+        Crc32(head) != Read32(head.data() + head.size() - 8))
+        return false;
+
+    ApplyYwCipher(head);
+    if (head[0] != 0xFE || head[1] != 0xFF)
+        return false;
+
+    Xorshift rng(Read32(head.data() + 0x0C));
+    for (u8& byte : key)
+        byte = static_cast<u8>(rng.Next(0x100));
+    return true;
+}
+
+bool DecryptSave(const std::vector<u8>& input, const SaveKey& key, u8 version,
+                 std::vector<u8>& plain) {
     try {
         const std::size_t body_size = input.size() - kHeaderSize;
         std::vector<u8> cipher(input.begin() + kHeaderSize, input.end());
@@ -142,8 +174,7 @@ bool DecryptSave(const std::vector<u8>& input, std::vector<u8>& plain) {
 
         plain.resize(body_size);
         CryptoPP::CCM<CryptoPP::AES, 16>::Decryption decryptor;
-        decryptor.SetKeyWithIV(reinterpret_cast<const u8*>(kShinuchiKey), 16, input.data(),
-                               kNonceSize);
+        decryptor.SetKeyWithIV(key.data(), key.size(), input.data(), kNonceSize);
         decryptor.SpecifyDataLengths(0, body_size, 0);
         CryptoPP::AuthenticatedDecryptionFilter filter(
             decryptor, new CryptoPP::ArraySink(plain.data(), plain.size()));
@@ -153,22 +184,22 @@ bool DecryptSave(const std::vector<u8>& input, std::vector<u8>& plain) {
             return false;
 
         ApplyYwCipher(plain);
-        return plain[0] == 0xFE && plain[1] == 0xFF;
+        return plain[0] == 0xFE && plain[1] == 0xFF &&
+               plain[kVersionOffset] == version;
     } catch (const CryptoPP::Exception&) {
         return false;
     }
 }
 
-bool EncryptSave(const std::vector<u8>& original, std::vector<u8>& plain,
-                 std::vector<u8>& output) {
+bool EncryptSave(const std::vector<u8>& original, const SaveKey& key,
+                 std::vector<u8>& plain, std::vector<u8>& output) {
     try {
         ApplyYwCipher(plain);
         Write32(plain.data() + plain.size() - 8, Crc32(plain));
 
         std::vector<u8> ciphertext(plain.size() + kTagSize);
         CryptoPP::CCM<CryptoPP::AES, 16>::Encryption encryptor;
-        encryptor.SetKeyWithIV(reinterpret_cast<const u8*>(kShinuchiKey), 16, original.data(),
-                               kNonceSize);
+        encryptor.SetKeyWithIV(key.data(), key.size(), original.data(), kNonceSize);
         encryptor.SpecifyDataLengths(0, plain.size(), 0);
         CryptoPP::ArraySource source(
             plain.data(), plain.size(), true,
@@ -208,7 +239,7 @@ bool EmulatedLocalTime(std::tm& result) {
 
 } // namespace
 
-bool NormalizeYw2ShinuchiSaveDate(const std::string& filename) {
+bool NormalizeYw2SaveDate(const std::string& filename) {
     std::tm now{};
     if (!EmulatedLocalTime(now))
         return false;
@@ -220,11 +251,33 @@ bool NormalizeYw2ShinuchiSaveDate(const std::string& filename) {
     std::vector<u8> encrypted(std::istreambuf_iterator<char>{input},
                               std::istreambuf_iterator<char>{});
     input.close();
-    if (encrypted.size() != kShinuchiSaveSize)
+    const std::string title_id =
+        path.parent_path().parent_path().parent_path().filename().string();
+    const bool shinuchi = title_id == "00155100";
+    const bool ganso_honke = title_id == "0012f900" || title_id == "0012f800";
+    if ((!shinuchi && !ganso_honke) || encrypted.size() < kMinimumSaveSize ||
+        encrypted.size() > kMaximumSaveSize ||
+        (shinuchi && encrypted.size() != kShinuchiSaveSize))
         return false;
 
+    const u8 expected_version = shinuchi ? 4 : 2;
     std::vector<u8> plain;
-    if (!DecryptSave(encrypted, plain)) {
+    SaveKey key = StaticSaveKey();
+    bool authenticated = false;
+
+    // Ganso/Honke v2.x derive the AES key from head.yw, while v1.x use
+    // the same static key as Shinuchi. Never edit an unauthenticated save.
+    if (ganso_honke) {
+        SaveKey derived{};
+        if (DeriveKeyFromHead(path.parent_path() / "head.yw", derived) &&
+            DecryptSave(encrypted, derived, expected_version, plain)) {
+            key = derived;
+            authenticated = true;
+        }
+    }
+    if (!authenticated)
+        authenticated = DecryptSave(encrypted, key, expected_version, plain);
+    if (!authenticated) {
         LOG_WARNING(Service_FS, "YW2 save-date normalization skipped: authentication failed");
         return false;
     }
@@ -252,19 +305,19 @@ bool NormalizeYw2ShinuchiSaveDate(const std::string& filename) {
 
     const std::vector<u8> expected_plain = plain;
     std::vector<u8> updated;
-    if (!EncryptSave(encrypted, plain, updated))
+    if (!EncryptSave(encrypted, key, plain, updated))
         return false;
 
     // Refuse to overwrite the save unless the newly encrypted file authenticates.
     std::vector<u8> verification;
-    if (!DecryptSave(updated, verification) ||
+    if (!DecryptSave(updated, key, expected_version, verification) ||
         !std::equal(expected_plain.begin(), expected_plain.end() - 8, verification.begin()))
         return false;
 
     // Preserve one original backup and never replace it with a subsequently modified save.
     // Back up outside the emulated archive root so the game never sees this file.
     const std::filesystem::path backup =
-        path.parent_path().parent_path() / "game1.yw.before-yw2-datefix.bak";
+        path.parent_path().parent_path() / (path.filename().string() + ".before-yw2-datefix.bak");
     std::error_code error;
     const bool backup_exists = std::filesystem::exists(backup, error);
     if (error)
@@ -294,7 +347,7 @@ bool NormalizeYw2ShinuchiSaveDate(const std::string& filename) {
         LOG_WARNING(Service_FS, "YW2 save-date normalization skipped: atomic replace failed");
         return false;
     }
-    LOG_INFO(Service_FS, "Normalized future timestamp in YW2 Shinuchi game1.yw");
+    LOG_INFO(Service_FS, "Normalized future timestamp in YW2 save {}", path.filename().string());
     return true;
 }
 
