@@ -4,6 +4,7 @@ add_executable(tests
     common/param_package.cpp
     core/core_timing.cpp
     core/file_sys/path_parser.cpp
+    core/file_sys/yw2_save_date.cpp
     core/hle/kernel/hle_ipc.cpp
     core/hle/kernel/dsp_semaphore_signal_grace.cpp
     core/memory/memory.cpp
@@ -31,7 +32,7 @@ if (BSD STREQUAL "NetBSD")
 endif()
 
 target_link_libraries(tests PRIVATE citra_common citra_core video_core audio_core)
-target_link_libraries(tests PRIVATE ${PLATFORM_LIBRARIES} catch2 nihstro-headers Threads::Threads)
+target_link_libraries(tests PRIVATE ${PLATFORM_LIBRARIES} catch2 cryptopp nihstro-headers Threads::Threads)
 
 if (ENABLE_LIBRETRO)
     target_link_libraries(tests PRIVATE $<TARGET_OBJECTS:citra_libretro_common>)

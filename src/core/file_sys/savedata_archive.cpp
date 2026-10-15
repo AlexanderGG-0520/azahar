@@ -2,6 +2,9 @@
 // Licensed under GPLv2 or any later version
 // Refer to the license.txt file included.
 
+#include <algorithm>
+#include <iterator>
+#include <string_view>
 #include "common/archives.h"
 #include "common/file_util.h"
 #include "core/file_sys/disk_archive.h"
@@ -91,7 +94,23 @@ ResultVal<std::unique_ptr<FileBackend>> SaveDataArchive::OpenFile(const Path& pa
     }
 
     std::unique_ptr<DelayGenerator> delay_generator = std::make_unique<SaveDataDelayGenerator>();
-    return std::make_unique<DiskFile>(std::move(file), mode, std::move(delay_generator));
+    // Only observe main save slots for the three Japanese Yo-kai Watch 2 releases.
+    std::string yw2_save_path;
+    constexpr std::string_view titles[] = {
+        "/00040000/0012f900/data/00000001/", // Ganso
+        "/00040000/0012f800/data/00000001/", // Honke
+        "/00040000/00155100/data/00000001/", // Shinuchi
+    };
+    const std::string filename = full_path.substr(full_path.find_last_of("/\\") + 1);
+    const bool is_save = filename == "game1.yw" || filename == "game2.yw" || filename == "game3.yw";
+    if (mode.write_flag && is_save &&
+        std::any_of(std::begin(titles), std::end(titles), [&](std::string_view title) {
+            return mount_point.find(title) != std::string::npos;
+        })) {
+        yw2_save_path = full_path;
+    }
+    return std::make_unique<DiskFile>(std::move(file), mode, std::move(delay_generator),
+                                      std::move(yw2_save_path));
 }
 
 Result SaveDataArchive::DeleteFile(const Path& path) const {

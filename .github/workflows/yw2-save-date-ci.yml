@@ -1,0 +1,73 @@
+name: YW2 Save Date CI
+
+on:
+  push:
+    branches:
+      - fix/yw2-future-save-date-normalization
+      - integration/yw
+
+permissions:
+  contents: read
+
+jobs:
+  format:
+    name: clang-format changed C++
+    runs-on: ubuntu-latest
+    container:
+      image: opensauce04/azahar-build-environment:latest
+      options: -u 1001
+    steps:
+      - uses: actions/checkout@v6
+      - name: Check C++ formatting
+        run: |
+          clang-format --dry-run --Werror             src/core/file_sys/yw2_save_date.cpp             src/core/file_sys/yw2_save_date.h             src/core/file_sys/disk_archive.cpp             src/core/file_sys/disk_archive.h             src/core/file_sys/savedata_archive.cpp \
+            src/tests/core/file_sys/yw2_save_date.cpp
+
+  linux-gcc:
+    name: Linux GCC (no PCH) + CTest
+    runs-on: ubuntu-latest
+    container:
+      image: opensauce04/azahar-build-environment:latest
+      options: -u 1001
+    env:
+      OS: linux
+      TARGET: gcc-nopch
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_COMPILERCHECK: content
+      CCACHE_SLOPPINESS: time_macros
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: recursive
+      - name: Build and run existing tests
+        run: ./.ci/linux.sh
+
+  linux-appimage:
+    name: Linux AppImage for gameplay verification
+    if: github.ref == 'refs/heads/integration/yw'
+    needs: [format, linux-gcc]
+    runs-on: ubuntu-latest
+    container:
+      image: opensauce04/azahar-build-environment:latest
+      options: -u 1001
+    env:
+      OS: linux
+      TARGET: appimage
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_COMPILERCHECK: content
+      CCACHE_SLOPPINESS: time_macros
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: recursive
+      - name: Build Linux AppImage and run CTest
+        run: ./.ci/linux.sh
+      - name: Collect AppImage
+        run: |
+          mkdir -p artifacts
+          mv build/bundle/*.AppImage artifacts/
+      - uses: actions/upload-artifact@v7
+        with:
+          name: azahar-yw2-datefix-linux-appimage
+          path: artifacts/*.AppImage
+          if-no-files-found: error

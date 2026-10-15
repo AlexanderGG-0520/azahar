@@ -12,6 +12,7 @@
 #include "common/string_util.h"
 #include "core/file_sys/disk_archive.h"
 #include "core/file_sys/errors.h"
+#include "core/file_sys/yw2_save_date.h"
 
 SERIALIZE_EXPORT_IMPL(FileSys::DiskFile)
 SERIALIZE_EXPORT_IMPL(FileSys::DiskDirectory)
@@ -50,7 +51,11 @@ bool DiskFile::SetSize(const u64 size) const {
 }
 
 bool DiskFile::Close() {
-    return file->Close();
+    const bool closed = file->Close();
+    if (closed && !yw2_save_path.empty()) {
+        NormalizeYw2SaveDate(yw2_save_path);
+    }
+    return closed;
 }
 
 DiskDirectory::DiskDirectory(const std::string& path) {
