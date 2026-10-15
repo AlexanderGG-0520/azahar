@@ -149,8 +149,7 @@ bool DeriveKeyFromHead(const std::filesystem::path& file, SaveKey& key) {
     if (!stream)
         return false;
 
-    std::vector<u8> head(std::istreambuf_iterator<char>{stream},
-                         std::istreambuf_iterator<char>{});
+    std::vector<u8> head(std::istreambuf_iterator<char>{stream}, std::istreambuf_iterator<char>{});
     if (head.size() < 0x20 || head.size() > kMaximumSaveSize ||
         Crc32(head) != Read32(head.data() + head.size() - 8))
         return false;
@@ -184,15 +183,14 @@ bool DecryptSave(const std::vector<u8>& input, const SaveKey& key, u8 version,
             return false;
 
         ApplyYwCipher(plain);
-        return plain[0] == 0xFE && plain[1] == 0xFF &&
-               plain[kVersionOffset] == version;
+        return plain[0] == 0xFE && plain[1] == 0xFF && plain[kVersionOffset] == version;
     } catch (const CryptoPP::Exception&) {
         return false;
     }
 }
 
-bool EncryptSave(const std::vector<u8>& original, const SaveKey& key,
-                 std::vector<u8>& plain, std::vector<u8>& output) {
+bool EncryptSave(const std::vector<u8>& original, const SaveKey& key, std::vector<u8>& plain,
+                 std::vector<u8>& output) {
     try {
         ApplyYwCipher(plain);
         Write32(plain.data() + plain.size() - 8, Crc32(plain));
@@ -251,13 +249,11 @@ bool NormalizeYw2SaveDate(const std::string& filename) {
     std::vector<u8> encrypted(std::istreambuf_iterator<char>{input},
                               std::istreambuf_iterator<char>{});
     input.close();
-    const std::string title_id =
-        path.parent_path().parent_path().parent_path().filename().string();
+    const std::string title_id = path.parent_path().parent_path().parent_path().filename().string();
     const bool shinuchi = title_id == "00155100";
     const bool ganso_honke = title_id == "0012f900" || title_id == "0012f800";
     if ((!shinuchi && !ganso_honke) || encrypted.size() < kMinimumSaveSize ||
-        encrypted.size() > kMaximumSaveSize ||
-        (shinuchi && encrypted.size() != kShinuchiSaveSize))
+        encrypted.size() > kMaximumSaveSize || (shinuchi && encrypted.size() != kShinuchiSaveSize))
         return false;
 
     const u8 expected_version = shinuchi ? 4 : 2;
@@ -289,8 +285,7 @@ bool NormalizeYw2SaveDate(const std::string& filename) {
         return false;
 
     const auto saved_date = std::tuple{saved_year, month, day};
-    const auto current_date =
-        std::tuple{now.tm_year + 1900, now.tm_mon + 1, now.tm_mday};
+    const auto current_date = std::tuple{now.tm_year + 1900, now.tm_mon + 1, now.tm_mday};
     if (saved_date <= current_date)
         return false;
 

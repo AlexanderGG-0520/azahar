@@ -102,8 +102,7 @@ ResultVal<std::unique_ptr<FileBackend>> SaveDataArchive::OpenFile(const Path& pa
         "/00040000/00155100/data/00000001/", // Shinuchi
     };
     const std::string filename = full_path.substr(full_path.find_last_of("/\\") + 1);
-    const bool is_save = filename == "game1.yw" || filename == "game2.yw" ||
-                         filename == "game3.yw";
+    const bool is_save = filename == "game1.yw" || filename == "game2.yw" || filename == "game3.yw";
     if (mode.write_flag && is_save &&
         std::any_of(std::begin(titles), std::end(titles), [&](std::string_view title) {
             return mount_point.find(title) != std::string::npos;

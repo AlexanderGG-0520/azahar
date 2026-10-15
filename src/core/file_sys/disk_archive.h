@@ -23,8 +23,7 @@ namespace FileSys {
 class DiskFile : public FileBackend {
 public:
     DiskFile(FileUtil::IOFile&& file_, const Mode& mode_,
-             std::unique_ptr<DelayGenerator> delay_generator_,
-             std::string yw2_save_path_ = {})
+             std::unique_ptr<DelayGenerator> delay_generator_, std::string yw2_save_path_ = {})
         : file(new FileUtil::IOFile(std::move(file_))), yw2_save_path(std::move(yw2_save_path_)) {
         delay_generator = std::move(delay_generator_);
         mode.hex = mode_.hex;
