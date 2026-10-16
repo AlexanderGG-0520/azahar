@@ -17,5 +17,7 @@ bool NormalizeYw2SaveDate(const std::string& filename);
 // Deterministic clock-injection seam for offline regression tests. Production callers use
 // NormalizeYw2SaveDate() and the emulated 3DS clock, not this overload.
 bool NormalizeYw2SaveDateAt(const std::string& filename, const std::tm& emulated_local_time);
+bool IsYw2ObservedSaveFile(const std::string& mount_point, const std::string& filename);
+void NormalizeYw2SaveDateOnCommit(const std::string& filename);
 
 } // namespace FileSys

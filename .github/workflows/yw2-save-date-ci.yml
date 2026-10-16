@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - fix/yw2-future-save-date-normalization
+      - fix/yw2-save-commit-observation
       - integration/yw
 
 permissions:
@@ -44,7 +45,7 @@ jobs:
 
   linux-appimage:
     name: Linux AppImage for gameplay verification
-    if: github.ref == 'refs/heads/integration/yw'
+    if: github.ref == 'refs/heads/integration/yw' || github.ref == 'refs/heads/fix/yw2-save-commit-observation'
     needs: [format, linux-gcc]
     runs-on: ubuntu-latest
     container:

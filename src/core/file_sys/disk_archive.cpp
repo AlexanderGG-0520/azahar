@@ -3,6 +3,7 @@
 // Refer to the license.txt file included.
 
 #include <algorithm>
+#include <filesystem>
 #include <iterator>
 #include <memory>
 #include "common/archives.h"
@@ -52,8 +53,13 @@ bool DiskFile::SetSize(const u64 size) const {
 
 bool DiskFile::Close() {
     const bool closed = file->Close();
-    if (closed && !yw2_save_path.empty()) {
-        NormalizeYw2SaveDate(yw2_save_path);
+    if (!yw2_save_path.empty()) {
+        if (closed) {
+            NormalizeYw2SaveDateOnCommit(yw2_save_path);
+        } else {
+            LOG_WARNING(Service_FS, "YW2 datefix skipped: save-file close failed for {}",
+                        std::filesystem::path(yw2_save_path).filename().string());
+        }
     }
     return closed;
 }

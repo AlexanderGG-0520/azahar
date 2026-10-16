@@ -19,6 +19,7 @@
 #include <cryptopp/aes.h>
 #include <cryptopp/ccm.h>
 #include <cryptopp/filters.h>
+#include "core/file_sys/savedata_archive.h"
 #include "core/file_sys/yw2_save_date.h"
 
 namespace FileSys {
@@ -312,3 +313,29 @@ TEST_CASE("YW2 corrupted or unrelated save is never overwritten", "[core][file_s
 }
 
 } // namespace FileSys
+
+TEST_CASE("YW2 save commit matching and staged-file rename", "[core][file_sys][yw2]") {
+    for (const auto& title : {"0012f900", "0012f800", "00155100"}) {
+        TempSave fixture(title);
+        const std::string archive_path = fixture.save.parent_path().string();
+        CHECK(IsYw2ObservedSaveFile(archive_path, "game1.yw"));
+        CHECK(IsYw2ObservedSaveFile(archive_path, "game2.yw"));
+        CHECK(IsYw2ObservedSaveFile(archive_path, "game3.yw"));
+        CHECK(IsYw2ObservedSaveFile(archive_path, "head.yw"));
+        CHECK_FALSE(IsYw2ObservedSaveFile(archive_path, "game1_2.yw"));
+        CHECK_FALSE(IsYw2ObservedSaveFile(archive_path, "game1.yw.tmp"));
+        CHECK_FALSE(IsYw2ObservedSaveFile(archive_path + "/subfolder", "game1.yw"));
+    }
+    TempSave different_title("00123456");
+    CHECK_FALSE(IsYw2ObservedSaveFile(different_title.save.parent_path().string(), "game1.yw"));
+
+    TempSave fixture("0012f800");
+    const auto temporary = fixture.save.parent_path() / "stage.tmp";
+    const Bytes original = SampleGame(kGansoHonkeSize, 2, kStaticKey);
+    WriteFile(temporary, original);
+    SaveDataArchive archive(fixture.save.parent_path().string());
+    REQUIRE(archive.RenameFile(Path("/stage.tmp"), Path("/game1.yw")) == ResultSuccess);
+    CHECK_FALSE(fs::exists(temporary));
+    CHECK(ReadFile(fixture.save) == original);
+    // The production wrapper skips safely when there is no emulated guest clock.
+}
