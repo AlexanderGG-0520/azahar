@@ -283,9 +283,7 @@ bool NormalizeYw2SaveDateAt(const std::string& filename, const std::tm& now) {
     const auto saved_date = std::tuple{saved_year, month, day};
     const auto current_date = std::tuple{now.tm_year + 1900, now.tm_mon + 1, now.tm_mday};
     if (saved_date <= current_date) {
-        LOG_INFO(Service_FS, "YW2 datefix skipped {}: saved {:04}-{:02}-{:02}, guest {:04}-{:02}-{:02}",
-                 path.filename().string(), saved_year, month, day, now.tm_year + 1900,
-                 now.tm_mon + 1, now.tm_mday);
+        LOG_INFO(Service_FS, "YW2 datefix skipped {}: date not future", path.filename().string());
         return false;
     }
 
