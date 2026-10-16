@@ -314,6 +314,8 @@ TEST_CASE("YW2 corrupted or unrelated save is never overwritten", "[core][file_s
 
 } // namespace FileSys
 
+namespace FileSys {
+
 TEST_CASE("YW2 save commit matching and staged-file rename", "[core][file_sys][yw2]") {
     for (const auto& title : {"0012f900", "0012f800", "00155100"}) {
         TempSave fixture(title);
@@ -339,3 +341,5 @@ TEST_CASE("YW2 save commit matching and staged-file rename", "[core][file_sys][y
     CHECK(ReadFile(fixture.save) == original);
     // The production wrapper skips safely when there is no emulated guest clock.
 }
+
+} // namespace FileSys
