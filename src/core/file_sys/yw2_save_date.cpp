@@ -282,8 +282,10 @@ bool NormalizeYw2SaveDateAt(const std::string& filename, const std::tm& now) {
 
     const auto saved_date = std::tuple{saved_year, month, day};
     const auto current_date = std::tuple{now.tm_year + 1900, now.tm_mon + 1, now.tm_mday};
-    if (saved_date <= current_date)
+    if (saved_date <= current_date) {
+        LOG_INFO(Service_FS, "YW2 datefix skipped {}: date not future", path.filename().string());
         return false;
+    }
 
     const u16 year = static_cast<u16>(now.tm_year + 1900);
     plain[kDateOffset] = static_cast<u8>(year);
@@ -346,7 +348,46 @@ bool NormalizeYw2SaveDateAt(const std::string& filename, const std::tm& now) {
 
 bool NormalizeYw2SaveDate(const std::string& filename) {
     std::tm now{};
-    return EmulatedLocalTime(now) && NormalizeYw2SaveDateAt(filename, now);
+    if (!EmulatedLocalTime(now)) {
+        LOG_WARNING(Service_FS, "YW2 datefix skipped: guest clock unavailable");
+        return false;
+    }
+    return NormalizeYw2SaveDateAt(filename, now);
+}
+
+bool IsYw2ObservedSaveFile(const std::string& mount_point, const std::string& filename) {
+    if (filename != "head.yw" && filename != "game1.yw" && filename != "game2.yw" &&
+        filename != "game3.yw")
+        return false;
+    const std::filesystem::path path = std::filesystem::path(mount_point) / filename;
+    const auto slot = path.parent_path();
+    const auto data = slot.parent_path();
+    const auto title = data.parent_path();
+    const auto category = title.parent_path();
+    if (slot.filename() != "00000001" || data.filename() != "data" ||
+        category.filename() != "00040000")
+        return false;
+    const auto id = title.filename();
+    return id == "0012f900" || id == "0012f800" || id == "00155100";
+}
+
+void NormalizeYw2SaveDateOnCommit(const std::string& filename) {
+    const std::filesystem::path path(filename);
+    if (!IsYw2ObservedSaveFile(path.parent_path().string(), path.filename().string()))
+        return;
+    LOG_INFO(Service_FS, "YW2 datefix observed commit for {}", path.filename().string());
+    if (path.filename() != "head.yw") {
+        NormalizeYw2SaveDate(filename);
+        return;
+    }
+    // Version 2.x can replace head.yw after gameN.yw. Retry the slots
+    // after the new key has been committed.
+    for (const char* slot : {"game1.yw", "game2.yw", "game3.yw"}) {
+        const auto game = path.parent_path() / slot;
+        std::error_code ec;
+        if (std::filesystem::is_regular_file(game, ec))
+            NormalizeYw2SaveDate(game.string());
+    }
 }
 
 } // namespace FileSys

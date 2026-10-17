@@ -78,3 +78,14 @@ failure, and absent `head.yw`. They test the **production**
 The actual uploaded saves were only inspected privately and are not tracked
 in Git. Passing these tests does not prove that all YW2 gameplay daily-reset
 state has been fixed; a follow-up emulator-level test is still needed.
+
+## Follow-up: guest SaveData commit monitoring
+
+Gameplay testing exposed that the initial unit tests bypassed the archive save
+path. The follow-up tracks writable `gameN.yw` and `head.yw` closes **and**
+guest archive renames. On `head.yw` commit, previously committed game slots
+are retried to handle version-2.x key rotations. See local `Service_FS`
+messages prefixed by `YW2 datefix` for the observed commit events.
+
+Synthetic regression coverage includes archive title path qualification and
+staged-file rename; this is not a substitute for a full guest filesystem trace.

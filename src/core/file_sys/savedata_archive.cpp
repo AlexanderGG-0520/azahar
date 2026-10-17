@@ -3,14 +3,15 @@
 // Refer to the license.txt file included.
 
 #include <algorithm>
+#include <filesystem>
 #include <iterator>
-#include <string_view>
 #include "common/archives.h"
 #include "common/file_util.h"
 #include "core/file_sys/disk_archive.h"
 #include "core/file_sys/errors.h"
 #include "core/file_sys/path_parser.h"
 #include "core/file_sys/savedata_archive.h"
+#include "core/file_sys/yw2_save_date.h"
 
 namespace FileSys {
 
@@ -94,20 +95,11 @@ ResultVal<std::unique_ptr<FileBackend>> SaveDataArchive::OpenFile(const Path& pa
     }
 
     std::unique_ptr<DelayGenerator> delay_generator = std::make_unique<SaveDataDelayGenerator>();
-    // Only observe main save slots for the three Japanese Yo-kai Watch 2 releases.
     std::string yw2_save_path;
-    constexpr std::string_view titles[] = {
-        "/00040000/0012f900/data/00000001/", // Ganso
-        "/00040000/0012f800/data/00000001/", // Honke
-        "/00040000/00155100/data/00000001/", // Shinuchi
-    };
-    const std::string filename = full_path.substr(full_path.find_last_of("/\\") + 1);
-    const bool is_save = filename == "game1.yw" || filename == "game2.yw" || filename == "game3.yw";
-    if (mode.write_flag && is_save &&
-        std::any_of(std::begin(titles), std::end(titles), [&](std::string_view title) {
-            return mount_point.find(title) != std::string::npos;
-        })) {
+    const auto filename = std::filesystem::path(full_path).filename().string();
+    if (mode.write_flag && IsYw2ObservedSaveFile(mount_point, filename)) {
         yw2_save_path = full_path;
+        LOG_INFO(Service_FS, "YW2 datefix tracking write handle {}", filename);
     }
     return std::make_unique<DiskFile>(std::move(file), mode, std::move(delay_generator),
                                       std::move(yw2_save_path));
@@ -167,6 +159,12 @@ Result SaveDataArchive::RenameFile(const Path& src_path, const Path& dest_path) 
     const auto dest_path_full = path_parser_dest.BuildHostPath(mount_point);
 
     if (FileUtil::Rename(src_path_full, dest_path_full)) {
+        const auto filename = std::filesystem::path(dest_path_full).filename().string();
+        if (IsYw2ObservedSaveFile(mount_point, filename)) {
+            LOG_INFO(Service_FS, "YW2 datefix tracking rename {} -> {}",
+                     std::filesystem::path(src_path_full).filename().string(), filename);
+            NormalizeYw2SaveDateOnCommit(dest_path_full);
+        }
         return ResultSuccess;
     }
 
