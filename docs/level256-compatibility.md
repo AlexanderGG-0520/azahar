@@ -1,5 +1,7 @@
 # Level256 Network compatibility investigation
 
+For duplicated Azahar instances, LFCS/account identity collisions, and `0x0026 SignatureInvalid` triage, see [Level256 account identity on cloned Azahar instances](level256-instance-identity.md). The accompanying `tools/level256_identity_audit.py` compares local state without exposing or changing credentials.
+
 ## Status
 
 This change does not implement Level256 Network v2 connectivity. No Level256-specific IPC redirect, transport, authentication, or DLP service is enabled in this fork. The existing generic 3GX loader (`plg:ldr`) is separate from Level256's privileged `plg:UDS`/`plg:DLP` services and is not sufficient to run the Level256 network plugin. Enabling it must not be presented as Level256 support.
