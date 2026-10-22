@@ -129,6 +129,12 @@ if ("x86_64" IN_LIST ARCHITECTURE OR "arm64" IN_LIST ARCHITECTURE)
         set(DYNARMIC_FRONTENDS "A32" CACHE STRING "")
         set(DYNARMIC_USE_PRECOMPILED_HEADERS ${CITRA_USE_PRECOMPILED_HEADERS} CACHE BOOL "")
         add_subdirectory(dynarmic EXCLUDE_FROM_ALL)
+        if (MINGW AND CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+            # Dynarmic's PCH includes ir_emitter.h, which uses std::vector without
+            # including <vector>. Prepend the missing dependency for MSYS2 Clang
+            # without modifying the pinned third-party submodule.
+            target_precompile_headers(dynarmic BEFORE PRIVATE <vector>)
+        endif()
     endif()
 endif()
 
