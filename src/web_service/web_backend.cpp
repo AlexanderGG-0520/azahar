@@ -4,6 +4,7 @@
 
 #include <array>
 #include <cstdlib>
+#include <exception>
 #include <mutex>
 #include <string>
 #include <fmt/format.h>
