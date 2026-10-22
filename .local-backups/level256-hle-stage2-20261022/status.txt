@@ -1,0 +1,62 @@
+ M CMakeLists.txt
+ M CMakeModules/GenerateSettingKeys.cmake
+ m externals/discord-rpc
+ M src/citra_qt/CMakeLists.txt
+ M src/citra_qt/bootmanager.cpp
+ M src/citra_qt/bootmanager.h
+ M src/citra_qt/citra_qt.cpp
+ M src/citra_qt/configuration/config.cpp
+ M src/citra_qt/configuration/configure_system.cpp
+ M src/citra_qt/configuration/configure_system.ui
+ M src/common/settings.cpp
+ M src/common/settings.h
+ M src/core/CMakeLists.txt
+ M src/core/arm/arm_interface.h
+ M src/core/arm/dynarmic/arm_dynarmic.cpp
+ M src/core/arm/dynarmic/arm_dynarmic.h
+ M src/core/file_sys/plugin_3gx.cpp
+ M src/core/file_sys/plugin_3gx.h
+ M src/core/frontend/emu_window.h
+ M src/core/gdbstub/gdbstub.cpp
+ M src/core/hle/kernel/address_arbiter.cpp
+ M src/core/hle/kernel/address_arbiter.h
+ M src/core/hle/kernel/client_session.cpp
+ M src/core/hle/kernel/event.cpp
+ M src/core/hle/kernel/ipc.cpp
+ M src/core/hle/kernel/process.cpp
+ M src/core/hle/kernel/server_session.cpp
+ M src/core/hle/kernel/server_session.h
+ M src/core/hle/kernel/svc.cpp
+ M src/core/hle/kernel/svc_wrapper.h
+ M src/core/hle/kernel/wait_object.cpp
+ M src/core/hle/service/plgldr/plgldr.cpp
+ M src/core/hle/service/plgldr/plgldr.h
+ M src/core/hle/service/sm/sm.cpp
+ M src/core/hle/service/sm/sm.h
+ M src/core/hle/service/sm/srv.cpp
+ M src/core/hle/service/sm/srv.h
+ M src/core/hle/service/soc/soc_u.cpp
+ M src/core/memory.cpp
+ M src/core/memory.h
+ M src/tests/CMakeLists.txt
+ M src/tests/core/memory/memory.cpp
+ M src/video_core/renderer_opengl/frame_dumper_opengl.cpp
+ M src/video_core/renderer_opengl/gl_shader_manager.cpp
+ M src/video_core/renderer_opengl/gl_texture_mailbox.cpp
+ M src/video_core/renderer_opengl/gl_texture_mailbox.h
+ M src/video_core/renderer_opengl/renderer_opengl.cpp
+?? .local-backups/
+?? docs/level256-compatibility.md
+?? docs/superpowers/
+?? src/core/gdbstub/thread_debug_info.h
+?? src/core/hle/kernel/level256_diagnostic.h
+?? src/core/hle/kernel/luma3ds/
+?? src/core/hle/service/plgldr/level256_lfcs.h
+?? src/core/hle/service/plgldr/plugin_path.h
+?? src/core/hle/service/sm/process_service_redirect.h
+?? src/core/hle/service/soc/soc_u_address.h
+?? src/tests/core/file_sys/plugin_3gx.cpp
+?? src/tests/core/gdbstub/
+?? src/tests/core/hle/kernel/level256_diagnostic.cpp
+?? src/tests/core/hle/kernel/luma3ds/
+?? src/tests/core/hle/service/

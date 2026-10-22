@@ -1,0 +1,8 @@
+ae5816b4d fix(yw2): observe save rename and head commit before normalizing dates (#25)
+37fbc39e4 feat(yw2): normalize future-dated saves with regression coverage (#24)
+8872e1d1f ci: defer Android APK and ship YW desktop-only prereleases (#23)
+d1585723c ci: sync fail-closed push dry runs for YW prereleases (#22)
+b1be48da5 ci: prepare Windows, macOS and signed Android YW v0.2.2 prerelease (#21)
+d3b4071b1 fix(dsp): experiment with bounded semaphore SignalEvent teardown grace (#20)
+afac6d406 diagnostic: trace YW2 HOME DSP semaphore signal race (#19)
+443a4f824 docs: update YW v0.2.1 download info and PR17 validation notes
