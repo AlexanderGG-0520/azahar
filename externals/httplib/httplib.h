@@ -213,6 +213,7 @@ using socket_t = int;
 #include <climits>
 #include <condition_variable>
 #include <cstring>
+#include <exception>
 #include <errno.h>
 #include <fcntl.h>
 #include <fstream>

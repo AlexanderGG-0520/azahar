@@ -23,13 +23,25 @@
 
 #pragma once
 
+#include <array>
+#include <cstdint>
 #include <memory>
+#include <unordered_set>
 #include <boost/serialization/export.hpp>
+#include "core/hle/kernel/level256_diagnostic.h"
+#include "core/hle/kernel/luma3ds/compatibility.h"
+#include "core/hle/kernel/luma3ds/level256_process_view.h"
+#include "core/hle/kernel/luma3ds/level256_system_info.h"
 #include "core/hle/service/service.h"
 
 namespace Core {
 class System;
 }
+
+namespace Kernel {
+class Process;
+class Thread;
+} // namespace Kernel
 
 namespace Service::PLGLDR {
 
@@ -62,6 +74,78 @@ public:
         bool is_enabled = true;
         bool allow_game_change = true;
         bool plugin_loaded = false;
+        bool plugin_code_reached = false;
+        u32 plugin_code_begin = 0;
+        u32 plugin_code_end = 0;
+        u32 plugin_bootloader_begin = 0;
+        u32 plugin_bootloader_end = 0;
+        u32 plugin_trace_count = 0;
+        bool plugin_get_system_info_seen = false;
+        u32 plugin_trace_thread_id = UINT32_MAX;
+        u32 plugin_followup_trace_count = 0;
+        u32 plugin_last_return_pc = 0;
+        bool plugin_instruction_trace_started = false;
+        u32 plugin_service_trace_count = 0;
+        // Transient diagnostics; intentionally omitted from savestates.
+        u32 plugin_query_process_memory_failures = 0;
+        // A one-shot, bounded trace for the verified Level256 worker's OpenProcess path.
+        // Transient diagnostic state; intentionally omitted from savestates.
+        bool level256_open_process_trace_started = false;
+        // Low-frequency CreateThread result records for the verified Level256 worker.
+        // Transient diagnostic state; intentionally omitted from savestates.
+        u32 level256_thread_create_log_count = 0;
+        // One-shot, hash-gated CTRPF OSD and frame-arbiter diagnostics. Transient by design.
+        Kernel::Level256CtrpfOSDScanResult ctrpf_osd_scan{};
+        std::array<u32, 3> ctrpf_osd_candidate_initial_words{};
+        bool ctrpf_osd_post_init_compared = false;
+        // One-shot OSD candidate cache-flush observation per guest process.
+        // Transient diagnostic state; intentionally omitted from savestates.
+        std::unordered_set<u32> ctrpf_osd_candidate_flush_observed_pids;
+        bool ctrpf_arbiter_watch_started = false;
+        u32 ctrpf_arbiter_watch_handle = 0;
+        u32 ctrpf_arbiter_watch_address = 0;
+        std::uintptr_t ctrpf_arbiter_watch_object = 0;
+        u32 ctrpf_arbiter_trace_count = 0;
+        // One-run observations of official CTRPF startup strings and its discovered OSD target.
+        // Watchpoints alter only page dispatch for this opt-in diagnostic and are transient.
+        bool ctrpf_startup_watchpoints_armed = false;
+        std::array<u32, Kernel::LEVEL256_CTRPF_STARTUP_WATCH_TARGET_COUNT>
+            ctrpf_startup_watch_counts{};
+        bool ctrpf_osd_candidate_execution_seen = false;
+        // Bounded runtime path from the verified game hook through its CTRPF wrapper.
+        // Transient diagnostic state; intentionally omitted from savestates.
+        bool ctrpf_hook_trace_started = false;
+        bool ctrpf_hook_execution_trace_armed = false;
+        u32 ctrpf_hook_trace_process_id = UINT32_MAX;
+        bool ctrpf_hook_target_instruction_executed = false;
+        bool ctrpf_hook_wrapper_instruction_executed = false;
+        bool ctrpf_hook_callback_instruction_executed = false;
+        bool ctrpf_hook_wrapper_observed = false;
+        bool ctrpf_hook_asm_wrapper_observed = false;
+        bool ctrpf_hook_asm_wrapper_executed = false;
+        bool ctrpf_hook_callback_target_observed = false;
+        u32 ctrpf_hook_trace_thread_id = UINT32_MAX;
+        u32 ctrpf_hook_trace_runs = 0;
+        u32 ctrpf_hook_asm_wrapper = 0;
+        u32 ctrpf_hook_callback_target = 0;
+        u32 ctrpf_hook_arbiter_trace_count = 0;
+        u32 ctrpf_top_callback_count = 0;
+        u32 ctrpf_bottom_callback_count = 0;
+        u32 ctrpf_top_render_path_count = 0;
+        bool ctrpf_hook_current_is_bottom = false;
+        u32 ctrpf_hook_invocation_count = 0;
+        u32 ctrpf_guest_wait_count = 0;
+        u32 ctrpf_guest_event_notification_count = 0;
+        u32 ctrpf_guest_wakeup_count = 0;
+        u32 ctrpf_guest_wait_log_count = 0;
+        u32 ctrpf_guest_arbiter_wait_count = 0;
+        u32 ctrpf_guest_arbiter_signal_count = 0;
+        u32 ctrpf_guest_arbiter_wakeup_count = 0;
+        // True only when the loaded bytes match the known official Level256.3gx digest.
+        // Transient so restored savestates cannot inherit compatibility trust blindly.
+        bool level256_official_plugin_hash_matches = false;
+        // Count of 0x2560 requests for the current plugin load; deliberately transient.
+        u32 level256_lfcs_request_count = 0;
         bool is_default_path = false;
         std::string plugin_path = "";
         u32 plugin_process_id = UINT32_MAX;
@@ -91,11 +175,35 @@ public:
 
     void OnProcessRun(Kernel::Process& process, Kernel::KernelSystem& kernel);
     void OnProcessExit(Kernel::Process& process, Kernel::KernelSystem& kernel);
+    void OnProcessDestroyed(Kernel::Process& process);
+    bool TracePluginSVC(const Kernel::Process& process, const Kernel::Thread& thread, u32 pc,
+                        u32 svc_id, const char* svc_name, const char* service_name);
+    void TracePluginSVCResult(const Kernel::Process& process, const Kernel::Thread& thread,
+                              u32 svc_id, const char* svc_name, u32 svc_pc, u32 post_hle_pc,
+                              u32 type, s32 param, u32 result, u64 value);
+    void TraceCtrpfStartupMemoryAccess(const Kernel::Process& process,
+                                       const Kernel::Thread& thread, VAddr address, u32 size,
+                                       bool is_write, u64 value, u32 pc, u32 lr);
+    void TraceLevel256GuestWait(const Kernel::Process& process, u32 thread_id, u32 pc,
+                                const std::string& phase, const std::string& object_type,
+                                u32 object_id, const std::string& object_name, u32 resume_pc);
     ResultVal<Kernel::Handle> GetMemoryChangedHandle(Kernel::KernelSystem& kernel);
     void OnMemoryChanged(Kernel::Process& process, Kernel::KernelSystem& kernel);
 
     PluginLoaderContext& GetPluginLoaderContext() {
         return plgldr_context;
+    }
+    Kernel::Luma3DS::CompatibilityContext GetLumaCompatibilityContext(bool enabled) const {
+        return {.enabled = enabled};
+    }
+    Kernel::Luma3DS::PluginAuthorization GetLumaExtensionAuthorization(u64 title_id) const;
+    Kernel::Luma3DS::Level256VerificationPolicy GetLevel256VerificationPolicy(
+        bool enabled, u64 title_id) const;
+    Kernel::Luma3DS::Level256ProcessViewManager& GetProcessViewManager() {
+        return process_view_manager;
+    }
+    const Kernel::Luma3DS::Level256ProcessViewManager& GetProcessViewManager() const {
+        return process_view_manager;
     }
     void SetPluginLoaderContext(PluginLoaderContext& context) {
         plgldr_context = context;
@@ -117,6 +225,7 @@ private:
     Core::System& system;
 
     PluginLoaderContext plgldr_context;
+    Kernel::Luma3DS::Level256ProcessViewManager process_view_manager;
 
     void IsEnabled(Kernel::HLERequestContext& ctx);
     void SetEnabled(Kernel::HLERequestContext& ctx);
@@ -125,6 +234,7 @@ private:
     void GetPLGLDRVersion(Kernel::HLERequestContext& ctx);
     void GetArbiter(Kernel::HLERequestContext& ctx);
     void GetPluginPath(Kernel::HLERequestContext& ctx);
+    void GetLevel256LFCS(Kernel::HLERequestContext& ctx);
 
     template <class Archive>
     void serialize(Archive& ar, const unsigned int);

@@ -26,20 +26,36 @@ ClientSession::~ClientSession() {
     // Local references to ServerSession and SessionRequestHandler are necessary to guarantee they
     // will be kept alive until after ClientDisconnected() returns.
     std::shared_ptr<ServerSession> server = SharedFrom(parent->server);
+    std::vector<std::shared_ptr<Thread>> pending_threads;
+    std::shared_ptr<Thread> handling_thread;
     if (server) {
         std::shared_ptr<SessionRequestHandler> hle_handler = server->hle_handler;
         if (hle_handler)
             hle_handler->ClientDisconnected(server);
 
-        // Clean up the list of client threads with pending requests, they are unneeded now that the
-        // client endpoint is closed.
+        // Preserve waiting threads until their SendSyncRequest calls complete with the
+        // remote-session-closed result. Clearing these references alone strands WaitIPC threads.
+        pending_threads = std::move(server->pending_requesting_threads);
+        handling_thread = std::move(server->currently_handling);
         server->pending_requesting_threads.clear();
-        server->currently_handling = nullptr;
+        server->currently_handling.reset();
     }
 
     parent->client = nullptr;
 
     if (server) {
+        auto cancel_request = [](const std::shared_ptr<Thread>& thread) {
+            if (!thread || thread->status != ThreadStatus::WaitIPC) {
+                return;
+            }
+            thread->SetWaitSynchronizationResult(ResultSessionClosed);
+            thread->ResumeFromWait();
+        };
+        for (const auto& thread : pending_threads) {
+            cancel_request(thread);
+        }
+        cancel_request(handling_thread);
+
         // Notify any threads waiting on the ServerSession that the endpoint has been closed. Note
         // that this call has to happen after `Session::client` has been set to nullptr to let the
         // ServerSession know that the client endpoint has been closed.

@@ -892,7 +892,9 @@ void RendererOpenGL::TryPresent(int timeout_ms, bool is_secondary) {
     // Recreate the presentation FBO if the color attachment was changed
     if (frame->color_reloaded) {
         LOG_DEBUG(Render_OpenGL, "Reloading present frame");
-        window.mailbox->ReloadPresentFrame(frame, layout.width, layout.height);
+        if (!window.mailbox->ReloadPresentFrame(frame, layout.width, layout.height)) {
+            return;
+        }
     }
     glWaitSync(frame->render_fence, 0, GL_TIMEOUT_IGNORED);
     // INTEL workaround.

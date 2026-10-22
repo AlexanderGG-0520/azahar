@@ -382,6 +382,9 @@ if (ENABLE_QT)
     endif()
 
     find_package(Qt6 REQUIRED COMPONENTS Widgets Multimedia Concurrent)
+    if (ENABLE_OPENGL)
+        find_package(Qt6 REQUIRED COMPONENTS OpenGLWidgets)
+    endif()
 
     if (UNIX AND NOT APPLE)
         find_package(Qt6 REQUIRED COMPONENTS DBus)

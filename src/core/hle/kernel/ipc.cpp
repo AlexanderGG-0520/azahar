@@ -3,6 +3,7 @@
 // Refer to the license.txt file included.
 
 #include <algorithm>
+#include <limits>
 #include <boost/serialization/shared_ptr.hpp>
 #include "common/alignment.h"
 #include "common/archives.h"
@@ -22,6 +23,125 @@ SERIALIZE_EXPORT_IMPL(Kernel::MappedBufferContext)
 
 namespace Kernel {
 
+static Result ValidateCommandBufferShape(const u32* command_buffer,
+                                        std::size_t command_size) {
+    IPC::Header header{command_buffer[0]};
+    const std::size_t untranslated_size = 1u + header.normal_params_size;
+    const std::size_t declared_size = untranslated_size + header.translate_params_size;
+    if (declared_size > IPC::COMMAND_BUFFER_LENGTH) {
+        return Result(ErrCodes::CommandTooLarge, ErrorModule::OS, ErrorSummary::InvalidState,
+                      ErrorLevel::Status);
+    }
+    if (declared_size != command_size) {
+        return ResultInvalidBufferDescriptor;
+    }
+
+    std::size_t i = untranslated_size;
+    while (i < command_size) {
+        const u32 descriptor = command_buffer[i++];
+        const auto type = IPC::GetDescriptorType(descriptor);
+        std::size_t words = 1;
+        if (type == IPC::CopyHandle || type == IPC::MoveHandle) {
+            words = IPC::HandleNumberFromDesc(descriptor);
+        } else if (type == IPC::PXIBuffer) {
+            // PXI buffer translation is not implemented by this kernel path. Return a guest
+            // error rather than executing the unimplemented-code trap on guest-controlled input.
+            return ResultInvalidBufferDescriptor;
+        } else if (type == IPC::MappedBuffer) {
+            const IPC::MappedBufferDescInfo info{descriptor};
+            const auto permissions = info.perms.Value();
+            if (permissions != IPC::R && permissions != IPC::W && permissions != IPC::RW) {
+                return ResultInvalidBufferDescriptor;
+            }
+        }
+        if (words > command_size - i) {
+            return ResultInvalidBufferDescriptor;
+        }
+        i += words;
+    }
+    return ResultSuccess;
+}
+
+static bool IsValidAddressRange(Memory::MemorySystem& memory, const Process& process,
+                               VAddr address, u32 size) {
+    if (size == 0) {
+        return true;
+    }
+    const u64 end = static_cast<u64>(address) + size - 1;
+    if (end > std::numeric_limits<VAddr>::max()) {
+        return false;
+    }
+    for (u64 page = Common::AlignDown(address, Memory::CITRA_PAGE_SIZE); page <= end;
+         page += Memory::CITRA_PAGE_SIZE) {
+        if (!memory.IsValidVirtualAddress(process, static_cast<VAddr>(page))) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static Result ValidateTranslationBuffers(
+    Memory::MemorySystem& memory, const Process& src_process, const Process& dst_process,
+    const u32* command_buffer, std::size_t command_size, VAddr dst_address,
+    const std::vector<MappedBufferContext>& mapped_buffer_context, bool reply) {
+    const IPC::Header header{command_buffer[0]};
+    const std::size_t untranslated_size = 1u + header.normal_params_size;
+    std::size_t i = untranslated_size;
+    while (i < command_size) {
+        const u32 descriptor = command_buffer[i++];
+        switch (IPC::GetDescriptorType(descriptor)) {
+        case IPC::CopyHandle:
+        case IPC::MoveHandle:
+            i += IPC::HandleNumberFromDesc(descriptor);
+            break;
+        case IPC::CallingPid:
+            ++i;
+            break;
+        case IPC::StaticBuffer: {
+            const IPC::StaticBufferDescInfo info{descriptor};
+            const VAddr source_address = command_buffer[i++];
+            if (!IsValidAddressRange(memory, src_process, source_address, info.size)) {
+                return ResultInvalidBufferDescriptor;
+            }
+            struct StaticBuffer {
+                IPC::StaticBufferDescInfo descriptor;
+                VAddr address;
+            };
+            const u32 static_offset = IPC::COMMAND_BUFFER_LENGTH * sizeof(u32) +
+                                      sizeof(StaticBuffer) * info.buffer_id;
+            StaticBuffer target_buffer{};
+            memory.ReadBlock(dst_process, dst_address + static_offset, &target_buffer,
+                             sizeof(target_buffer));
+            if (target_buffer.descriptor.size < info.size) {
+                return ResultInvalidBufferDescriptor;
+            }
+            break;
+        }
+        case IPC::MappedBuffer: {
+            const IPC::MappedBufferDescInfo info{descriptor};
+            const VAddr source_address = command_buffer[i++];
+            if (reply) {
+                const auto found = std::find_if(
+                    mapped_buffer_context.begin(), mapped_buffer_context.end(),
+                    [&info, source_address](const MappedBufferContext& context) {
+                        return context.permissions == info.perms && context.size == info.size &&
+                               context.target_address == source_address;
+                    });
+                if (found == mapped_buffer_context.end()) {
+                    return ResultInvalidBufferDescriptor;
+                }
+            } else if (!IsValidAddressRange(memory, src_process, source_address, info.size)) {
+                return ResultInvalidBufferDescriptor;
+            }
+            break;
+        }
+        default:
+            return ResultInvalidBufferDescriptor;
+        }
+    }
+    return ResultSuccess;
+}
+
 Result TranslateCommandBuffer(Kernel::KernelSystem& kernel, Memory::MemorySystem& memory,
                               std::shared_ptr<Thread> src_thread,
                               std::shared_ptr<Thread> dst_thread, VAddr src_address,
@@ -38,11 +158,23 @@ Result TranslateCommandBuffer(Kernel::KernelSystem& kernel, Memory::MemorySystem
     std::size_t untranslated_size = 1u + header.normal_params_size;
     std::size_t command_size = untranslated_size + header.translate_params_size;
 
-    // Note: The real kernel does not check that the command length fits into the IPC buffer area.
-    ASSERT(command_size <= IPC::COMMAND_BUFFER_LENGTH);
+    if (command_size > IPC::COMMAND_BUFFER_LENGTH) {
+        return Result(ErrCodes::CommandTooLarge, ErrorModule::OS, ErrorSummary::InvalidState,
+                      ErrorLevel::Status);
+    }
 
     std::array<u32, IPC::COMMAND_BUFFER_LENGTH> cmd_buf;
     memory.ReadBlock(*src_process, src_address, cmd_buf.data(), command_size * sizeof(u32));
+    const auto validation_result = ValidateCommandBufferShape(cmd_buf.data(), command_size);
+    if (validation_result.IsError()) {
+        return validation_result;
+    }
+    const auto buffer_validation_result = ValidateTranslationBuffers(
+        memory, *src_process, *dst_process, cmd_buf.data(), command_size, dst_address,
+        mapped_buffer_context, reply);
+    if (buffer_validation_result.IsError()) {
+        return buffer_validation_result;
+    }
 
     const bool should_record = kernel.GetIPCRecorder().IsEnabled();
 
@@ -126,8 +258,9 @@ Result TranslateCommandBuffer(Kernel::KernelSystem& kernel, Memory::MemorySystem
 
             // Note: The real kernel doesn't seem to have any error recovery mechanisms for this
             // case.
-            ASSERT_MSG(target_buffer.descriptor.size >= data.size(),
-                       "Static buffer data is too big");
+            if (target_buffer.descriptor.size < data.size()) {
+                return ResultInvalidBufferDescriptor;
+            }
 
             memory.WriteBlock(*dst_process, target_buffer.address, data.data(), data.size());
 
@@ -164,7 +297,9 @@ Result TranslateCommandBuffer(Kernel::KernelSystem& kernel, Memory::MemorySystem
                                context.target_address == source_address;
                     });
 
-                ASSERT(found != mapped_buffer_context.end());
+                if (found == mapped_buffer_context.end()) {
+                    return ResultInvalidBufferDescriptor;
+                }
 
                 if (permissions != IPC::MappedBufferPermissions::R) {
                     // Copy the modified buffer back into the target process
@@ -235,7 +370,7 @@ Result TranslateCommandBuffer(Kernel::KernelSystem& kernel, Memory::MemorySystem
             break;
         }
         default:
-            UNIMPLEMENTED_MSG("Unsupported handle translation: {:#010X}", descriptor);
+            return ResultInvalidBufferDescriptor;
         }
     }
 

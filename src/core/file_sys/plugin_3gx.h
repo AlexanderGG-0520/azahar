@@ -38,6 +38,10 @@ class IOFile;
 
 namespace FileSys {
 
+constexpr bool IsValid3GXFileRange(u64 file_size, u64 offset, u64 size) {
+    return offset <= file_size && size <= file_size - offset;
+}
+
 class FileBackend;
 
 class Plugin3GXLoader {

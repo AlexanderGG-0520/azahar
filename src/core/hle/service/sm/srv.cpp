@@ -6,6 +6,7 @@
 #include <boost/serialization/shared_ptr.hpp>
 #include <boost/serialization/string.hpp>
 #include <boost/serialization/unordered_map.hpp>
+#include <boost/serialization/vector.hpp>
 #include "common/archives.h"
 #include "common/common_types.h"
 #include "common/logging/log.h"
@@ -21,8 +22,11 @@
 #include "core/hle/kernel/semaphore.h"
 #include "core/hle/kernel/server_port.h"
 #include "core/hle/kernel/server_session.h"
+#include "core/hle/kernel/process.h"
+#include "core/hle/kernel/thread.h"
 #include "core/hle/service/sm/sm.h"
 #include "core/hle/service/sm/srv.h"
+#include "core/hle/service/plgldr/plgldr.h"
 
 SERVICE_CONSTRUCT_IMPL(Service::SM::SRV)
 SERIALIZE_EXPORT_IMPL(Service::SM::SRV)
@@ -35,9 +39,16 @@ void SRV::serialize(Archive& ar, const unsigned int) {
     ar& boost::serialization::base_object<Kernel::SessionRequestHandler>(*this);
     ar & notification_semaphore;
     ar & get_service_handle_delayed_map;
+    ar & process_service_redirect;
 }
 
 constexpr int MAX_PENDING_NOTIFICATIONS = 16;
+
+static bool IsLevel256ServiceName(const std::string& name) {
+    return name == "plg:UDS" || name == "plg:DLP" || name == "plg:FKCL" ||
+           name == "nwm::UDS" || name == "dlp:SRVR" || name == "dlp:CLNT" ||
+           name == "dlp:FKCL";
+}
 
 /**
  * SRV::RegisterClient service function
@@ -90,13 +101,27 @@ class SRV::ThreadCallback : public Kernel::HLERequestContext::WakeupCallback {
 
 public:
     explicit ThreadCallback(Core::System& system_, std::string name_)
-        : system(system_), name(name_) {}
+        : system(system_), service_manager(system_.ServiceManager()), name(name_) {}
+    ThreadCallback(Core::System& system_, ServiceManager& service_manager_, std::string name_)
+        : system(system_), service_manager(service_manager_), name(name_) {}
 
     void WakeUp(std::shared_ptr<Kernel::Thread> thread, Kernel::HLERequestContext& ctx,
                 Kernel::ThreadWakeupReason reason) {
         LOG_ERROR(Service_SRV, "called service={} wakeup", name);
+        const auto process = thread ? thread->owner_process.lock() : nullptr;
+        const auto srv = service_manager.GetService<SRV>("srv:");
+        const auto redirected = process && srv
+                                    ? srv->ResolveProcessService(process->process_id, name)
+                                    : std::nullopt;
+        const auto& resolved_name = redirected ? *redirected : name;
         std::shared_ptr<Kernel::ClientPort> client_port;
-        R_ASSERT(system.ServiceManager().GetServicePort(std::addressof(client_port), name));
+        const auto port_result =
+            service_manager.GetServicePort(std::addressof(client_port), resolved_name);
+        if (port_result.IsError()) {
+            IPC::RequestBuilder rb(ctx, 0x5, 1, 0);
+            rb.Push(port_result);
+            return;
+        }
 
         std::shared_ptr<Kernel::ClientSession> session;
         auto result = client_port->Connect(std::addressof(session));
@@ -117,9 +142,11 @@ public:
 
 private:
     Core::System& system;
+    ServiceManager& service_manager;
     std::string name;
 
-    ThreadCallback() : system(Core::Global<Core::System>()) {}
+    ThreadCallback()
+        : system(Core::Global<Core::System>()), service_manager(system.ServiceManager()) {}
 
     template <class Archive>
     void serialize(Archive& ar, const unsigned int) {
@@ -158,21 +185,30 @@ void SRV::GetServiceHandle(Kernel::HLERequestContext& ctx) {
 
     // TODO(yuriks): Permission checks go here
 
-    auto get_handle = std::make_shared<ThreadCallback>(system, name);
+    const auto process = ctx.ClientThread() ? ctx.ClientThread()->owner_process.lock() : nullptr;
+    const auto redirect = process ? ResolveProcessService(process->process_id, name)
+                                  : std::nullopt;
+    const auto& resolved_name = redirect ? *redirect : name;
+
+    auto get_handle = std::make_shared<ThreadCallback>(system, service_manager, resolved_name);
 
     std::shared_ptr<Kernel::ClientPort> client_port;
-    auto result = system.ServiceManager().GetServicePort(std::addressof(client_port), name);
+    auto result =
+        service_manager.GetServicePort(std::addressof(client_port), resolved_name);
     if (result.IsError()) {
         if (wait_until_available && result == ResultServiceNotRegistered) {
-            LOG_INFO(Service_SRV, "called service={} delayed", name);
+            LOG_INFO(Service_SRV, "called service={} delayed", resolved_name);
             std::shared_ptr<Kernel::Event> get_service_handle_event =
                 ctx.SleepClientThread("GetServiceHandle", std::chrono::nanoseconds(-1), get_handle);
-            get_service_handle_delayed_map[name] = std::move(get_service_handle_event);
+            get_service_handle_delayed_map[resolved_name].push_back(
+                DelayedServiceHandle{process ? process->process_id : 0,
+                                     std::move(get_service_handle_event)});
             return;
         } else {
             IPC::RequestBuilder rb = rp.MakeBuilder(1, 0);
             rb.Push(result);
-            LOG_ERROR(Service_SRV, "called service={} -> error 0x{:08X}", name, result.raw);
+            LOG_ERROR(Service_SRV, "called service={} -> error 0x{:08X}", resolved_name,
+                      result.raw);
             return;
         }
     }
@@ -180,19 +216,44 @@ void SRV::GetServiceHandle(Kernel::HLERequestContext& ctx) {
     std::shared_ptr<Kernel::ClientSession> session;
     result = client_port->Connect(std::addressof(session));
     if (result.IsSuccess()) {
-        LOG_DEBUG(Service_SRV, "called service={} -> session={}", name, session->GetObjectId());
+        LOG_DEBUG(Service_SRV, "called service={} -> session={}", resolved_name,
+                  session->GetObjectId());
         IPC::RequestBuilder rb = rp.MakeBuilder(1, 2);
         rb.Push(result);
         rb.PushMoveObjects(std::move(session));
     } else if (result == Kernel::ResultMaxConnectionsReached && wait_until_available) {
-        LOG_WARNING(Service_SRV, "called service={} -> ResultMaxConnectionsReached", name);
+        LOG_WARNING(Service_SRV, "called service={} -> ResultMaxConnectionsReached",
+                    resolved_name);
         // TODO(Subv): Put the caller guest thread to sleep until this port becomes available again.
         UNIMPLEMENTED_MSG("Unimplemented wait until port {} is available.", name);
     } else {
-        LOG_ERROR(Service_SRV, "called service={} -> error 0x{:08X}", name, result.raw);
+        LOG_ERROR(Service_SRV, "called service={} -> error 0x{:08X}", resolved_name, result.raw);
         IPC::RequestBuilder rb = rp.MakeBuilder(1, 0);
         rb.Push(result);
     }
+}
+
+void SRV::UnregisterService(Kernel::HLERequestContext& ctx) {
+    IPC::RequestParser rp(ctx);
+    const auto name_buf = rp.PopRaw<std::array<char, 8>>();
+    const std::size_t name_len = rp.Pop<u32>();
+    if (name_len == 0 || name_len > name_buf.size()) {
+        IPC::RequestBuilder rb = rp.MakeBuilder(1, 0);
+        rb.Push(ResultInvalidNameSize);
+        return;
+    }
+
+    const auto process = ctx.ClientThread() ? ctx.ClientThread()->owner_process.lock() : nullptr;
+    if (!process) {
+        IPC::RequestBuilder rb = rp.MakeBuilder(1, 0);
+        rb.Push(ResultAccessDenied);
+        return;
+    }
+
+    const std::string name(name_buf.data(), name_len);
+    const auto result = service_manager.UnregisterService(name, process->process_id);
+    IPC::RequestBuilder rb = rp.MakeBuilder(1, 0);
+    rb.Push(result);
 }
 
 /**
@@ -267,36 +328,92 @@ void SRV::RegisterService(Kernel::HLERequestContext& ctx) {
     std::size_t name_len = rp.Pop<u32>();
     u32 max_sessions = rp.Pop<u32>();
 
-    std::string name(name_buf.data(), std::min(name_len, name_buf.size()));
+    if (name_len == 0 || name_len > name_buf.size()) {
+        IPC::RequestBuilder rb = rp.MakeBuilder(1, 0);
+        rb.Push(ResultInvalidNameSize);
+        return;
+    }
+    const auto process = ctx.ClientThread() ? ctx.ClientThread()->owner_process.lock() : nullptr;
+    if (!process) {
+        IPC::RequestBuilder rb = rp.MakeBuilder(1, 0);
+        rb.Push(ResultAccessDenied);
+        return;
+    }
+    std::string name(name_buf.data(), name_len);
+
+    const auto caller_thread = ctx.ClientThread();
+    bool trace_plugin_service = false;
+    u32 plugin_owner_pid = UINT32_MAX;
+    if (IsLevel256ServiceName(name)) {
+        const auto plugin_loader = Service::PLGLDR::GetService(system);
+        if (plugin_loader) {
+            auto& plugin = plugin_loader->GetPluginLoaderContext();
+            // Observe relevant service registration while a plugin is active, regardless of
+            // which guest process owns the server. Level256 may publish a service from a
+            // process other than the one containing the 3GX plugin.
+            if (plugin.plugin_loaded && plugin.plugin_service_trace_count < 16) {
+                ++plugin.plugin_service_trace_count;
+                trace_plugin_service = true;
+                plugin_owner_pid = plugin.plugin_process_id;
+            }
+        }
+    }
+    if (trace_plugin_service) {
+        LOG_INFO(Service_SRV,
+                 "3GX-related SRV RegisterService request caller_pid={} thread={} "
+                 "plugin_owner_pid={} name={} max_sessions={}",
+                 process->process_id, caller_thread ? caller_thread->GetThreadId() : 0,
+                 plugin_owner_pid, name, max_sessions);
+    }
 
     std::shared_ptr<Kernel::ServerPort> port;
-    auto result = system.ServiceManager().RegisterService(std::addressof(port), name, max_sessions);
+    auto result = service_manager.RegisterService(std::addressof(port), name, max_sessions,
+                                                 process->process_id);
 
     if (result.IsError()) {
         IPC::RequestBuilder rb = rp.MakeBuilder(1, 0);
         rb.Push(result);
         LOG_ERROR(Service_SRV, "called service={} -> error 0x{:08X}", name, result.raw);
+        if (trace_plugin_service) {
+            LOG_INFO(Service_SRV,
+                     "3GX-related SRV RegisterService result caller_pid={} thread={} "
+                     "plugin_owner_pid={} name={} result=0x{:08X}",
+                     process->process_id, caller_thread ? caller_thread->GetThreadId() : 0,
+                     plugin_owner_pid, name, result.raw);
+        }
         return;
     }
 
     auto it = get_service_handle_delayed_map.find(name);
     if (it != get_service_handle_delayed_map.end()) {
-        it->second->Signal();
+        for (const auto& waiting : it->second) {
+            waiting.event->Signal();
+        }
         get_service_handle_delayed_map.erase(it);
     }
 
     IPC::RequestBuilder rb = rp.MakeBuilder(1, 2);
     rb.Push(ResultSuccess);
     rb.PushMoveObjects(std::move(port));
+    if (trace_plugin_service) {
+        LOG_INFO(Service_SRV,
+                 "3GX-related SRV RegisterService result caller_pid={} thread={} "
+                 "plugin_owner_pid={} name={} result=0x{:08X}",
+                 process->process_id, caller_thread ? caller_thread->GetThreadId() : 0,
+                 plugin_owner_pid, name, ResultSuccess.raw);
+    }
 }
 
-SRV::SRV(Core::System& system) : ServiceFramework("srv:", 64), system(system) {
+SRV::SRV(Core::System& system) : SRV(system, system.ServiceManager()) {}
+
+SRV::SRV(Core::System& system, ServiceManager& service_manager)
+    : ServiceFramework("srv:", 64), system(system), service_manager(service_manager) {
     static const FunctionInfo functions[] = {
         // clang-format off
         {0x0001, &SRV::RegisterClient, "RegisterClient"},
         {0x0002, &SRV::EnableNotification, "EnableNotification"},
         {0x0003, &SRV::RegisterService, "RegisterService"},
-        {0x0004, nullptr, "UnregisterService"},
+        {0x0004, &SRV::UnregisterService, "UnregisterService"},
         {0x0005, &SRV::GetServiceHandle, "GetServiceHandle"},
         {0x0006, nullptr, "RegisterPort"},
         {0x0007, nullptr, "UnregisterPort"},
@@ -313,6 +430,60 @@ SRV::SRV(Core::System& system) : ServiceFramework("srv:", 64), system(system) {
 }
 
 SRV::~SRV() = default;
+
+void SRV::SetLevel256Redirect(Kernel::Process& process, bool enabled, bool dlp_enabled) {
+    if (enabled && process.status != Kernel::ProcessStatus::Running) {
+        return;
+    }
+    process_service_redirect.SetLevel256(process.process_id, enabled, dlp_enabled);
+}
+
+void SRV::OnProcessExit(u32 process_id) {
+    process_service_redirect.OnProcessExit(process_id);
+    for (auto waiting = get_service_handle_delayed_map.begin();
+         waiting != get_service_handle_delayed_map.end();) {
+        std::erase_if(waiting->second, [process_id](const DelayedServiceHandle& request) {
+            return request.process_id == process_id;
+        });
+        if (waiting->second.empty()) {
+            waiting = get_service_handle_delayed_map.erase(waiting);
+        } else {
+            ++waiting;
+        }
+    }
+}
+
+std::optional<std::string> SRV::ResolveProcessService(u32 process_id,
+                                                      const std::string& service_name) const {
+    return process_service_redirect.Resolve(process_id, service_name);
+}
+
+PlgUdsControlResult SRV::ProcessPlgUdsControl(u32 process_id, u16 command_id,
+                                             u8 normal_params, u8 translate_params, u32 arg1,
+                                             u32 arg2) {
+    return process_service_redirect.ProcessPlgUdsControl(process_id, command_id, normal_params,
+                                                         translate_params, arg1, arg2);
+}
+
+bool SRV::IsLevel256Connected(u32 process_id) const {
+    return process_service_redirect.IsConnectedProcess(process_id);
+}
+
+bool SRV::IsLevel256Paused(u32 process_id) const {
+    return process_service_redirect.IsPaused(process_id);
+}
+
+bool SRV::Level256SignalOnAttach(u32 process_id) const {
+    return process_service_redirect.SignalOnAttach(process_id);
+}
+
+bool SRV::Level256SignalOnDetach(u32 process_id) const {
+    return process_service_redirect.SignalOnDetach(process_id);
+}
+
+void SRV::SetLevel256SignalOnDetach(u32 process_id, bool enabled) {
+    process_service_redirect.SetSignalOnDetach(process_id, enabled);
+}
 
 } // namespace Service::SM
 

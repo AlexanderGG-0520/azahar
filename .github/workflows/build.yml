@@ -13,6 +13,13 @@ permissions:
   attestations: write
 
 jobs:
+  level256-identity-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Test read-only Level256 instance identity audit
+        run: python3 -m unittest discover -s tools/tests -p 'test_level256_identity_audit.py'
+
   source:
     if: ${{ !github.head_ref }}
     runs-on: ubuntu-latest

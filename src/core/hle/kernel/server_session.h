@@ -70,6 +70,12 @@ public:
      */
     Result HandleSyncRequest(std::shared_ptr<Thread> thread);
 
+    /// Receives the pending client request into the server thread's command buffer.
+    Result ReceiveRequest(std::shared_ptr<Thread> thread);
+
+    /// Translates the server thread's reply back to the pending client thread and wakes it.
+    Result ReplyRequest(std::shared_ptr<Thread> thread);
+
     bool ShouldWait(const Thread* thread) const override;
 
     void Acquire(Thread* thread) override;

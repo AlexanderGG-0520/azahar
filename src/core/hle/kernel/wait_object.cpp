@@ -10,6 +10,7 @@
 #include "common/archives.h"
 #include "common/assert.h"
 #include "common/logging/log.h"
+#include "core/core.h"
 #include "core/hle/kernel/errors.h"
 #include "core/hle/kernel/kernel.h"
 #include "core/hle/kernel/memory.h"
@@ -17,6 +18,7 @@
 #include "core/hle/kernel/resource_limit.h"
 #include "core/hle/kernel/thread.h"
 #include "core/hle/kernel/timer.h"
+#include "core/hle/service/plgldr/plgldr.h"
 
 SERIALIZE_EXPORT_IMPL(Kernel::WaitObject)
 
@@ -33,8 +35,17 @@ SERIALIZE_IMPL(WaitObject)
 
 void WaitObject::AddWaitingThread(std::shared_ptr<Thread> thread) {
     auto itr = std::find(waiting_threads.begin(), waiting_threads.end(), thread);
-    if (itr == waiting_threads.end())
+    if (itr == waiting_threads.end()) {
+        if (auto process = thread->owner_process.lock()) {
+            auto& system = Core::Global<Core::System>();
+            if (auto plugin_loader = Service::PLGLDR::GetService(system)) {
+                plugin_loader->TraceLevel256GuestWait(
+                    *process, thread->GetThreadId(), thread->context.GetProgramCounter(), "wait",
+                    GetTypeName(), GetObjectId(), GetName(), 0);
+            }
+        }
         waiting_threads.push_back(std::move(thread));
+    }
 }
 
 void WaitObject::RemoveWaitingThread(Thread* thread) {
@@ -85,6 +96,15 @@ std::shared_ptr<Thread> WaitObject::GetHighestPriorityReadyThread() const {
 
 void WaitObject::WakeupAllWaitingThreads() {
     while (auto thread = GetHighestPriorityReadyThread()) {
+        if (auto process = thread->owner_process.lock()) {
+            auto& system = Core::Global<Core::System>();
+            if (auto plugin_loader = Service::PLGLDR::GetService(system)) {
+                const u32 resume_pc = thread->context.GetProgramCounter();
+                plugin_loader->TraceLevel256GuestWait(
+                    *process, thread->GetThreadId(), resume_pc, "wake", GetTypeName(),
+                    GetObjectId(), GetName(), resume_pc);
+            }
+        }
         if (!thread->IsSleepingOnWaitAll()) {
             Acquire(thread.get());
         } else {

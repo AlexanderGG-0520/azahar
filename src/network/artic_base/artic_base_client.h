@@ -3,6 +3,9 @@
 // Refer to the license.txt file included.
 
 #pragma once
+#include "array"
+#include "atomic"
+#include "chrono"
 #include "condition_variable"
 #include "cstring"
 #include "functional"
@@ -13,6 +16,7 @@
 #include "string"
 #include "thread"
 #include "utility"
+#include "vector"
 
 #include "artic_base_common.h"
 #include "network/socket_manager.h"

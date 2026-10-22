@@ -305,7 +305,7 @@ if (MINGW)
 endif()
 
 if (ENABLE_OPENGL)
-    target_link_libraries(citra_qt PRIVATE glad)
+    target_link_libraries(citra_qt PRIVATE glad Qt6::OpenGLWidgets)
 endif()
 
 if (ENABLE_VULKAN)

@@ -621,6 +621,11 @@ void ShaderProgramManager::LoadDiskCache(const std::atomic_bool& stop_loading,
     const auto LoadRawSepareble = [&](std::size_t begin, std::size_t end,
                                       Frontend::GraphicsContext* context = nullptr) {
         const auto scope = context->Acquire();
+        if (!scope) {
+            LOG_ERROR(Render_OpenGL, "Unable to make a shared context current for shader loading");
+            compilation_failed = true;
+            return;
+        }
         for (std::size_t i = begin; i < end; ++i) {
             if (stop_loading || compilation_failed) {
                 return;

@@ -184,6 +184,11 @@ add_library(citra_core STATIC EXCLUDE_FROM_ALL
     hle/kernel/shared_page.cpp
     hle/kernel/shared_page.h
     hle/kernel/svc.cpp
+    hle/kernel/luma3ds/compatibility.cpp
+    hle/kernel/luma3ds/custom_backdoor.cpp
+    hle/kernel/luma3ds/level256_backend.cpp
+    hle/kernel/luma3ds/level256_process_view.cpp
+    hle/kernel/luma3ds/level256_memory_operations.cpp
     hle/kernel/svc.h
     hle/kernel/svc_wrapper.h
     hle/kernel/thread.cpp
