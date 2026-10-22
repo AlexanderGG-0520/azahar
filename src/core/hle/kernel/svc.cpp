@@ -602,7 +602,6 @@ Result SVC::ControlMemory(u32* out_addr, u32 addr0, u32 addr1, u32 size, u32 ope
         const u32 vma_size = has_vma ? vma->second.size : 0;
         const u32 vma_type = has_vma ? static_cast<u32>(vma->second.type) : UINT32_MAX;
         const u32 vma_permissions = has_vma ? static_cast<u32>(vma->second.permissions) : 0;
-        const u64 requested_end = static_cast<u64>(addr0) + size;
         const bool overlaps_compat_view =
             plugin_loader && plugin_loader->GetProcessViewManager().OverlapsOwnedMapping(
                                  process, addr0, size);
@@ -3236,7 +3235,6 @@ void SVC::CallSVC(u32 immediate) {
 
         const u32 out_r0 = GetReg(0);
         if (out_r0 == ResultInvalidHandle.raw && !(level256_plugin_context && immediate == 0x7D)) {
-            const auto thread = kernel.GetCurrentThreadManager().GetCurrentThread();
             LOG_CRITICAL(
                 Kernel_SVC,
                 "[HOME-HANDOFF] INVALID HANDLE SVC: svc=0x{:02X} name={} pid={} title={:016X} "
