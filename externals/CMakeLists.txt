@@ -129,6 +129,14 @@ if ("x86_64" IN_LIST ARCHITECTURE OR "arm64" IN_LIST ARCHITECTURE)
         set(DYNARMIC_FRONTENDS "A32" CACHE STRING "")
         set(DYNARMIC_USE_PRECOMPILED_HEADERS ${CITRA_USE_PRECOMPILED_HEADERS} CACHE BOOL "")
         add_subdirectory(dynarmic EXCLUDE_FROM_ALL)
+        if(WIN32 AND NOT MSVC AND DYNARMIC_USE_PRECOMPILED_HEADERS)
+            # ir_emitter.h uses std::vector but does not include <vector>.
+            # Some MinGW/Clang standard-library include paths no longer expose
+            # it transitively, so put it before Dynarmic's PCH headers.
+            get_target_property(DYNARMIC_PRECOMPILE_HEADERS dynarmic PRECOMPILE_HEADERS)
+            set_property(TARGET dynarmic PROPERTY PRECOMPILE_HEADERS
+                "<vector>;${DYNARMIC_PRECOMPILE_HEADERS}")
+        endif()
     endif()
 endif()
 
