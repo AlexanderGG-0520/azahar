@@ -325,6 +325,12 @@ else()
     set(LIBRESSL_SKIP_INSTALL ON CACHE BOOL "")
     set(OPENSSLDIR "/etc/ssl/")
     add_subdirectory(libressl EXCLUDE_FROM_ALL)
+    if(WIN32 AND NOT MSVC)
+        # LibreSSL's endian.h check only tests whether the header exists. On
+        # MinGW/clang64, the Windows compatibility header must provide the
+        # endian conversion macros instead of relying on that system header.
+        target_compile_options(crypto_obj PRIVATE -UHAVE_ENDIAN_H)
+    endif()
     target_include_directories(ssl INTERFACE ./libressl/include)
     target_disable_warnings(ssl)
     target_compile_definitions(ssl PRIVATE -DHAVE_INET_NTOP)
