@@ -324,6 +324,14 @@ else()
     # LibreSSL
     set(LIBRESSL_SKIP_INSTALL ON CACHE BOOL "")
     set(OPENSSLDIR "/etc/ssl/")
+    if (MINGW)
+        # LibreSSL's Windows endian shim defines htobe32/htobe64 only when
+        # HAVE_ENDIAN_H is unset. Current MSYS2 exposes endian.h, but it does
+        # not provide these conversions for the MinGW target. The upstream
+        # header-presence check therefore disables its own working fallback.
+        # Preseed the check so LibreSSL uses its existing Windows definitions.
+        set(HAVE_ENDIAN_H 0 CACHE INTERNAL "Use LibreSSL Windows endian compatibility" FORCE)
+    endif()
     add_subdirectory(libressl EXCLUDE_FROM_ALL)
     target_include_directories(ssl INTERFACE ./libressl/include)
     target_disable_warnings(ssl)
