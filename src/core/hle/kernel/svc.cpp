@@ -5,6 +5,10 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cstdint>
+#include <limits>
+#include <new>
+#include <optional>
 #include <fmt/format.h>
 #include "common/archives.h"
 #include "common/logging/log.h"
@@ -26,6 +30,12 @@
 #include "core/hle/kernel/handle_table.h"
 #include "core/hle/kernel/ipc.h"
 #include "core/hle/kernel/ipc_debugger/recorder.h"
+#include "core/hle/kernel/level256_diagnostic.h"
+#include "core/hle/kernel/luma3ds/compatibility.h"
+#include "core/hle/kernel/luma3ds/custom_backdoor.h"
+#include "core/hle/kernel/luma3ds/level256_backend.h"
+#include "core/hle/kernel/luma3ds/level256_memory_operations.h"
+#include "core/hle/kernel/luma3ds/level256_system_info.h"
 #include "core/hle/kernel/memory.h"
 #include "core/hle/kernel/mutex.h"
 #include "core/hle/kernel/process.h"
@@ -43,8 +53,37 @@
 #include "core/hle/kernel/wait_object.h"
 #include "core/hle/result.h"
 #include "core/hle/service/plgldr/plgldr.h"
+#include "core/hle/service/plgldr/plugin_path.h"
+#include "core/hle/service/sm/sm.h"
+#include "core/hle/service/sm/srv.h"
 
 namespace Kernel {
+
+static const char* Level256DiagnosticThreadStatusName(ThreadStatus status) {
+    switch (status) {
+    case ThreadStatus::Running:
+        return "Running";
+    case ThreadStatus::Ready:
+        return "Ready";
+    case ThreadStatus::WaitArb:
+        return "WaitArb";
+    case ThreadStatus::WaitSleep:
+        return "WaitSleep";
+    case ThreadStatus::WaitIPC:
+        return "WaitIPC";
+    case ThreadStatus::WaitSynchAny:
+        return "WaitSynchAny";
+    case ThreadStatus::WaitSynchAll:
+        return "WaitSynchAll";
+    case ThreadStatus::WaitHleEvent:
+        return "WaitHleEvent";
+    case ThreadStatus::Dormant:
+        return "Dormant";
+    case ThreadStatus::Dead:
+        return "Dead";
+    }
+    return "Unknown";
+}
 
 enum ControlMemoryOperation {
     MEMOP_FREE = 1,
@@ -406,6 +445,7 @@ class SVC : public SVCWrapper<SVC> {
 public:
     SVC(Core::System& system);
     void CallSVC(u32 immediate);
+    bool ShouldLogSVCError(u32 svc_id, u32 raw_result);
 
 private:
     Core::System& system;
@@ -492,6 +532,8 @@ private:
     Result InvalidateInstructionCacheRange(u32 addr, u32 size);
     Result InvalidateEntireInstructionCache();
     u32 ConvertVaToPa(u32 addr);
+    void FlushDataCacheRange(u32 addr, u32 size);
+    void FlushEntireDataCache();
     Result MapProcessMemoryEx(Handle dst_process_handle, u32 dst_address, Handle src_process_handle,
                               u32 src_address, u32 size, MapMemoryExFlag flags,
                               Handle dst_process_handle_backup);
@@ -523,6 +565,7 @@ Result SVC::ControlMemory(u32* out_addr, u32 addr0, u32 addr1, u32 size, u32 ope
     R_UNLESS((addr1 & Memory::CITRA_PAGE_MASK) == 0, ResultMisalignedAddress);
     R_UNLESS((size & Memory::CITRA_PAGE_MASK) == 0, ResultMisalignedSize);
 
+    const u32 requested_operation = operation;
     const u32 region = operation & MEMOP_REGION_MASK;
     operation &= ~MEMOP_REGION_MASK;
 
@@ -537,6 +580,42 @@ Result SVC::ControlMemory(u32* out_addr, u32 addr0, u32 addr1, u32 size, u32 ope
     VMAPermission vma_permissions = (VMAPermission)permissions;
 
     auto& process = *kernel.GetCurrentProcess();
+    const auto log_level256_heap_failure = [&](Result result) {
+        if (!Settings::values.level256_compatibility_enabled.GetValue() || !process.codeset ||
+            !Service::PLGLDR::IsLevel256SupportedTitle(process.codeset->program_id)) {
+            return;
+        }
+        const auto plugin_loader = Service::PLGLDR::GetService(system);
+        if (!plugin_loader) {
+            return;
+        }
+        const auto& context = plugin_loader->GetPluginLoaderContext();
+        if (!context.plugin_loaded || !context.level256_official_plugin_hash_matches ||
+            context.plugin_process_id != process.process_id ||
+            GetReg(15) < context.plugin_code_begin || GetReg(15) >= context.plugin_code_end) {
+            return;
+        }
+
+        const auto vma = process.vm_manager.FindVMA(addr0);
+        const bool has_vma = vma != process.vm_manager.vma_map.end();
+        const u32 vma_base = has_vma ? vma->second.base : 0;
+        const u32 vma_size = has_vma ? vma->second.size : 0;
+        const u32 vma_type = has_vma ? static_cast<u32>(vma->second.type) : UINT32_MAX;
+        const u32 vma_permissions = has_vma ? static_cast<u32>(vma->second.permissions) : 0;
+        const bool overlaps_compat_view =
+            plugin_loader && plugin_loader->GetProcessViewManager().OverlapsOwnedMapping(
+                                 process, addr0, size);
+        const auto current_thread = kernel.GetCurrentThreadManager().GetCurrentThread();
+        LOG_WARNING(Kernel_SVC,
+                    "Level256 ControlMemory heap allocation failed: pid={} thread={} pc=0x{:08X} "
+                    "operation=0x{:08X} addr0=0x{:08X} addr1=0x{:08X} size=0x{:X} "
+                    "permissions=0x{:X} result=0x{:08X} vma_found={} vma_base=0x{:08X} "
+                    "vma_size=0x{:X} vma_type={} vma_permissions=0x{:X} "
+                    "overlaps_compat_view={}",
+                    process.process_id, current_thread ? current_thread->GetThreadId() : 0,
+                    GetReg(15), requested_operation, addr0, addr1, size, permissions, result.raw,
+                    has_vma, vma_base, vma_size, vma_type, vma_permissions, overlaps_compat_view);
+    };
 
     switch (operation & MEMOP_OPERATION_MASK) {
     case MEMOP_FREE: {
@@ -556,7 +635,11 @@ Result SVC::ControlMemory(u32* out_addr, u32 addr0, u32 addr1, u32 size, u32 ope
         if (operation & MEMOP_LINEAR) {
             return process.LinearAllocate(out_addr, addr0, size, vma_permissions);
         } else {
-            return process.HeapAllocate(out_addr, addr0, size, vma_permissions);
+            const Result result = process.HeapAllocate(out_addr, addr0, size, vma_permissions);
+            if (result.IsError()) {
+                log_level256_heap_failure(result);
+            }
+            return result;
         }
         break;
     }
@@ -667,6 +750,109 @@ Result SVC::SendSyncRequest(Handle handle) {
     system.PrepareReschedule();
 
     auto thread = SharedFrom(kernel.GetCurrentThreadManager().GetCurrentThread());
+    const auto process = kernel.GetCurrentProcess();
+    const bool uds_client = session->name == "plg:UDS_Client";
+    const bool ndm_client = session->name == "ndm:u_Client";
+    const bool soc_client = session->name == "soc:U_Client";
+    std::shared_ptr<Service::SM::SRV> srv;
+    std::shared_ptr<Service::PLGLDR::PLG_LDR> plugin_loader;
+    bool level256_owner = false;
+    if (Settings::values.level256_compatibility_enabled.GetValue() && process && process->codeset &&
+        Service::PLGLDR::IsLevel256SupportedTitle(process->codeset->program_id) &&
+        (uds_client || ndm_client || soc_client)) {
+        plugin_loader = Service::PLGLDR::GetService(system);
+        if (plugin_loader) {
+            const auto& context = plugin_loader->GetPluginLoaderContext();
+            level256_owner = IsVerifiedLevel256PluginContext(
+                Settings::values.level256_compatibility_enabled.GetValue(), true,
+                context.level256_official_plugin_hash_matches, process->process_id,
+                context.plugin_process_id, context.plugin_loaded, context.plugin_code_begin,
+                context.plugin_code_end, GetReg(15));
+        }
+        if (level256_owner) {
+            srv = system.ServiceManager().GetService<Service::SM::SRV>("srv:");
+        }
+    }
+    const VAddr command_address = thread->GetCommandBufferAddress();
+    bool notify_socket_detach = false;
+
+    // Luma's PLGUDS control commands are carried over the guest-registered plg:UDS session.
+    // Only process state and commands are handled here; commands that require the guest server
+    // continue through the real ClientSession/ServerSession path.
+    if (level256_owner && uds_client && srv) {
+        const u32 header = memory.Read32(*process, command_address);
+        const u16 command_id = static_cast<u16>(header >> 16);
+        const u8 normal_params = static_cast<u8>((header >> 6) & 0x3F);
+        const u8 translate_params = static_cast<u8>(header & 0x3F);
+        const u32 arg1 = memory.Read32(*process, command_address + sizeof(u32));
+        const u32 arg2 = memory.Read32(*process, command_address + 2 * sizeof(u32));
+        const auto control = srv->ProcessPlgUdsControl(process->process_id, command_id,
+                                                       normal_params, translate_params, arg1, arg2);
+        if (control.handled && !control.forward_to_server) {
+            memory.Write32(*process, command_address,
+                           IPC::MakeHeader(control.response_command, 1, 0));
+            memory.Write32(*process, command_address + sizeof(u32), control.response_value);
+            return ResultSuccess;
+        }
+    }
+
+    if (level256_owner && srv && srv->IsLevel256Connected(process->process_id)) {
+        const u32 header = memory.Read32(*process, command_address);
+        if (ndm_client && header == 0x00010042 &&
+            memory.Read32(*process, command_address + sizeof(u32)) == 2 &&
+            !srv->IsLevel256Paused(process->process_id)) {
+            // NDM's local-communication exclusivity is incompatible with the plugin's
+            // infrastructure-mode UDS path; this exact command is normalized by Luma too.
+            memory.Write32(*process, command_address + sizeof(u32), 1);
+        }
+
+        if (uds_client && !srv->IsLevel256Paused(process->process_id)) {
+            const u16 command_id = static_cast<u16>(header >> 16);
+            const u8 normal_params = static_cast<u8>((header >> 6) & 0x3F);
+            const u8 translate_params = static_cast<u8>(header & 0x3F);
+            if (const auto translated = Service::SM::TranslateLevel256UdsCommand(
+                    command_id, normal_params, translate_params)) {
+                const VAddr static_buffer_address = thread->GetTLSAddress() + 0x180;
+                if (command_id == 14 || command_id == 31) {
+                    memory.Write32(*process, command_address + 7 * sizeof(u32),
+                                   memory.Read32(*process, static_buffer_address + sizeof(u32)));
+                } else if (command_id == 17) {
+                    memory.Write32(*process, command_address + 2 * sizeof(u32),
+                                   memory.Read32(*process, static_buffer_address + sizeof(u32)));
+                } else if (command_id == 20) {
+                    memory.Write32(*process, command_address + 4 * sizeof(u32),
+                                   memory.Read32(*process, static_buffer_address + sizeof(u32)));
+                }
+                memory.Write32(*process, command_address,
+                               IPC::MakeHeader(translated->command_id, translated->normal_params,
+                                               translated->translate_params));
+            }
+        }
+
+        if (soc_client && !srv->IsLevel256Paused(process->process_id)) {
+            if (srv->Level256SignalOnAttach(process->process_id) && header == 0x00010044) {
+                std::shared_ptr<Kernel::ClientSession> signal_session;
+                if (system.ServiceManager().ConnectToService(&signal_session, "plg:UDS") ==
+                    ResultSuccess) {
+                    std::array<u32, 10> backup{};
+                    memory.ReadBlock(*process, command_address, backup.data(), sizeof(backup));
+                    memory.Write32(*process, command_address, IPC::MakeHeader(102, 1, 0));
+                    memory.Write32(*process, command_address + sizeof(u32), 0);
+                    const auto signal_result = signal_session->SendSyncRequest(thread);
+                    memory.WriteBlock(*process, command_address, backup.data(), sizeof(backup));
+                    if (signal_result.IsError()) {
+                        LOG_WARNING(Kernel_SVC,
+                                    "Level256 socket attach event failed: pid={} result=0x{:08X}",
+                                    process->process_id, signal_result.raw);
+                    }
+                }
+            }
+            if (header == 0x00190000 && srv->Level256SignalOnAttach(process->process_id)) {
+                srv->SetLevel256SignalOnDetach(process->process_id, true);
+                notify_socket_detach = true;
+            }
+        }
+    }
 
     if (kernel.GetIPCRecorder().IsEnabled()) {
         kernel.GetIPCRecorder().RegisterRequest(session, thread);
@@ -683,10 +869,31 @@ Result SVC::SendSyncRequest(Handle handle) {
         system.perf_stats->EndIPCProcessing();
     }
 
+    if (notify_socket_detach && process && srv) {
+        srv->SetLevel256SignalOnDetach(process->process_id, false);
+        std::shared_ptr<Kernel::ClientSession> signal_session;
+        if (system.ServiceManager().ConnectToService(&signal_session, "plg:UDS") == ResultSuccess) {
+            std::array<u32, 10> backup{};
+            memory.ReadBlock(*process, command_address, backup.data(), sizeof(backup));
+            memory.Write32(*process, command_address, IPC::MakeHeader(102, 1, 0));
+            memory.Write32(*process, command_address + sizeof(u32), 1);
+            const auto signal_result = signal_session->SendSyncRequest(thread);
+            memory.WriteBlock(*process, command_address, backup.data(), sizeof(backup));
+            if (signal_result.IsError()) {
+                LOG_WARNING(Kernel_SVC,
+                            "Level256 socket detach event failed: pid={} result=0x{:08X}",
+                            process->process_id, signal_result.raw);
+            }
+        }
+    }
+
     return res;
 }
 
 Result SVC::OpenProcess(Handle* out_handle, u32 process_id) {
+    // A failed OpenProcess must not leak an uninitialized output register through the SVC ABI.
+    // In particular, plugin code may otherwise carry that value into a later QueryProcessMemory.
+    ClearOpenProcessOutput(*out_handle);
     std::shared_ptr<Process> process = kernel.GetProcessById(process_id);
     if (!process) {
         // Result 0xd9001818 (process not found?)
@@ -760,9 +967,9 @@ Result SVC::CloseHandle(Handle handle) {
         if (current_thread) {
             constexpr s64 DspSemaphoreGraceTicks = msToCycles(5);
             const s64 now = system.CoreTiming().GetGlobalTicks();
-            const bool armed = process->RetireDspSemaphoreSignal(
-                closing_object->GetObjectId(), current_thread->thread_id, now,
-                DspSemaphoreGraceTicks);
+            const bool armed = process->RetireDspSemaphoreSignal(closing_object->GetObjectId(),
+                                                                 current_thread->thread_id, now,
+                                                                 DspSemaphoreGraceTicks);
             LOG_INFO(Kernel_SVC,
                      "[DSP-SEM-GRACE] Close DSP semaphore: pid={} thread={} "
                      "handle=0x{:08X} object_id={} armed={} ticks={}",
@@ -775,9 +982,10 @@ Result SVC::CloseHandle(Handle handle) {
     return process->handle_table.Close(handle);
 }
 
-static Result ReceiveIPCRequest(Kernel::KernelSystem& kernel, Memory::MemorySystem& memory,
-                                std::shared_ptr<ServerSession> server_session,
-                                std::shared_ptr<Thread> thread);
+static Result ReceiveIPCRequest(std::shared_ptr<ServerSession> server_session,
+                                std::shared_ptr<Thread> thread) {
+    return server_session->ReceiveRequest(std::move(thread));
+}
 
 class SVC_SyncCallback : public Kernel::WakeupCallback {
 public:
@@ -826,7 +1034,7 @@ public:
 
         if (object->GetHandleType() == HandleType::ServerSession) {
             auto server_session = DynamicObjectCast<ServerSession>(object);
-            result = ReceiveIPCRequest(system.Kernel(), system.Memory(), server_session, thread);
+            result = ReceiveIPCRequest(server_session, thread);
         }
 
         thread->SetWaitSynchronizationResult(result);
@@ -903,8 +1111,7 @@ Result SVC::WaitSynchronization1(Handle handle, s64 nano_seconds) {
 
     const bool actual_should_wait = object->ShouldWait(thread);
     bool apply_yw2_worker_ordering_workaround = false;
-    if (!actual_should_wait && nano_seconds == 0 &&
-        object->GetHandleType() == HandleType::Thread) {
+    if (!actual_should_wait && nano_seconds == 0 && object->GetHandleType() == HandleType::Thread) {
         if (process && process->codeset && IsYoKaiWatch2Title(process->codeset->program_id)) {
             const auto target_thread = std::static_pointer_cast<Thread>(object);
             const auto target_process = target_thread->owner_process.lock();
@@ -925,8 +1132,7 @@ Result SVC::WaitSynchronization1(Handle handle, s64 nano_seconds) {
         }
     }
 
-    const bool effective_should_wait =
-        actual_should_wait || apply_yw2_worker_ordering_workaround;
+    const bool effective_should_wait = actual_should_wait || apply_yw2_worker_ordering_workaround;
     if (effective_should_wait) {
         R_UNLESS(nano_seconds != 0, ResultTimeout);
 
@@ -1065,33 +1271,6 @@ Result SVC::WaitSynchronizationN(s32* out, VAddr handles_address, s32 handle_cou
     }
 }
 
-static Result ReceiveIPCRequest(Kernel::KernelSystem& kernel, Memory::MemorySystem& memory,
-                                std::shared_ptr<ServerSession> server_session,
-                                std::shared_ptr<Thread> thread) {
-    R_UNLESS(server_session->parent->client, ResultSessionClosed);
-
-    VAddr target_address = thread->GetCommandBufferAddress();
-    VAddr source_address = server_session->currently_handling->GetCommandBufferAddress();
-
-    Result translation_result = TranslateCommandBuffer(
-        kernel, memory, server_session->currently_handling, thread, source_address, target_address,
-        server_session->mapped_buffer_context, false);
-
-    // If a translation error occurred, immediately resume the client thread.
-    if (translation_result.IsError()) {
-        // Set the output of SendSyncRequest in the client thread to the translation output.
-        server_session->currently_handling->SetWaitSynchronizationResult(translation_result);
-
-        server_session->currently_handling->ResumeFromWait();
-        server_session->currently_handling = nullptr;
-
-        // TODO(Subv): This path should try to wait again on the same objects.
-        ASSERT_MSG(false, "ReplyAndReceive translation error behavior unimplemented");
-    }
-
-    return translation_result;
-}
-
 /// In a single operation, sends a IPC reply and waits for a new request.
 Result SVC::ReplyAndReceive(s32* index, VAddr handles_address, s32 handle_count,
                             Handle reply_target) {
@@ -1122,31 +1301,11 @@ Result SVC::ReplyAndReceive(s32* index, VAddr handles_address, s32 handle_count,
         auto session = current_process->handle_table.Get<ServerSession>(reply_target);
         R_UNLESS(session, ResultInvalidHandle);
 
-        auto request_thread = std::move(session->currently_handling);
-
-        // Mark the request as "handled".
-        session->currently_handling = nullptr;
-
-        // Error out if there's no request thread or the session was closed.
-        // TODO(Subv): Is the same error code (ClosedByRemote) returned for both of these cases?
-        if (request_thread == nullptr || session->parent->client == nullptr) {
+        const auto reply_result = session->ReplyRequest(SharedFrom(thread));
+        if (reply_result.IsError()) {
             *index = -1;
-            return ResultSessionClosed;
+            return reply_result;
         }
-
-        VAddr source_address = thread->GetCommandBufferAddress();
-        VAddr target_address = request_thread->GetCommandBufferAddress();
-
-        Result translation_result = TranslateCommandBuffer(
-            kernel, memory, SharedFrom(thread), request_thread, source_address, target_address,
-            session->mapped_buffer_context, true);
-
-        // Note: The real kernel seems to always panic if the Server->Client buffer translation
-        // fails for whatever reason.
-        ASSERT(translation_result.IsSuccess());
-
-        // Note: The scheduler is not invoked here.
-        request_thread->ResumeFromWait();
     }
 
     if (handle_count == 0) {
@@ -1171,7 +1330,11 @@ Result SVC::ReplyAndReceive(s32* index, VAddr handles_address, s32 handle_count,
         R_SUCCEED_IF(object->GetHandleType() != HandleType::ServerSession);
 
         auto server_session = static_cast<ServerSession*>(object);
-        return ReceiveIPCRequest(kernel, memory, SharedFrom(server_session), SharedFrom(thread));
+        const auto receive_result = server_session->ReceiveRequest(SharedFrom(thread));
+        if (receive_result.IsError()) {
+            *index = -1;
+        }
+        return receive_result;
     }
 
     // No objects were ready to be acquired, prepare to suspend the thread.
@@ -1220,11 +1383,74 @@ Result SVC::StoreProcessDataCache(Handle process_handle, VAddr address, u32 size
     return ResultSuccess;
 }
 
+/// Luma's custom SVC 0x91 cleans guest data-cache lines. Azahar does not model a separate guest
+/// data cache: guest writes are immediately visible in emulated memory, so this operation is a
+/// no-op. This must not invalidate the Dynarmic instruction cache (that is SVC 0x93).
+void SVC::FlushDataCacheRange(u32, u32) {}
+
 /// Flushes the specified cache range (stubbed as we do not emulate cache).
 Result SVC::FlushProcessDataCache(Handle process_handle, VAddr address, u32 size) {
     const std::shared_ptr<Process> process =
         kernel.GetCurrentProcess()->handle_table.Get<Process>(process_handle);
     R_UNLESS(process, ResultInvalidHandle);
+
+    constexpr u64 osd_candidate_end =
+        static_cast<u64>(LEVEL256_CTRPF_OSD_CANDIDATE_ADDRESS) + sizeof(u32);
+    const u64 flush_end = static_cast<u64>(address) + size;
+    if (process->codeset && process->codeset->program_id == LEVEL256_DIAGNOSTIC_TITLE_ID &&
+        address <= LEVEL256_CTRPF_OSD_CANDIDATE_ADDRESS && flush_end >= osd_candidate_end) {
+        if (const auto plugin_loader = Service::PLGLDR::GetService(system)) {
+            auto& context = plugin_loader->GetPluginLoaderContext();
+            if (context.ctrpf_osd_candidate_flush_observed_pids.insert(process->process_id)
+                    .second) {
+                const bool instruction_valid = memory.IsValidVirtualAddress(
+                    *process, LEVEL256_CTRPF_OSD_CANDIDATE_ADDRESS);
+                const u32 instruction =
+                    instruction_valid
+                        ? memory.Read32(*process, LEVEL256_CTRPF_OSD_CANDIDATE_ADDRESS)
+                        : 0xFFFFFFFF;
+                const auto caller = kernel.GetCurrentProcess();
+                const u32 original_instruction = context.ctrpf_osd_candidate_initial_words[0];
+                const bool original_valid =
+                    context.ctrpf_osd_scan.selected_candidate ==
+                    LEVEL256_CTRPF_OSD_CANDIDATE_ADDRESS;
+                if (instruction_valid &&
+                    instruction == LEVEL256_CTRPF_OSD_HOOK_BRANCH &&
+                    !context.ctrpf_hook_target_instruction_executed &&
+                    !context.ctrpf_hook_trace_started) {
+                    context.ctrpf_hook_execution_trace_armed = true;
+                    context.ctrpf_hook_trace_process_id = process->process_id;
+                    context.ctrpf_hook_target_instruction_executed = false;
+                    context.ctrpf_hook_wrapper_instruction_executed = false;
+                    context.ctrpf_hook_callback_instruction_executed = false;
+                    context.ctrpf_hook_trace_thread_id = UINT32_MAX;
+                    context.ctrpf_hook_trace_runs = 0;
+                    context.ctrpf_hook_invocation_count = 0;
+                    context.ctrpf_hook_asm_wrapper_executed = false;
+                    context.ctrpf_hook_callback_target_observed = false;
+                    context.ctrpf_hook_callback_target = 0;
+                    LOG_INFO(Service_PLGLDR,
+                             "Level256 OSD hook execution trace armed after cache flush "
+                             "pid={} caller_pc=0x{:08X} candidate=0x{:08X} "
+                             "instruction=0x{:08X}",
+                             process->process_id, GetReg(15), LEVEL256_CTRPF_OSD_CANDIDATE_ADDRESS,
+                             instruction);
+                }
+                LOG_INFO(Service_PLGLDR,
+                         "Level256 FlushProcessDataCache OSD candidate target_pid={} "
+                         "caller_pid={} title_id={:016X} pc=0x{:08X} "
+                         "range=[0x{:08X},0x{:016X}) candidate=0x{:08X} "
+                         "original_valid={} original=0x{:08X} readable={} "
+                         "instruction=0x{:08X} changed={}",
+                         process->process_id, caller ? caller->process_id : 0,
+                         process->codeset->program_id, GetReg(15), address, flush_end,
+                         LEVEL256_CTRPF_OSD_CANDIDATE_ADDRESS, original_valid,
+                         original_instruction, instruction_valid, instruction,
+                         original_valid && instruction_valid &&
+                             instruction != original_instruction);
+            }
+        }
+    }
 
     LOG_DEBUG(Kernel_SVC, "called address=0x{:08X}, size=0x{:08X}", address, size);
 
@@ -1396,8 +1622,21 @@ Result SVC::CreateThread(Handle* out_handle, u32 entry_point, u32 arg, VAddr sta
     const auto current_process = kernel.GetCurrentProcess();
     const auto& resource_limit = current_process->resource_limit;
     const u32 max_priority = resource_limit->GetLimitValue(ResourceLimitType::Priority);
-    R_UNLESS(max_priority <= priority || current_process->no_thread_restrictions,
-             ResultNotAuthorized);
+    const bool priority_allowed =
+        CanCreateThreadWithPriority(max_priority, priority, current_process->no_thread_restrictions);
+    if (!priority_allowed && current_process->codeset &&
+        Service::PLGLDR::IsLevel256SupportedTitle(current_process->codeset->program_id)) {
+        const auto current_thread = kernel.GetCurrentThreadManager().GetCurrentThread();
+        LOG_WARNING(Kernel_SVC,
+                    "Level256 CreateThread priority denied: pid={} thread={} pc=0x{:08X} "
+                    "svc=0x08 result=0x{:08X} entry=0x{:08X} requested_priority={} "
+                    "priority_limit={} no_thread_restrictions={}",
+                    current_process->process_id,
+                    current_thread ? current_thread->GetThreadId() : 0, GetReg(15),
+                    ResultNotAuthorized.raw, entry_point, priority, max_priority,
+                    current_process->no_thread_restrictions);
+    }
+    R_UNLESS(priority_allowed, ResultNotAuthorized);
 
     if (processor_id == ThreadProcessorIdDefault) {
         // Set the target CPU to the one specified in the process' exheader.
@@ -1449,7 +1688,42 @@ Result SVC::CreateThread(Handle* out_handle, u32 entry_point, u32 arg, VAddr sta
               "threadpriority=0x{:08X}, processorid=0x{:08X}",
               entry_point, name, arg, stack_top, priority, processor_id);
 
-    return current_process->handle_table.Create(out_handle, std::move(thread));
+    const Result result = current_process->handle_table.Create(out_handle, std::move(thread));
+    if (result.IsSuccess() && entry_point == LEVEL256_WORKER_THREAD_ENTRY &&
+        current_process->codeset) {
+        const auto plugin_loader = Service::PLGLDR::GetService(system);
+        if (plugin_loader) {
+            auto& context = plugin_loader->GetPluginLoaderContext();
+            if (ShouldStartLevel256OpenProcessTrace(
+                    Settings::values.level256_compatibility_enabled.GetValue(),
+                    context.level256_official_plugin_hash_matches,
+                    current_process->codeset->program_id, current_process->process_id,
+                    context.plugin_process_id, context.plugin_loaded, context.plugin_code_begin,
+                    context.plugin_code_end, entry_point,
+                    context.level256_open_process_trace_started)) {
+                const auto created_thread = current_process->handle_table.Get<Thread>(*out_handle);
+                if (created_thread && created_thread->processor_id >= 0 &&
+                    static_cast<u32>(created_thread->processor_id) < system.GetNumCores()) {
+                    context.level256_open_process_trace_started = true;
+                    // In Level256 mode, the focused worker trace replaces the earlier
+                    // GetSystemInfo instruction probe for this process.
+                    system.GetCore(static_cast<u32>(created_thread->processor_id))
+                        .StartPluginInstructionTrace(
+                            current_process->process_id, created_thread->GetThreadId(),
+                            context.plugin_code_begin, context.plugin_code_end,
+                            context.plugin_bootloader_begin, context.plugin_bootloader_end,
+                            LEVEL256_OPEN_PROCESS_TRACE_LIMIT, true, true);
+                    LOG_INFO(Kernel_SVC,
+                             "Level256 OpenProcess ARM trace armed: pid={} thread={} "
+                             "entry=0x{:08X} core={} instruction_limit={}",
+                             current_process->process_id, created_thread->GetThreadId(),
+                             entry_point, created_thread->processor_id,
+                             LEVEL256_OPEN_PROCESS_TRACE_LIMIT);
+                }
+            }
+        }
+    }
+    return result;
 }
 
 /// Called when a thread exits
@@ -1698,7 +1972,7 @@ Result SVC::SignalEvent(Handle handle) {
     // thread closing it. Unrelated invalid handles still return an error.
     if (!evt && handle == 0 && current_thread &&
         process->ConsumeDspSemaphoreSignalGrace(current_thread->thread_id,
-                                                 system.CoreTiming().GetGlobalTicks())) {
+                                                system.CoreTiming().GetGlobalTicks())) {
         LOG_WARNING(Kernel_SVC,
                     "[DSP-SEM-GRACE] Consumed retired semaphore signal: pid={} "
                     "thread={} pc=0x{:08X} -> ResultSuccess",
@@ -2202,6 +2476,11 @@ Result SVC::InvalidateInstructionCacheRange(u32 addr, u32 size) {
     return ResultSuccess;
 }
 
+void SVC::FlushEntireDataCache() {
+    // Guest data reads and writes are coherent in Azahar's unified memory model. Keep this as a
+    // distinct Luma extension entry rather than conflating it with Dynarmic I-cache invalidation.
+}
+
 Result SVC::InvalidateEntireInstructionCache() {
     for (size_t i = 0; i < system.GetNumCores(); i++) {
         system.GetCore(i).ClearInstructionCache();
@@ -2210,14 +2489,64 @@ Result SVC::InvalidateEntireInstructionCache() {
 }
 
 u32 SVC::ConvertVaToPa(u32 addr) {
-    auto vma = kernel.GetCurrentProcess()->vm_manager.FindVMA(addr);
-    if (vma == kernel.GetCurrentProcess()->vm_manager.vma_map.end() ||
-        vma->second.type != VMAType::BackingMemory) {
+    const auto process = kernel.GetCurrentProcess();
+    auto vma = process->vm_manager.FindVMA(addr);
+    if (vma == process->vm_manager.vma_map.end() || vma->second.type != VMAType::BackingMemory) {
         return 0;
     }
-    return kernel.memory.GetFCRAMOffset(vma->second.backing_memory.GetPtr() + addr -
-                                        vma->second.base) +
-           Memory::FCRAM_PADDR;
+
+    const auto* backing_start = vma->second.backing_memory.GetPtr();
+    const auto* host_pointer = backing_start + (addr - vma->second.base);
+    const auto fcram_offset = kernel.memory.TryGetFCRAMOffset(host_pointer);
+    if (fcram_offset) {
+        return *fcram_offset + Memory::FCRAM_PADDR;
+    }
+
+    // Identify VRAM by the VMA's actual backing allocation. The virtual address alone is not
+    // sufficient because another allocation can be mapped into the same guest range.
+    const auto vram_offset = kernel.memory.TryGetVRAMOffset(host_pointer);
+    if (vram_offset) {
+        return *vram_offset + Memory::VRAM_PADDR;
+    }
+
+    {
+        const u64 title_id = process->codeset ? process->codeset->program_id : 0;
+        const auto thread = kernel.GetCurrentThreadManager().GetCurrentThread();
+        const u32 pc = GetReg(15);
+        bool level256_target = false;
+        if (Settings::values.level256_compatibility_enabled.GetValue() &&
+            title_id == LEVEL256_DIAGNOSTIC_TITLE_ID && process->process_id == 16 && thread &&
+            thread->GetThreadId() == 31 && pc == 0x070991F8) {
+            const auto plugin_loader = Service::PLGLDR::GetService(system);
+            if (plugin_loader) {
+                const auto& context = plugin_loader->GetPluginLoaderContext();
+                level256_target = context.plugin_loaded &&
+                                  context.level256_official_plugin_hash_matches &&
+                                  context.plugin_process_id == process->process_id &&
+                                  pc >= context.plugin_code_begin && pc < context.plugin_code_end;
+            }
+        }
+
+        if (level256_target) {
+            const auto fcram_begin = reinterpret_cast<std::uintptr_t>(
+                kernel.memory.GetFCRAMPointer(0));
+            const auto fcram_end = fcram_begin + Memory::FCRAM_N3DS_SIZE;
+            LOG_WARNING(Kernel_SVC,
+                        "Level256 ConvertVaToPa rejected non-FCRAM backing: pid={} title=0x{:016X} "
+                        "thread={} pc=0x{:08X} va=0x{:08X} vma_base=0x{:08X} "
+                        "vma_size=0x{:X} vma_type={} vma_state={} backing_host=0x{:X} "
+                        "computed_host=0x{:X} fcram_begin=0x{:X} fcram_end=0x{:X} "
+                        "host_in_fcram=false result=0",
+                        process->process_id, title_id, thread->GetThreadId(), pc, addr,
+                        vma->second.base, vma->second.size,
+                        static_cast<u32>(vma->second.type),
+                        static_cast<u32>(vma->second.meminfo_state),
+                        reinterpret_cast<std::uintptr_t>(backing_start),
+                        reinterpret_cast<std::uintptr_t>(host_pointer), fcram_begin, fcram_end);
+        }
+        // svcConvertVAToPA returns NULL when no physical address can be obtained.
+        return 0;
+    }
 }
 
 Result SVC::MapProcessMemoryEx(Handle dst_process_handle, u32 dst_address,
@@ -2519,8 +2848,8 @@ const std::array<SVC::FunctionDef, 180> SVC::SVC_Table{{
     {0x8E, nullptr, "Unused", 1000},
     {0x8F, nullptr, "Unused", 1000},
     {0x90, &SVC::Wrap<&SVC::ConvertVaToPa, 0x90>, "ConvertVaToPa", 1000},
-    {0x91, nullptr, "FlushDataCacheRange", 1000},
-    {0x92, nullptr, "FlushEntireDataCache", 1000},
+    {0x91, &SVC::Wrap<&SVC::FlushDataCacheRange, 0x91>, "FlushDataCacheRange", 1000},
+    {0x92, &SVC::Wrap<&SVC::FlushEntireDataCache, 0x92>, "FlushEntireDataCache", 1000},
     {0x93, &SVC::Wrap<&SVC::InvalidateInstructionCacheRange, 0x93>,
      "InvalidateInstructionCacheRange", 1000},
     {0x94, &SVC::Wrap<&SVC::InvalidateEntireInstructionCache, 0x94>,
@@ -2591,14 +2920,321 @@ void SVC::CallSVC(u32 immediate) {
     const u32 in_r3 = GetReg(3);
     const u32 in_pc = GetReg(15);
 
+    const auto thread = kernel.GetCurrentThreadManager().GetCurrentThread();
+    std::shared_ptr<Service::PLGLDR::PLG_LDR> plugin_loader;
+    bool plugin_svc = false;
+    bool level256_plugin_context = false;
+    bool level256_official_plugin_context = false;
+    Luma3DS::CompatibilityContext luma_compatibility_context{};
+    Luma3DS::PluginAuthorization luma_plugin_authorization{};
+    std::string service_name;
+    // The mapped 3GX bootloader and executable occupy these reserved windows. Avoid a service
+    // lookup on the normal SVC hot path for PCs outside them.
+    if (process && thread && in_pc >= 0x06FFF000 && in_pc < 0x08000000) {
+        if (immediate == 0x32) {
+            const auto session = process->handle_table.Get<ClientSession>(in_r0);
+            if (session) {
+                service_name = session->name;
+            }
+        }
+        plugin_loader = Service::PLGLDR::GetService(system);
+        if (plugin_loader) {
+            const auto& plugin_context = plugin_loader->GetPluginLoaderContext();
+            luma_compatibility_context = plugin_loader->GetLumaCompatibilityContext(
+                Settings::values.level256_compatibility_enabled.GetValue());
+            luma_plugin_authorization = plugin_loader->GetLumaExtensionAuthorization(
+                process->codeset ? process->codeset->program_id : 0);
+            level256_plugin_context = Luma3DS::CanDispatchExtension(
+                luma_compatibility_context, luma_plugin_authorization, process->process_id, in_pc);
+            const bool supported_title =
+                process->codeset &&
+                Service::PLGLDR::IsLevel256SupportedTitle(process->codeset->program_id);
+            level256_official_plugin_context = IsVerifiedLevel256PluginContext(
+                true, supported_title, plugin_context.level256_official_plugin_hash_matches,
+                process->process_id, plugin_context.plugin_process_id, plugin_context.plugin_loaded,
+                plugin_context.plugin_code_begin, plugin_context.plugin_code_end, in_pc);
+            plugin_svc = plugin_loader->TracePluginSVC(
+                *process, *thread, in_pc, immediate, info->name,
+                service_name.empty() ? nullptr : service_name.c_str());
+        }
+    }
+
+    // ARM11 kernel-extension SVCs are not part of the ordinary 3DS SVC ABI. Expose them only to
+    // the active, hash-verified plugin mapping when the compatibility mode is enabled. The
+    // ordinary SVC table and its behavior remain unchanged for games and unverified code.
+    Luma3DS::SvcRequest luma_svc_request{.svc_id = immediate,
+                                          .process_id = process ? process->process_id : 0,
+                                          .entry_pc = in_pc,
+                                          .arguments = {GetReg(0), GetReg(1), GetReg(2), GetReg(3),
+                                                        GetReg(4), GetReg(5), GetReg(6), GetReg(7)}};
+    const auto luma_dispatch = Luma3DS::DispatchExtensionSvc(
+        luma_svc_request, luma_compatibility_context, luma_plugin_authorization);
+    if (luma_dispatch.kind == Luma3DS::SvcDispatchKind::Rejected) {
+        SetReg(0, ResultNotImplemented.raw);
+        system.perf_stats->EndSVCProcessing();
+        return;
+    }
+
     LOG_TRACE(Kernel_SVC, "calling {}", info->name);
+    std::shared_ptr<AddressArbiter> level256_arbiter;
+    std::vector<std::pair<u32, ThreadStatus>> level256_waiters_before;
+    bool trace_level256_arbiter = false;
+    bool trace_level256_hook_arbiter = false;
+    bool level256_arbiter_address_valid = false;
+    u32 level256_arbiter_memory_before = 0xFFFFFFFF;
+    ThreadStatus level256_arbiter_thread_status_before = ThreadStatus::Dead;
+    if (immediate == 0x22 && level256_official_plugin_context && plugin_loader && process &&
+        thread) {
+        auto& context = plugin_loader->GetPluginLoaderContext();
+        auto current_arbiter = process->handle_table.Get<AddressArbiter>(in_r0);
+        if (!context.ctrpf_arbiter_watch_started) {
+            context.ctrpf_arbiter_watch_started = true;
+            context.ctrpf_arbiter_watch_handle = in_r0;
+            context.ctrpf_arbiter_watch_address = in_r1;
+            context.ctrpf_arbiter_watch_object =
+                reinterpret_cast<std::uintptr_t>(current_arbiter.get());
+        }
+        const bool same_arbiter = context.ctrpf_arbiter_watch_object != 0
+                                      ? reinterpret_cast<std::uintptr_t>(current_arbiter.get()) ==
+                                            context.ctrpf_arbiter_watch_object
+                                      : in_r0 == context.ctrpf_arbiter_watch_handle;
+        trace_level256_hook_arbiter = context.ctrpf_hook_callback_target_observed &&
+                                      context.ctrpf_hook_arbiter_trace_count <
+                                          Kernel::LEVEL256_CTRPF_ARBITER_DIAGNOSTIC_LIMIT;
+        trace_level256_arbiter =
+            trace_level256_hook_arbiter ||
+            (same_arbiter && in_r1 == context.ctrpf_arbiter_watch_address &&
+             ShouldLogLevel256ArbiterDiagnostic(true, context.ctrpf_arbiter_trace_count));
+        if (trace_level256_arbiter) {
+            level256_arbiter_address_valid = memory.IsValidVirtualAddress(*process, in_r1);
+            if (level256_arbiter_address_valid) {
+                level256_arbiter_memory_before = memory.Read32(*process, in_r1);
+            }
+            level256_arbiter_thread_status_before = thread->status;
+            level256_arbiter = current_arbiter;
+            if (level256_arbiter) {
+                level256_waiters_before = level256_arbiter->GetWaitersForAddress(in_r1);
+            }
+        }
+    }
     if (info->func) {
         system.GetRunningCore().GetTimer().AddTicks(info->cycles);
         (this->*(info->func))();
 
+        if (level256_plugin_context && immediate == 0x08 && process && thread && plugin_loader) {
+            auto& context = plugin_loader->GetPluginLoaderContext();
+            if (ConsumeLevel256ThreadCreateLogSlot(true,
+                                                   context.level256_thread_create_log_count)) {
+                const Handle returned_handle = GetReg(1);
+                const auto created_thread = GetReg(0) == ResultSuccess.raw
+                                                ? process->handle_table.Get<Thread>(returned_handle)
+                                                : nullptr;
+                LOG_INFO(Kernel_SVC,
+                         "Level256 worker CreateThread result: title={:016X} pid={} "
+                         "caller_thread={} caller_pc=0x{:08X} requested_entry_pc=0x{:08X} "
+                         "result=0x{:08X} handle=0x{:08X} created_thread={} "
+                         "created_pc=0x{:08X} created_status={}",
+                         process->codeset ? process->codeset->program_id : 0, process->process_id,
+                         thread->GetThreadId(), in_pc, in_r1, GetReg(0), returned_handle,
+                         created_thread ? created_thread->GetThreadId() : UINT32_MAX,
+                         created_thread ? created_thread->context.GetProgramCounter() : 0,
+                         created_thread
+                             ? Level256DiagnosticThreadStatusName(created_thread->status)
+                             : "NotCreated");
+            }
+        }
+
+        if (trace_level256_arbiter && plugin_loader && process && thread) {
+            auto& context = plugin_loader->GetPluginLoaderContext();
+            ++context.ctrpf_arbiter_trace_count;
+            if (trace_level256_hook_arbiter) {
+                ++context.ctrpf_hook_arbiter_trace_count;
+            }
+            const u32 memory_after =
+                level256_arbiter_address_valid ? memory.Read32(*process, in_r1) : 0xFFFFFFFF;
+            const auto waiters_after = level256_arbiter
+                                           ? level256_arbiter->GetWaitersForAddress(in_r1)
+                                           : std::vector<std::pair<u32, ThreadStatus>>{};
+            std::string resumed_threads;
+            for (const auto& [waiter_id, old_status] : level256_waiters_before) {
+                const bool still_waiting = std::any_of(
+                    waiters_after.begin(), waiters_after.end(),
+                    [waiter_id](const auto& waiter) { return waiter.first == waiter_id; });
+                if (still_waiting) {
+                    continue;
+                }
+                if (!resumed_threads.empty()) {
+                    resumed_threads += ",";
+                }
+                const auto resumed = kernel.GetCurrentThreadManager().GetThreadByID(waiter_id);
+                if (resumed) {
+                    ++context.ctrpf_guest_arbiter_wakeup_count;
+                }
+                resumed_threads += fmt::format(
+                    "{}:{}->{}:pc=0x{:08X}", waiter_id,
+                    Level256DiagnosticThreadStatusName(old_status),
+                    resumed ? Level256DiagnosticThreadStatusName(resumed->status) : "Gone",
+                    resumed ? resumed->context.GetProgramCounter() : 0);
+            }
+            if (thread->status == ThreadStatus::WaitArb) {
+                ++context.ctrpf_guest_arbiter_wait_count;
+            }
+            if (in_r2 == static_cast<u32>(ArbitrationType::Signal)) {
+                ++context.ctrpf_guest_arbiter_signal_count;
+            }
+
+            if (!context.ctrpf_osd_post_init_compared) {
+                context.ctrpf_osd_post_init_compared = true;
+                const std::array<u32, 3> candidates = {
+                    context.ctrpf_osd_scan.candidate1,
+                    context.ctrpf_osd_scan.candidate2,
+                    context.ctrpf_osd_scan.candidate3,
+                };
+                for (std::size_t i = 0; i < candidates.size(); ++i) {
+                    if (candidates[i] == LEVEL256_CTRPF_OSD_NOT_FOUND ||
+                        !memory.IsValidVirtualAddress(*process, candidates[i])) {
+                        continue;
+                    }
+                    const u32 after = memory.Read32(*process, candidates[i]);
+                    LOG_INFO(Service_PLGLDR,
+                             "Level256 CTRPF OSD candidate post-arbiter pid={} thread={} "
+                             "candidate=0x{:08X} before=0x{:08X} after=0x{:08X} changed={}",
+                             process->process_id, thread->GetThreadId(), candidates[i],
+                             context.ctrpf_osd_candidate_initial_words[i], after,
+                             after != context.ctrpf_osd_candidate_initial_words[i]);
+                }
+            }
+
+            LOG_INFO(Service_PLGLDR,
+                     "Level256 CTRPF ArbitrateAddress phase={} pid={} thread={} pc=0x{:08X} "
+                     "handle=0x{:08X} address=0x{:08X} type={} value={} "
+                     "memory_valid={} memory_before=0x{:08X} memory_after=0x{:08X} "
+                     "result=0x{:08X} wait_reason={} return_pc=0x{:08X} "
+                     "thread_status_before={} thread_status_after={} waiters_before={} "
+                     "waiters_after={} resumed_threads={}",
+                     trace_level256_hook_arbiter ? "after_hook_callback" : "initial_watch",
+                     process->process_id, thread->GetThreadId(), in_pc, in_r0, in_r1, in_r2,
+                     static_cast<s32>(in_r3), level256_arbiter_address_valid,
+                     level256_arbiter_memory_before, memory_after, GetReg(0),
+                     thread->status == ThreadStatus::WaitArb ? "ArbitrateAddress" : "none",
+                     thread->context.GetProgramCounter(),
+                     Level256DiagnosticThreadStatusName(level256_arbiter_thread_status_before),
+                     Level256DiagnosticThreadStatusName(thread->status),
+                     level256_waiters_before.size(), waiters_after.size(), resumed_threads);
+        }
+
+        if (level256_plugin_context && immediate == 0x33 && in_pc == 0x070A1320) {
+            // OpenProcess's pointer output occupies r0; the process ID remains in r1 per the
+            // ARM SVC ABI. The returned handle is in r1 after dispatch.
+            const auto target = kernel.GetProcessById(in_r1);
+            const VAddr stack_pointer = GetReg(13);
+            const auto read_stack_word = [&](u32 offset) {
+                const u64 address = static_cast<u64>(stack_pointer) + offset;
+                if (address > 0xFFFFFFFFULL ||
+                    !memory.IsValidVirtualAddress(*process, static_cast<VAddr>(address))) {
+                    return 0xFFFFFFFF;
+                }
+                return memory.Read32(*process, static_cast<VAddr>(address));
+            };
+            // OpenProcess's caller has two paths: r5 == 0 loads its PID from caller [sp+0xC4],
+            // otherwise it loads caller [sp+0xC8]. The wrapper has pushed its output pointer, so
+            // the corresponding SVC-entry offsets are +0xC8 and +0xCC.
+            const u32 stack_c4 = read_stack_word(0xC8);
+            const u32 stack_c8 = read_stack_word(0xCC);
+            LOG_WARNING(Kernel_SVC,
+                        "Level256 OpenProcess: caller_pid={} thread={} pc=0x{:08X} "
+                        "target_pid={} target_present={} target_title={:016X} "
+                        "output_address=0x{:08X} result=0x{:08X} output_handle=0x{:08X} "
+                        "lr=0x{:08X} r5=0x{:08X} sp=0x{:08X} stack_c4=0x{:08X} "
+                        "stack_c8=0x{:08X} selected_stack_pid=0x{:08X}",
+                        process->process_id, thread ? thread->GetThreadId() : 0, in_pc, in_r1,
+                        static_cast<bool>(target),
+                        target && target->codeset ? target->codeset->program_id : 0, in_r0,
+                        GetReg(0), GetReg(1), GetReg(14), GetReg(5), stack_pointer, stack_c4,
+                        stack_c8, GetReg(5) == 0 ? stack_c4 : stack_c8);
+        }
+
+        if (level256_plugin_context && immediate == LEVEL256_QUERY_PROCESS_MEMORY_SVC_ID &&
+            in_pc == LEVEL256_QUERY_PROCESS_MEMORY_SVC_PC &&
+            GetReg(0) == LEVEL256_QUERY_PROCESS_MEMORY_FAILURE &&
+            plugin_loader->GetPluginLoaderContext().level256_official_plugin_hash_matches) {
+            auto& plugin_context = plugin_loader->GetPluginLoaderContext();
+            auto& failure_count = plugin_context.plugin_query_process_memory_failures;
+            if (RecordLevel256QueryProcessMemoryFailure(failure_count)) {
+                LOG_WARNING(Kernel_SVC,
+                            "Level256 QueryProcessMemory failure: caller_pid={} thread={} "
+                            "pc=0x{:08X} process_handle=0x{:08X} address=0x{:08X} "
+                            "result=0x{:08X} aggregated_failures={}",
+                            process->process_id, thread ? thread->GetThreadId() : 0, in_pc, in_r2,
+                            in_r3, GetReg(0), failure_count);
+            }
+        }
+
+        // Reproduce Luma3DS-Level256's documented type 0x30000 verification response only for
+        // the enabled mode, verified plugin hash, owning process, and mapped plugin code.
+        if (immediate == LEVEL256_DIAGNOSTIC_SVC_ID && plugin_loader && process && thread &&
+            process->codeset) {
+            Luma3DS::SystemInfoResponse level256_response{};
+            const auto level256_policy = plugin_loader->GetLevel256VerificationPolicy(
+                Settings::values.level256_compatibility_enabled.GetValue(),
+                process->codeset->program_id);
+            const bool response_available = Luma3DS::TryGetSystemInfoCompatibilityResponse(
+                luma_compatibility_context, luma_plugin_authorization, level256_policy,
+                process->process_id, in_pc, immediate, in_r1, static_cast<s32>(in_r2),
+                level256_response);
+            if (response_available) {
+                u32 result = GetReg(0);
+                u64 output = static_cast<u64>(GetReg(1)) | (static_cast<u64>(GetReg(2)) << 32);
+                const u64 original_value = output;
+                const u32 original_result = result;
+                result = level256_response.result;
+                output = level256_response.value;
+                LOG_WARNING(Kernel_SVC,
+                            "Level256 GetSystemInfo compatibility response: pid={} pc=0x{:08X} "
+                            "type=0x{:X} param={} "
+                            "original=0x{:016X} replacement=0x{:016X} "
+                            "result=0x{:08X}->0x{:08X}",
+                            process->process_id, in_pc, in_r1, static_cast<s32>(in_r2),
+                            original_value, output, original_result, result);
+                SetReg(0, result);
+                SetReg(1, static_cast<u32>(output));
+                SetReg(2, static_cast<u32>(output >> 32));
+            }
+        }
+
+        if (plugin_svc && plugin_loader) {
+            const u64 output_value =
+                static_cast<u64>(GetReg(1)) | (static_cast<u64>(GetReg(2)) << 32);
+            plugin_loader->TracePluginSVCResult(*process, *thread, immediate, info->name, in_pc,
+                                                GetReg(15), in_r1, static_cast<s32>(in_r2),
+                                                GetReg(0), output_value);
+
+            // Follow the observed Level256/Citra-information query only. The trace is bounded,
+            // restricted to this plugin owner/thread/code range, and leaves guest state untouched.
+            constexpr u64 level256_probe_title_id = 0x0004000000155100ULL;
+            constexpr u32 citra_information_type = 0x20000;
+            constexpr s32 emulator_id_param = 0;
+            constexpr u64 azahar_emulator_id = 2;
+            constexpr u32 instruction_trace_limit = 256;
+            auto& plugin_context = plugin_loader->GetPluginLoaderContext();
+            if (immediate == 0x2A && process->codeset &&
+                !Settings::values.level256_compatibility_enabled.GetValue() &&
+                process->codeset->program_id == level256_probe_title_id &&
+                in_r1 == citra_information_type && static_cast<s32>(in_r2) == emulator_id_param &&
+                ((GetReg(0) == ResultSuccess.raw && output_value == azahar_emulator_id) ||
+                 (GetReg(0) == LEVEL256_LUMA_MARKER_RESULT && output_value == 0)) &&
+                plugin_context.plugin_trace_thread_id == thread->GetThreadId() &&
+                !plugin_context.plugin_instruction_trace_started) {
+                plugin_context.plugin_instruction_trace_started = true;
+                system.GetRunningCore().StartPluginInstructionTrace(
+                    process->process_id, thread->GetThreadId(), plugin_context.plugin_code_begin,
+                    plugin_context.plugin_code_end, plugin_context.plugin_bootloader_begin,
+                    plugin_context.plugin_bootloader_end, instruction_trace_limit);
+            }
+        }
+
         const u32 out_r0 = GetReg(0);
-        if (out_r0 == ResultInvalidHandle.raw) {
-            const auto thread = kernel.GetCurrentThreadManager().GetCurrentThread();
+        if (out_r0 == ResultInvalidHandle.raw && !(level256_plugin_context && immediate == 0x7D)) {
             LOG_CRITICAL(
                 Kernel_SVC,
                 "[HOME-HANDOFF] INVALID HANDLE SVC: svc=0x{:02X} name={} pid={} title={:016X} "
@@ -2609,9 +3245,102 @@ void SVC::CallSVC(u32 immediate) {
                 thread ? thread->thread_id : 0, in_pc, in_r0, in_r1, in_r2, in_r3, out_r0);
         }
     } else {
-        LOG_ERROR(Kernel_SVC, "unimplemented SVC function {:02X} {}(..)", info->id, info->name);
+        if (immediate == Kernel::LEVEL256_CUSTOM_BACKDOOR_SVC_ID && process && thread &&
+            plugin_loader && luma_dispatch.kind == Luma3DS::SvcDispatchKind::DelegateToRegisteredHandler) {
+            const auto common_status = Luma3DS::ValidateCustomBackdoorRequest(
+                luma_svc_request, luma_compatibility_context, luma_plugin_authorization);
+            if (common_status == Luma3DS::CustomBackdoorStatus::Unsupported) {
+                const auto backdoor = Luma3DS::HandleLevel256CustomBackdoor(
+                    system, memory, process, thread, plugin_loader->GetPluginLoaderContext(),
+                    plugin_loader->GetProcessViewManager(), luma_compatibility_context,
+                    luma_plugin_authorization, luma_svc_request);
+                if (backdoor.handled) {
+                    SetReg(0, backdoor.result);
+                    system.perf_stats->EndSVCProcessing();
+                    return;
+                }
+            }
+        }
+
+        if (level256_plugin_context && immediate == 0xA3 && process && thread) {
+            const u32 r4 = GetReg(4);
+            const u32 r5 = GetReg(5);
+            const u32 r6 = GetReg(6);
+            const u32 r7 = GetReg(7);
+            const char* operation_name = "unsupported";
+            u32 expected_memory_state = 0;
+            switch (in_r3 & MEMOP_OPERATION_MASK) {
+            case MEMOP_FREE:
+                operation_name = "FREE";
+                break;
+            case MEMOP_COMMIT:
+                operation_name = "COMMIT";
+                expected_memory_state = (in_r3 & MEMOP_LINEAR) ? 0x3907 : 0xBB05;
+                break;
+            default:
+                break;
+            }
+            LOG_WARNING(Kernel_SVC,
+                        "Level256 ControlMemoryUnsafe ABI: pid={} thread={} pc=0x{:08X} "
+                        "r0_out=0x{:08X} r1_addr=0x{:08X} r2_size=0x{:08X} "
+                        "r3_operation=0x{:08X} op_name={} region=0x{:X} linear={} "
+                        "r4_permissions=0x{:08X} r5=0x{:08X} r6=0x{:08X} r7=0x{:08X} "
+                        "effective_size=0x{:08X} expected_luma_state=0x{:08X}",
+                        process->process_id, thread->GetThreadId(), in_pc, in_r0, in_r1, in_r2,
+                        in_r3, operation_name, in_r3 & MEMOP_REGION_MASK,
+                        (in_r3 & MEMOP_LINEAR) != 0, r4, r5, r6, r7,
+                        in_r2 & ~Memory::CITRA_PAGE_MASK, expected_memory_state);
+        }
+
+        if (immediate == LEVEL256_CONTROL_MEMORY_UNSAFE_SVC_ID && process && thread &&
+            plugin_loader && level256_plugin_context) {
+            const auto operation = Luma3DS::ControlMemoryUnsafe(
+                memory, *process, *thread, plugin_loader->GetPluginLoaderContext(),
+                plugin_loader->GetProcessViewManager(), luma_svc_request);
+            if (operation.handled) {
+                SetReg(0, operation.result.raw);
+                system.perf_stats->EndSVCProcessing();
+                return;
+            }
+        }
+
+        LOG_ERROR(Kernel_SVC,
+                  "unimplemented SVC id=0x{:02X} name={} pid={} title_id={:016X} thread={} "
+                  "pc=0x{:08X}",
+                  info->id, info->name, process ? process->process_id : 0,
+                  process && process->codeset ? process->codeset->program_id : 0,
+                  thread ? thread->thread_id : 0, in_pc);
+        if (Luma3DS::IsExtensionSVC(immediate)) {
+            // A recognized extension with no safe HLE implementation must fail explicitly;
+            // returning the callback pointer or an old guest register value would look successful.
+            SetReg(0, ResultNotImplemented.raw);
+        }
     }
     system.perf_stats->EndSVCProcessing();
+}
+
+bool SVC::ShouldLogSVCError(u32 svc_id, u32 raw_result) {
+    const auto process = kernel.GetCurrentProcess();
+    const auto thread = kernel.GetCurrentThreadManager().GetCurrentThread();
+    if (!process || !thread || !process->codeset ||
+        !Settings::values.level256_compatibility_enabled.GetValue() ||
+        !Service::PLGLDR::IsLevel256SupportedTitle(process->codeset->program_id) ||
+        svc_id != LEVEL256_QUERY_PROCESS_MEMORY_SVC_ID ||
+        raw_result != LEVEL256_QUERY_PROCESS_MEMORY_FAILURE) {
+        return true;
+    }
+
+    const auto plugin_loader = Service::PLGLDR::GetService(system);
+    if (!plugin_loader) {
+        return true;
+    }
+    const auto& context = plugin_loader->GetPluginLoaderContext();
+    const u32 pc = GetReg(15);
+    const bool suppress = ShouldSuppressDuplicateLevel256SVCError(
+        true, context.level256_official_plugin_hash_matches, process->codeset->program_id,
+        process->process_id, context.plugin_process_id, context.plugin_loaded,
+        context.plugin_code_begin, context.plugin_code_end, pc, svc_id, raw_result);
+    return !suppress;
 }
 
 SVC::SVC(Core::System& system) : system(system), kernel(system.Kernel()), memory(system.Memory()) {}

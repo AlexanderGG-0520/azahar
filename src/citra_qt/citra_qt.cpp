@@ -1365,6 +1365,10 @@ bool GMainWindow::LoadROM(const QString& filename) {
     }
 
     const auto scope = render_window->Acquire();
+    if (!scope) {
+        LOG_CRITICAL(Frontend, "Failed to make the primary render context current before loading");
+        return false;
+    }
 
     if (!UISettings::values.inserted_cartridge.GetValue().empty()) {
         system.InsertCartridge(UISettings::values.inserted_cartridge.GetValue());

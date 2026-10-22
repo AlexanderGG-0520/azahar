@@ -8,8 +8,12 @@
 #include "common/assert.h"
 #include "core/hle/kernel/event.h"
 #include "core/hle/kernel/kernel.h"
+#include "core/hle/kernel/level256_diagnostic.h"
 #include "core/hle/kernel/resource_limit.h"
 #include "core/hle/kernel/thread.h"
+#include "core/core.h"
+#include "core/hle/service/plgldr/plgldr.h"
+#include "core/hle/service/plgldr/plugin_path.h"
 
 SERIALIZE_EXPORT_IMPL(Kernel::Event)
 
@@ -44,6 +48,26 @@ void Event::Acquire(Thread* thread) {
 }
 
 void Event::Signal() {
+    // Count one notification when this kernel Event is actually associated with a waiting
+    // thread owned by the hash-verified Level256 plugin. Guest LightEvents are observed through
+    // their real arbiter address in the SVC diagnostic instead.
+    for (const auto& thread : GetWaitingThreads()) {
+        if (auto process = thread->owner_process.lock()) {
+            auto& system = Core::Global<Core::System>();
+            if (auto plugin_loader = Service::PLGLDR::GetService(system)) {
+                const auto& context = plugin_loader->GetPluginLoaderContext();
+                if (!context.plugin_loaded || !context.level256_official_plugin_hash_matches ||
+                    context.plugin_process_id != process->process_id || !process->codeset ||
+                    !Service::PLGLDR::IsLevel256SupportedTitle(process->codeset->program_id)) {
+                    continue;
+                }
+                plugin_loader->TraceLevel256GuestWait(
+                    *process, thread->GetThreadId(), thread->context.GetProgramCounter(), "notify",
+                    GetTypeName(), GetObjectId(), GetName(), 0);
+                break;
+            }
+        }
+    }
     signaled = true;
     WakeupAllWaitingThreads();
 }

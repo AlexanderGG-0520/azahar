@@ -355,6 +355,8 @@ void ConfigureSystem::SetConfiguration() {
         Settings::values.enable_required_online_lle_modules.GetValue());
     ui->plugin_loader->setChecked(Settings::values.plugin_loader_enabled.GetValue());
     ui->allow_plugin_loader->setChecked(Settings::values.allow_plugin_loader.GetValue());
+    ui->level256_compatibility_enabled->setChecked(
+        Settings::values.level256_compatibility_enabled.GetValue());
 }
 
 void ConfigureSystem::ReadSystemSettings() {
@@ -499,6 +501,8 @@ void ConfigureSystem::ApplyConfiguration() {
 
         Settings::values.plugin_loader_enabled.SetValue(ui->plugin_loader->isChecked());
         Settings::values.allow_plugin_loader.SetValue(ui->allow_plugin_loader->isChecked());
+        Settings::values.level256_compatibility_enabled.SetValue(
+            ui->level256_compatibility_enabled->isChecked());
 
         cfg->GetMacAddress() = mac_address;
         cfg->SaveMacAddress();
@@ -760,6 +764,8 @@ void ConfigureSystem::SetupPerGameUI() {
     ui->label_plugin_loader->setVisible(false);
     ui->plugin_loader->setVisible(false);
     ui->allow_plugin_loader->setVisible(false);
+    ui->label_level256_compatibility_enabled->setVisible(false);
+    ui->level256_compatibility_enabled->setVisible(false);
     ui->group_real_console_unique_data->setVisible(false);
 
     ConfigurationShared::SetColoredTristate(ui->toggle_new_3ds, Settings::values.is_new_3ds,

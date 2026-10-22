@@ -16,6 +16,8 @@ namespace Common {
 class DynamicLibrary;
 }
 
+class QThread;
+
 namespace Frontend {
 
 /// Information for the Graphics Backends signifying what type of screen pointer is in
@@ -49,7 +51,7 @@ public:
     /**
      * Recreate the presentation objects attached to this frame with the new specified width/height
      */
-    virtual void ReloadPresentFrame(Frontend::Frame* frame, u32 width, u32 height) = 0;
+    virtual bool ReloadPresentFrame(Frontend::Frame* frame, u32 width, u32 height) = 0;
 
     /**
      * Render thread calls this to get an available frame to present
@@ -89,6 +91,17 @@ public:
     /// Makes the graphics context current for the caller thread
     virtual void MakeCurrent() {};
 
+    /// Makes the graphics context current and reports whether GL work is safe to issue.
+    virtual bool TryMakeCurrent() {
+        MakeCurrent();
+        return true;
+    }
+
+    /// Transfers context ownership to another thread when the backend requires it.
+    virtual bool MoveToThread(QThread*) {
+        return true;
+    }
+
     /// Releases (dunno if this is the "right" word) the context from the caller thread
     virtual void DoneCurrent() {};
 
@@ -100,14 +113,21 @@ public:
     class Scoped {
     public:
         explicit Scoped(GraphicsContext& context_) : context(context_) {
-            context.MakeCurrent();
+            current = context.TryMakeCurrent();
         }
         ~Scoped() {
-            context.DoneCurrent();
+            if (current) {
+                context.DoneCurrent();
+            }
+        }
+
+        explicit operator bool() const {
+            return current;
         }
 
     private:
         GraphicsContext& context;
+        bool current = false;
     };
 
     /// Calls MakeCurrent on the context and calls DoneCurrent when the scope for the returned value

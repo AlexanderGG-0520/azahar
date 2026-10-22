@@ -43,6 +43,10 @@ void FrameDumperOpenGL::StopDumping() {
 
 void FrameDumperOpenGL::PresentLoop(std::stop_token stop_token) {
     const auto scope = context->Acquire();
+    if (!scope) {
+        LOG_ERROR(Render_OpenGL, "Unable to make the OpenGL video-dump context current");
+        return;
+    }
     InitializeOpenGLObjects();
 
     const auto& layout = GetLayout();
@@ -54,7 +58,9 @@ void FrameDumperOpenGL::PresentLoop(std::stop_token stop_token) {
 
         if (frame->color_reloaded) {
             LOG_DEBUG(Render_OpenGL, "Reloading present frame");
-            mailbox->ReloadPresentFrame(frame, layout.width, layout.height);
+            if (!mailbox->ReloadPresentFrame(frame, layout.width, layout.height)) {
+                continue;
+            }
         }
         glWaitSync(frame->render_fence, 0, GL_TIMEOUT_IGNORED);
 

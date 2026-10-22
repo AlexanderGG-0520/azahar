@@ -6,6 +6,7 @@
 #include <array>
 #include <cstddef>
 #include <optional>
+#include <functional>
 #include <string>
 #include <boost/serialization/array.hpp>
 #include <boost/serialization/vector.hpp>
@@ -678,6 +679,12 @@ public:
     /// Gets offset in FCRAM from a pointer inside FCRAM range
     u32 GetFCRAMOffset(const u8* pointer) const;
 
+    /// Gets the FCRAM offset for a host pointer, or nullopt if it is outside FCRAM.
+    std::optional<u32> TryGetFCRAMOffset(const u8* pointer) const;
+
+    /// Gets the VRAM offset for a host pointer, or nullopt if it is outside VRAM.
+    std::optional<u32> TryGetVRAMOffset(const u8* pointer) const;
+
     /// Gets pointer in FCRAM with given offset
     u8* GetFCRAMPointer(std::size_t offset);
 
@@ -698,8 +705,15 @@ public:
 
     void RasterizerFlushVirtualRegion(VAddr start, u32 size, FlushMode mode);
 
-    /// Returns a reference to the framebuffer address of the currently loaded 3GX plugin.
-    PAddr& Plugin3GXFramebufferAddress();
+    /// Returns the framebuffer physical base of the currently loaded 3GX plugin.
+    PAddr Plugin3GXFramebufferAddress() const;
+
+    /// Sets the framebuffer physical base of the currently loaded 3GX plugin.
+    void SetPlugin3GXFramebufferAddress(PAddr address);
+
+    /// Clears rasterizer references while the plugin framebuffer alias is still valid, then
+    /// forgets that alias. The callback must remove surfaces that reference this framebuffer.
+    void ClearPlugin3GXFramebufferAddress(const std::function<void()>& clear_rasterizer_cache);
 
     void RegisterWatchpoint(const Kernel::Process& process, VAddr addr, u32 size);
 

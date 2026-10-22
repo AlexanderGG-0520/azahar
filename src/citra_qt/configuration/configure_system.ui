@@ -575,6 +575,23 @@ installed applications.</string>
               </property>
              </widget>
             </item>
+            <item row="23" column="0">
+             <widget class="QLabel" name="label_level256_compatibility_enabled">
+              <property name="text">
+               <string>Level256 diagnostic override</string>
+              </property>
+             </widget>
+            </item>
+            <item row="23" column="1">
+             <widget class="QCheckBox" name="level256_compatibility_enabled">
+              <property name="text">
+               <string>Enable Level256 kernel compatibility mode</string>
+              </property>
+              <property name="toolTip">
+               <string>Applies the public Level256 Luma GetSystemInfo marker and PLGUDS process state only to the loaded Level256 plugin process. Disabled by default.</string>
+              </property>
+             </widget>
+            </item>
            </layout>
           </widget>
          </item>

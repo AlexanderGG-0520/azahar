@@ -21,16 +21,22 @@
 // DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
+#include <array>
+#include <limits>
+#include <cryptopp/sha.h>
+#include "common/settings.h"
 #include "core/file_sys/file_backend.h"
 #include "core/file_sys/plugin_3gx.h"
 #include "core/file_sys/plugin_3gx_bootloader.h"
 #include "core/hle/kernel/config_mem.h"
+#include "core/hle/kernel/level256_diagnostic.h"
 #include "core/hle/kernel/vm_manager.h"
 #include "core/loader/loader.h"
 
 static std::string ReadTextInfo(FileUtil::IOFile& file, std::size_t offset, std::size_t max_size) {
-    if (offset == 0 || max_size == 0 ||
-        max_size > 0x400) { // Limit read string size to 0x400 bytes, just in case
+    if (offset == 0 || max_size == 0 || max_size > 0x400 ||
+        !FileSys::IsValid3GXFileRange(file.GetSize(), offset, max_size)) {
+        // Limit strings to 0x400 bytes.
         return "";
     }
     std::vector<char> char_data(max_size);
@@ -49,7 +55,8 @@ static std::string ReadTextInfo(FileUtil::IOFile& file, std::size_t offset, std:
 
 static bool ReadSection(std::vector<u8>& data_out, FileUtil::IOFile& file, std::size_t offset,
                         std::size_t size) {
-    if (size > 0x5000000) { // Limit read section size to 5MiB, just in case
+    if (size > 0x5000000 || !FileSys::IsValid3GXFileRange(file.GetSize(), offset, size)) {
+        // Limit read section size to 5MiB and reject ranges outside the file.
         return false;
     }
     data_out.resize(size);
@@ -69,11 +76,43 @@ static bool ReadSection(std::vector<u8>& data_out, FileUtil::IOFile& file, std::
 Loader::ResultStatus FileSys::Plugin3GXLoader::Load(
     Service::PLGLDR::PLG_LDR::PluginLoaderContext& plg_context, Kernel::Process& process,
     Kernel::KernelSystem& kernel, Service::PLGLDR::PLG_LDR& plg_ldr) {
+    plg_context.level256_official_plugin_hash_matches = false;
     FileUtil::IOFile file(plg_context.plugin_path, "rb");
     if (!file.IsOpen()) {
         LOG_ERROR(Service_PLGLDR, "Failed to load 3GX plugin. Not found: {}",
                   plg_context.plugin_path);
         return Loader::ResultStatus::Error;
+    }
+
+    // Calculate identity from the same opened file used by the loader. Hashing is only a
+    // compatibility gate; it does not alter or bypass the 3GX loader's own checks.
+    if (file.GetSize() != 0 && file.Tell() == 0) {
+        CryptoPP::SHA256 hash;
+        std::array<u8, 0x10000> buffer{};
+        u64 remaining = file.GetSize();
+        bool read_ok = true;
+        while (remaining != 0) {
+            const std::size_t chunk =
+                static_cast<std::size_t>(std::min<u64>(remaining, static_cast<u64>(buffer.size())));
+            if (file.ReadBytes(buffer.data(), chunk) != chunk) {
+                read_ok = false;
+                break;
+            }
+            hash.Update(buffer.data(), chunk);
+            remaining -= chunk;
+        }
+        if (read_ok && remaining == 0) {
+            std::array<u8, CryptoPP::SHA256::DIGESTSIZE> digest{};
+            hash.Final(digest.data());
+            plg_context.level256_official_plugin_hash_matches =
+                digest == Kernel::LEVEL256_PLUGIN_SHA256;
+        }
+        if (!file.Seek(0, SEEK_SET)) {
+            plg_context.level256_official_plugin_hash_matches = false;
+            LOG_ERROR(Service_PLGLDR, "Failed to rewind 3GX after hashing: {}",
+                      plg_context.plugin_path);
+            return Loader::ResultStatus::Error;
+        }
     }
 
     // Load CIA Header
@@ -107,12 +146,28 @@ Loader::ResultStatus FileSys::Plugin3GXLoader::Load(
     summary = ReadTextInfo(file, header.infos.summary_msg_offset, header.infos.summary_len);
 
     LOG_INFO(Service_PLGLDR, "Trying to load plugin - Title: {} - Author: {}", title, author);
+    LOG_INFO(Service_PLGLDR,
+             "3GX metadata pid={} title_id={:016X} version={} flags=0x{:08X} compatibility={} "
+             "code=0x{:X} rodata=0x{:X} data=0x{:X} bss=0x{:X} exe_load_func=0x{:X}",
+             process.process_id, process.codeset->program_id, header.version,
+             static_cast<u32>(header.infos.flags.raw),
+             static_cast<u32>(header.infos.flags.compatibility.Value()),
+             static_cast<u32>(header.executable.code_size),
+             static_cast<u32>(header.executable.rodata_size),
+             static_cast<u32>(header.executable.data_size),
+             static_cast<u32>(header.executable.bss_size),
+             static_cast<u32>(header.executable.exe_load_func_offset));
 
     // Load compatible TIDs
     {
         std::vector<u8> raw_TID_data;
-        if (!ReadSection(raw_TID_data, file, header.targets.title_offsets,
-                         header.targets.count * sizeof(u32))) {
+        const u64 targets_size = static_cast<u64>(header.targets.count) * sizeof(u32);
+        if (targets_size > std::numeric_limits<std::size_t>::max() ||
+            !ReadSection(raw_TID_data, file, header.targets.title_offsets,
+                         static_cast<std::size_t>(targets_size))) {
+            LOG_ERROR(Service_PLGLDR,
+                      "3GX load failed stage=title-list pid={} title_id={:016X} path={}",
+                      process.process_id, process.codeset->program_id, plg_context.plugin_path);
             return Loader::ResultStatus::Error;
         }
         compatible_TID.reserve(header.targets.count); // compatible_TID should be empty right now
@@ -126,8 +181,8 @@ Loader::ResultStatus FileSys::Plugin3GXLoader::Load(
         std::find(compatible_TID.begin(), compatible_TID.end(),
                   static_cast<u32>(process.codeset->program_id)) == compatible_TID.end()) {
         LOG_ERROR(Service_PLGLDR,
-                  "Failed to load 3GX plugin. Not compatible with loaded process: {}",
-                  plg_context.plugin_path);
+                  "3GX load failed stage=title-compatibility pid={} title_id={:016X} path={}",
+                  process.process_id, process.codeset->program_id, plg_context.plugin_path);
         return Loader::ResultStatus::Error;
     }
 
@@ -137,8 +192,18 @@ Loader::ResultStatus FileSys::Plugin3GXLoader::Load(
         exe_load_func.clear();
         std::vector<u8> out;
         for (int i = 0; i < 32; i++) {
-            ReadSection(out, file, header.executable.exe_load_func_offset + i * sizeof(u32),
-                        sizeof(u32));
+            const u64 instruction_offset =
+                static_cast<u64>(header.executable.exe_load_func_offset) + i * sizeof(u32);
+            if (instruction_offset > std::numeric_limits<std::size_t>::max() ||
+                !ReadSection(out, file, static_cast<std::size_t>(instruction_offset),
+                             sizeof(u32))) {
+                LOG_ERROR(Service_PLGLDR,
+                          "3GX load failed stage=embedded-loader-function pid={} "
+                          "title_id={:016X} offset=0x{:X} path={}",
+                          process.process_id, process.codeset->program_id, instruction_offset,
+                          plg_context.plugin_path);
+                return Loader::ResultStatus::Error;
+            }
             u32 instruction = *reinterpret_cast<u32_le*>(out.data());
             if (instruction == 0xE320F000) {
                 break;
@@ -151,17 +216,98 @@ Loader::ResultStatus FileSys::Plugin3GXLoader::Load(
 
     // Load code sections
     if (!ReadSection(text_section, file, header.executable.code_offset,
-                     header.executable.code_size) ||
-        !ReadSection(rodata_section, file, header.executable.rodata_offset,
-                     header.executable.rodata_size) ||
-        !ReadSection(data_section, file, header.executable.data_offset,
+                     header.executable.code_size)) {
+        LOG_ERROR(Service_PLGLDR,
+                  "3GX load failed stage=text-section pid={} title_id={:016X} path={}",
+                  process.process_id, process.codeset->program_id, plg_context.plugin_path);
+        return Loader::ResultStatus::Error;
+    }
+    if (!ReadSection(rodata_section, file, header.executable.rodata_offset,
+                     header.executable.rodata_size)) {
+        LOG_ERROR(Service_PLGLDR,
+                  "3GX load failed stage=rodata-section pid={} title_id={:016X} path={}",
+                  process.process_id, process.codeset->program_id, plg_context.plugin_path);
+        return Loader::ResultStatus::Error;
+    }
+    if (!ReadSection(data_section, file, header.executable.data_offset,
                      header.executable.data_size)) {
-        LOG_ERROR(Service_PLGLDR, "Failed to load 3GX plugin. File corrupted: {}",
-                  plg_context.plugin_path);
+        LOG_ERROR(Service_PLGLDR,
+                  "3GX load failed stage=data-section pid={} title_id={:016X} path={}",
+                  process.process_id, process.codeset->program_id, plg_context.plugin_path);
         return Loader::ResultStatus::Error;
     }
 
-    return Map(plg_context, process, kernel, plg_ldr);
+    // Read-only CTRPF OSD signature scan for the exact official Level256 binary and title. This
+    // records candidate locations before plugin execution; a match alone does not prove that the
+    // plugin's InstallOSD path reached or successfully enabled a hook.
+    if (plg_context.level256_official_plugin_hash_matches &&
+        process.codeset->program_id == Kernel::LEVEL256_DIAGNOSTIC_TITLE_ID) {
+        const auto& code_segment = process.codeset->CodeSegment();
+        plg_context.ctrpf_osd_scan = {};
+        plg_context.ctrpf_osd_candidate_initial_words = {};
+        plg_context.ctrpf_osd_post_init_compared = false;
+        if (code_segment.size <= Kernel::LEVEL256_CTRPF_OSD_MAX_SCAN_BYTES &&
+            static_cast<u64>(code_segment.addr) + code_segment.size <=
+                static_cast<u64>(UINT32_MAX) + 1) {
+            std::vector<u8> game_text(code_segment.size);
+            kernel.memory.ReadBlock(process, code_segment.addr, game_text.data(), game_text.size());
+            plg_context.ctrpf_osd_scan = Kernel::ScanLevel256CtrpfOSDPatterns(
+                game_text.data(), game_text.size(), code_segment.addr);
+            const std::array<u32, 3> candidates = {
+                plg_context.ctrpf_osd_scan.candidate1,
+                plg_context.ctrpf_osd_scan.candidate2,
+                plg_context.ctrpf_osd_scan.candidate3,
+            };
+            for (std::size_t i = 0; i < candidates.size(); ++i) {
+                if (candidates[i] != Kernel::LEVEL256_CTRPF_OSD_NOT_FOUND) {
+                    plg_context.ctrpf_osd_candidate_initial_words[i] =
+                        kernel.memory.Read32(process, candidates[i]);
+                }
+            }
+            const auto log_offset = [](u32 offset) {
+                return offset == Kernel::LEVEL256_CTRPF_OSD_NOT_FOUND
+                           ? std::string("not_found")
+                           : fmt::format("+0x{:X}", offset);
+            };
+            const auto log_address = [](u32 address) {
+                return address == Kernel::LEVEL256_CTRPF_OSD_NOT_FOUND
+                           ? std::string("not_found")
+                           : fmt::format("0x{:08X}", address);
+            };
+            LOG_INFO(Service_PLGLDR,
+                     "Level256 CTRPF OSD pattern scan pid={} title_id={:016X} "
+                     "text=0x{:08X}+0x{:X} pattern0_offset={} fallback_offset={} "
+                     "pattern3_offset={} pattern4_offset={} "
+                     "SearchStmfd1={} SearchStmfd2={} SearchStmfd3={} selected={} "
+                     "candidate_words={:08X},{:08X},{:08X}",
+                     process.process_id, process.codeset->program_id, code_segment.addr,
+                     code_segment.size,
+                     log_offset(plg_context.ctrpf_osd_scan.pattern0_offset),
+                     log_offset(plg_context.ctrpf_osd_scan.pattern0_fallback_offset),
+                     log_offset(plg_context.ctrpf_osd_scan.pattern3_offset),
+                     log_offset(plg_context.ctrpf_osd_scan.pattern4_offset),
+                     log_address(plg_context.ctrpf_osd_scan.candidate1),
+                     log_address(plg_context.ctrpf_osd_scan.candidate2),
+                     log_address(plg_context.ctrpf_osd_scan.candidate3),
+                     log_address(plg_context.ctrpf_osd_scan.selected_candidate),
+                     plg_context.ctrpf_osd_candidate_initial_words[0],
+                     plg_context.ctrpf_osd_candidate_initial_words[1],
+                     plg_context.ctrpf_osd_candidate_initial_words[2]);
+        } else {
+            LOG_WARNING(Service_PLGLDR,
+                        "Level256 CTRPF OSD pattern scan skipped pid={} title_id={:016X} "
+                        "text=0x{:08X}+0x{:X} reason=range_limit_or_overflow",
+                        process.process_id, process.codeset->program_id, code_segment.addr,
+                        code_segment.size);
+        }
+    }
+
+    const auto result = Map(plg_context, process, kernel, plg_ldr);
+    LOG_INFO(Service_PLGLDR,
+             "3GX map result pid={} title_id={:016X} status={} plugin_loaded={} owner_pid={}",
+             process.process_id, process.codeset->program_id, static_cast<u32>(result),
+             plg_context.plugin_loaded, plg_context.plugin_process_id);
+    return result;
 }
 
 Loader::ResultStatus FileSys::Plugin3GXLoader::Map(
@@ -170,8 +316,13 @@ Loader::ResultStatus FileSys::Plugin3GXLoader::Map(
 
     // Verify exe load checksum function is available
     if (exe_load_func.empty() && plg_context.load_exe_func.empty()) {
-        LOG_ERROR(Service_PLGLDR, "Failed to load 3GX plugin. Missing checksum function: {}",
-                  plg_context.plugin_path);
+        LOG_ERROR(Service_PLGLDR,
+                  "3GX map failed stage=checksum-function pid={} title_id={:016X} "
+                  "embedded_flag={} embedded_offset=0x{:X} external_words={} path={}",
+                  process.process_id, process.codeset->program_id,
+                  static_cast<u32>(header.infos.flags.embedded_exe_func.Value()),
+                  static_cast<u32>(header.executable.exe_load_func_offset),
+                  plg_context.load_exe_func.size(), plg_context.plugin_path);
         return Loader::ResultStatus::Error;
     }
 
@@ -222,7 +373,10 @@ Loader::ResultStatus FileSys::Plugin3GXLoader::Map(
     }
 
     if (!offset) {
-        LOG_ERROR(Service_PLGLDR, "Failed to load 3GX plugin. Not enough memory: {}",
+        LOG_ERROR(Service_PLGLDR,
+                  "3GX map failed stage=memory-allocation pid={} title_id={:016X} bytes=0x{:X} "
+                  "path={}",
+                  process.process_id, process.codeset->program_id, block_size,
                   plg_context.plugin_path);
         return Loader::ResultStatus::ErrorMemoryAllocationFailed;
     }
@@ -290,11 +444,85 @@ Loader::ResultStatus FileSys::Plugin3GXLoader::Map(
     ASSERT(vma_heap.Succeeded());
     process.vm_manager.Reprotect(vma_heap.Unwrap(), Kernel::VMAPermission::ReadWriteExecute);
 
-    kernel.memory.Plugin3GXFramebufferAddress() = Memory::FCRAM_PADDR + fcram_offset + heap_offset;
+    kernel.memory.SetPlugin3GXFramebufferAddress(Memory::FCRAM_PADDR + fcram_offset +
+                                                 heap_offset);
     plg_context.plugin_loaded = true;
     plg_context.plugin_process_id = process.process_id;
+    plg_context.plugin_code_reached = false;
+    plg_context.plugin_code_begin = _3GX_exe_load_addr + sizeof(PluginHeader);
+    plg_context.plugin_code_end = _3GX_exe_load_addr + exe_size;
+    plg_context.plugin_bootloader_begin = _3GX_exe_load_addr - bootloader_memory_size;
+    plg_context.plugin_bootloader_end = _3GX_exe_load_addr;
+    plg_context.plugin_trace_count = 0;
+    plg_context.plugin_get_system_info_seen = false;
+    plg_context.plugin_trace_thread_id = UINT32_MAX;
+    plg_context.plugin_followup_trace_count = 0;
+    plg_context.plugin_last_return_pc = 0;
+    plg_context.plugin_instruction_trace_started = false;
+    plg_context.plugin_service_trace_count = 0;
     plg_context.use_user_load_parameters = false;
     plg_context.memory_block = {fcram_offset, block_size};
+    plg_context.ctrpf_startup_watchpoints_armed = false;
+    plg_context.ctrpf_startup_watch_counts = {};
+    plg_context.ctrpf_osd_candidate_execution_seen = false;
+    const bool level256_diagnostic_enabled =
+        Settings::values.level256_compatibility_enabled.GetValue();
+    const bool level256_diagnostic_title_matches =
+        process.codeset &&
+        process.codeset->program_id == Kernel::LEVEL256_DIAGNOSTIC_TITLE_ID;
+    if (plg_context.level256_official_plugin_hash_matches &&
+        level256_diagnostic_title_matches) {
+        u32 text_watch_count = 0;
+        bool candidate_watch_armed = false;
+        const bool owner_matches = plg_context.plugin_process_id == process.process_id;
+        const VAddr candidate = plg_context.ctrpf_osd_scan.selected_candidate;
+        if (level256_diagnostic_enabled && owner_matches) {
+            for (const VAddr address : Kernel::LEVEL256_CTRPF_STARTUP_TEXT_ADDRESSES) {
+                if (kernel.memory.IsValidVirtualAddress(process, address)) {
+                    kernel.memory.RegisterWatchpoint(process, address, 1);
+                    plg_context.ctrpf_startup_watchpoints_armed = true;
+                    ++text_watch_count;
+                }
+            }
+            if (candidate == Kernel::LEVEL256_CTRPF_OSD_CANDIDATE_ADDRESS &&
+                plg_context.ctrpf_osd_candidate_initial_words[0] == 0xE92D5FF0 &&
+                kernel.memory.IsValidVirtualAddress(process, candidate)) {
+                kernel.memory.RegisterWatchpoint(process, candidate,
+                                                 Kernel::LEVEL256_CTRPF_OSD_CANDIDATE_SIZE);
+                plg_context.ctrpf_startup_watchpoints_armed = true;
+                candidate_watch_armed = true;
+            }
+        }
+        LOG_INFO(Service_PLGLDR,
+                 "Level256 CTRPF startup diagnostic gate pid={} title_id={:016X} "
+                 "enabled={} hash_match=true owner_match={} text_watches={} "
+                 "candidate_watch={} candidate=0x{:08X}",
+                 process.process_id, process.codeset->program_id, level256_diagnostic_enabled,
+                 owner_matches, text_watch_count, candidate_watch_armed, candidate);
+        if (plg_context.ctrpf_startup_watchpoints_armed) {
+            LOG_INFO(Service_PLGLDR,
+                     "Level256 CTRPF startup memory watches armed pid={} title_id={:016X} "
+                     "hash_match=true title_text=0x{:08X} create_backup=0x{:08X} "
+                     "creating_backup=0x{:08X} backup_created=0x{:08X} plugin_ready=0x{:08X} "
+                     "title_config_path=0x{:08X} start_as_a_path=0x{:08X} "
+                     "osd_candidate=0x{:08X}",
+                     process.process_id, process.codeset->program_id,
+                     Kernel::LEVEL256_CTRPF_STARTUP_TEXT_ADDRESSES[0],
+                     Kernel::LEVEL256_CTRPF_STARTUP_TEXT_ADDRESSES[1],
+                     Kernel::LEVEL256_CTRPF_STARTUP_TEXT_ADDRESSES[2],
+                     Kernel::LEVEL256_CTRPF_STARTUP_TEXT_ADDRESSES[3],
+                     Kernel::LEVEL256_CTRPF_STARTUP_TEXT_ADDRESSES[4],
+                     Kernel::LEVEL256_CTRPF_STARTUP_TEXT_ADDRESSES[5],
+                     Kernel::LEVEL256_CTRPF_STARTUP_TEXT_ADDRESSES[6], candidate);
+        }
+    }
+    LOG_INFO(Service_PLGLDR,
+             "3GX memory mapped pid={} title_id={:016X} code=0x{:08X}-0x{:08X} "
+             "bootloader=0x{:08X}-0x{:08X} heap=0x{:08X}+0x{:X} private={}",
+             process.process_id, process.codeset->program_id,
+             _3GX_exe_load_addr + static_cast<u32>(sizeof(PluginHeader)),
+             _3GX_exe_load_addr + exe_size, _3GX_exe_load_addr - bootloader_memory_size,
+             _3GX_exe_load_addr, _3GX_heap_load_addr, heap_size, is_mem_private);
 
     return Loader::ResultStatus::Success;
 }

@@ -24,19 +24,37 @@ OGLTextureMailbox::~OGLTextureMailbox() {
     free_cv.notify_all();
 }
 
-void OGLTextureMailbox::ReloadPresentFrame(Frontend::Frame* frame, u32 height, u32 width) {
+bool OGLTextureMailbox::ReloadPresentFrame(Frontend::Frame* frame, u32 width, u32 height) {
+    if (!frame || !frame->color.handle) {
+        LOG_CRITICAL(Render_OpenGL,
+                     "Cannot create present FBO without a shared color renderbuffer");
+        return false;
+    }
+
     frame->present.Release();
     frame->present.Create();
+    if (!frame->present.handle) {
+        LOG_CRITICAL(Render_OpenGL, "Unable to create present FBO");
+        return false;
+    }
+
+    GLint previous_read_fbo{};
     GLint previous_draw_fbo{};
+    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &previous_read_fbo);
     glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &previous_draw_fbo);
     glBindFramebuffer(GL_FRAMEBUFFER, frame->present.handle);
     glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER,
                               frame->color.handle);
-    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+    const bool complete = glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
+    if (!complete) {
         LOG_CRITICAL(Render_OpenGL, "Failed to recreate present FBO!");
     }
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, previous_read_fbo);
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, previous_draw_fbo);
-    frame->color_reloaded = false;
+    if (complete) {
+        frame->color_reloaded = false;
+    }
+    return complete;
 }
 
 void OGLTextureMailbox::ReloadRenderFrame(Frontend::Frame* frame, u32 width, u32 height) {

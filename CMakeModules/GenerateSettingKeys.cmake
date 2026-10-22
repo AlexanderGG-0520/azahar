@@ -26,6 +26,7 @@ foreach(KEY IN ITEMS
     "init_ticks_override"
     "plugin_loader"
     "allow_plugin_loader"
+    "level256_compatibility_enabled"
     "steps_per_hour"
     "apply_region_free_patch"
     "graphics_api"

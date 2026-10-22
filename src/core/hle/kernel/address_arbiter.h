@@ -5,6 +5,7 @@
 #pragma once
 
 #include <memory>
+#include <utility>
 #include <vector>
 #include <boost/serialization/export.hpp>
 #include "common/common_types.h"
@@ -52,6 +53,9 @@ public:
 
     Result ArbitrateAddress(std::shared_ptr<Thread> thread, ArbitrationType type, VAddr address,
                             s32 value, u64 nanoseconds);
+
+    /// Read-only snapshot used by the bounded official Level256 wait/notify diagnostic.
+    std::vector<std::pair<u32, ThreadStatus>> GetWaitersForAddress(VAddr address) const;
 
     class Callback;
 

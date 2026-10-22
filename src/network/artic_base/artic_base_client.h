@@ -3,6 +3,9 @@
 // Refer to the license.txt file included.
 
 #pragma once
+#include "array"
+#include "atomic"
+#include "chrono"
 #include "condition_variable"
 #include "cstring"
 #include "functional"

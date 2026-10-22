@@ -4,6 +4,7 @@
 
 #include <array>
 #include <csignal>
+#include <cstdint>
 #include <cstring>
 #include <boost/serialization/array.hpp>
 #include <boost/serialization/binary_object.hpp>
@@ -421,8 +422,22 @@ void MemorySystem::RasterizerFlushVirtualRegion(VAddr start, u32 size, FlushMode
     impl->RasterizerFlushVirtualRegion(start, size, mode);
 }
 
-PAddr& Memory::MemorySystem::Plugin3GXFramebufferAddress() {
+PAddr MemorySystem::Plugin3GXFramebufferAddress() const {
     return impl->plugin_fb_address;
+}
+
+void MemorySystem::SetPlugin3GXFramebufferAddress(PAddr address) {
+    impl->plugin_fb_address = address;
+}
+
+void MemorySystem::ClearPlugin3GXFramebufferAddress(
+    const std::function<void()>& clear_rasterizer_cache) {
+    if (impl->plugin_fb_address == 0) {
+        return;
+    }
+
+    clear_rasterizer_cache();
+    impl->plugin_fb_address = 0;
 }
 
 void MemorySystem::RegisterWatchpoint(const Kernel::Process& process, VAddr addr, u32 size) {
@@ -604,17 +619,42 @@ T MemorySystem::Read(const std::shared_ptr<PageTable>& page_table, const VAddr v
     if (vaddr & LUMA_ALIAS_BIT) [[unlikely]] {
         const PAddr paddr = vaddr & ~LUMA_ALIAS_BIT;
 
+        // VRAM and FCRAM are physical RAM, not IO registers. The alias must use the same
+        // backing storage and rasterizer cache as their ordinary virtual mappings.
+        if (paddr >= Memory::VRAM_PADDR && paddr < Memory::VRAM_PADDR_END &&
+            read_size <= Memory::VRAM_PADDR_END - paddr) {
+            const VAddr canonical = Memory::VRAM_VADDR + (paddr - Memory::VRAM_PADDR);
+            if (impl->cache_marker.IsCached(canonical)) {
+                RasterizerFlushVirtualRegion(canonical, read_size, FlushMode::Flush);
+            }
+            ReadType value;
+            std::memcpy(&value, impl->vram.get() + paddr - Memory::VRAM_PADDR, read_size);
+            return value;
+        }
+
         // FCRAM (0x2xxxxxxx)
         if ((paddr & 0xF0000000) == Memory::FCRAM_PADDR) {
+            const VAddr canonical = Memory::NEW_LINEAR_HEAP_VADDR +
+                                    (paddr - Memory::FCRAM_PADDR);
+            if (impl->cache_marker.IsCached(canonical)) {
+                RasterizerFlushVirtualRegion(canonical, read_size, FlushMode::Flush);
+            }
             ReadType value;
             std::memcpy(&value, GetFCRAMPointer(paddr - Memory::FCRAM_PADDR), read_size);
             return value;
         }
 
-        // MMIO (0x1xxxxxxx, >= IO_AREA_PADDR) - Strictly 32-bit
-        if ((paddr & 0xF0000000) == 0x10000000 && paddr >= Memory::IO_AREA_PADDR) [[unlikely]] {
-            return static_cast<ReadType>(impl->system.GPU().ReadReg(
-                static_cast<VAddr>(paddr) - Memory::IO_AREA_PADDR + 0x1EC00000));
+        // The physical IO alias preserves byte lanes for byte and halfword accesses.
+        if (paddr >= Memory::IO_AREA_PADDR && paddr < Memory::IO_AREA_PADDR_END) [[unlikely]] {
+            const VAddr reg_addr = static_cast<VAddr>(paddr) - Memory::IO_AREA_PADDR + 0x1EC00000;
+            if constexpr (read_size < sizeof(u32)) {
+                const u32 shift = (reg_addr & 3) * 8;
+                ASSERT_MSG((reg_addr & 3) + read_size <= sizeof(u32),
+                           "Unaligned physical IO read @ {:08X}", vaddr);
+                return static_cast<ReadType>(impl->system.GPU().ReadReg(reg_addr & ~3u) >> shift);
+            } else {
+                return static_cast<ReadType>(impl->system.GPU().ReadReg(reg_addr));
+            }
         }
         // Fallthrough: Standard page table lookup
     }
@@ -698,18 +738,44 @@ void MemorySystem::Write(const std::shared_ptr<PageTable>& page_table, const VAd
     if (vaddr & LUMA_ALIAS_BIT) [[unlikely]] {
         const PAddr paddr = vaddr & ~LUMA_ALIAS_BIT;
 
+        // Keep physical aliases coherent with framebuffer textures cached by the renderer.
+        if (paddr >= Memory::VRAM_PADDR && paddr < Memory::VRAM_PADDR_END &&
+            sizeof(T) <= Memory::VRAM_PADDR_END - paddr) {
+            const VAddr canonical = Memory::VRAM_VADDR + (paddr - Memory::VRAM_PADDR);
+            if (impl->cache_marker.IsCached(canonical)) {
+                RasterizerFlushVirtualRegion(canonical, sizeof(T), FlushMode::Invalidate);
+            }
+            std::memcpy(impl->vram.get() + paddr - Memory::VRAM_PADDR, &data, sizeof(T));
+            return;
+        }
+
         // FCRAM (0x2xxxxxxx)
         if ((paddr & 0xF0000000) == Memory::FCRAM_PADDR) {
+            const VAddr canonical = Memory::NEW_LINEAR_HEAP_VADDR +
+                                    (paddr - Memory::FCRAM_PADDR);
+            if (impl->cache_marker.IsCached(canonical)) {
+                RasterizerFlushVirtualRegion(canonical, sizeof(T), FlushMode::Invalidate);
+            }
             std::memcpy(GetFCRAMPointer(paddr - Memory::FCRAM_PADDR), &data, sizeof(T));
             return;
         }
 
-        // MMIO (0x1xxxxxxx, >= IO_AREA_PADDR) - Strictly 32-bit
-        if ((paddr & 0xF0000000) == 0x10000000 && paddr >= Memory::IO_AREA_PADDR) [[unlikely]] {
-            ASSERT(sizeof(data) == sizeof(u32));
-            impl->system.GPU().WriteReg(static_cast<VAddr>(paddr) - Memory::IO_AREA_PADDR +
-                                            0x1EC00000,
-                                        static_cast<u32>(data));
+        // Preserve the untouched byte lanes of the 32-bit GPU register.
+        if (paddr >= Memory::IO_AREA_PADDR && paddr < Memory::IO_AREA_PADDR_END) [[unlikely]] {
+            const VAddr reg_addr = static_cast<VAddr>(paddr) - Memory::IO_AREA_PADDR + 0x1EC00000;
+            if constexpr (sizeof(T) < sizeof(u32)) {
+                const u32 shift = (reg_addr & 3) * 8;
+                ASSERT_MSG((reg_addr & 3) + sizeof(T) <= sizeof(u32),
+                           "Unaligned physical IO write @ {:08X}", vaddr);
+                const VAddr aligned_addr = reg_addr & ~3u;
+                const u32 mask = (sizeof(T) == sizeof(u8) ? 0xFFu : 0xFFFFu) << shift;
+                const u32 previous = impl->system.GPU().ReadReg(aligned_addr);
+                impl->system.GPU().WriteReg(aligned_addr,
+                                            (previous & ~mask) | ((static_cast<u32>(data) << shift) & mask));
+            } else {
+                ASSERT(sizeof(T) == sizeof(u32));
+                impl->system.GPU().WriteReg(reg_addr, static_cast<u32>(data));
+            }
             return;
         }
         // Fallthrough: Standard page table lookup
@@ -1268,8 +1334,29 @@ void MemorySystem::CopyBlock(const Kernel::Process& dest_process,
 }
 
 u32 MemorySystem::GetFCRAMOffset(const u8* pointer) const {
-    ASSERT(pointer >= impl->fcram.get() && pointer <= impl->fcram.get() + Memory::FCRAM_N3DS_SIZE);
-    return static_cast<u32>(pointer - impl->fcram.get());
+    const auto offset = TryGetFCRAMOffset(pointer);
+    ASSERT(offset.has_value());
+    return *offset;
+}
+
+std::optional<u32> MemorySystem::TryGetFCRAMOffset(const u8* pointer) const {
+    const auto address = reinterpret_cast<std::uintptr_t>(pointer);
+    const auto fcram_begin = reinterpret_cast<std::uintptr_t>(impl->fcram.get());
+    const auto fcram_end = fcram_begin + Memory::FCRAM_N3DS_SIZE;
+    if (address < fcram_begin || address > fcram_end) {
+        return std::nullopt;
+    }
+    return static_cast<u32>(address - fcram_begin);
+}
+
+std::optional<u32> MemorySystem::TryGetVRAMOffset(const u8* pointer) const {
+    const auto address = reinterpret_cast<std::uintptr_t>(pointer);
+    const auto vram_begin = reinterpret_cast<std::uintptr_t>(impl->vram.get());
+    const auto vram_end = vram_begin + Memory::VRAM_SIZE;
+    if (address < vram_begin || address > vram_end) {
+        return std::nullopt;
+    }
+    return static_cast<u32>(address - vram_begin);
 }
 
 u8* MemorySystem::GetFCRAMPointer(std::size_t offset) {

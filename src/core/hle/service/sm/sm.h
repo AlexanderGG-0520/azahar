@@ -24,6 +24,7 @@ class System;
 
 namespace Kernel {
 class ClientSession;
+class KernelSystem;
 class SessionRequestHandler;
 } // namespace Kernel
 
@@ -50,9 +51,12 @@ public:
     static void InstallInterfaces(Core::System& system);
 
     explicit ServiceManager(Core::System& system);
+    ServiceManager(Core::System& system, Kernel::KernelSystem& kernel);
 
     Result RegisterService(std::shared_ptr<Kernel::ServerPort>* out_server_port, std::string name,
-                           u32 max_sessions);
+                           u32 max_sessions, u32 owner_process_id = 0);
+    Result UnregisterService(const std::string& name, u32 owner_process_id);
+    void UnregisterServicesForProcess(u32 owner_process_id);
     Result GetServicePort(std::shared_ptr<Kernel::ClientPort>* out_client_port,
                           const std::string& name);
     Result ConnectToService(std::shared_ptr<Kernel::ClientSession>* out_client_session,
@@ -78,25 +82,37 @@ public:
 
 private:
     Core::System& system;
+    Kernel::KernelSystem& kernel;
     std::weak_ptr<SRV> srv_interface;
 
     /// Map of registered services, retrieved using GetServicePort or ConnectToService.
     std::unordered_map<std::string, std::shared_ptr<Kernel::ClientPort>> registered_services;
+    /// 0 denotes a service registered by the emulator, otherwise its guest owner PID.
+    std::unordered_map<std::string, u32> service_owners;
 
     // For IPC Recorder
     /// client port Object id -> service name
     std::unordered_map<u32, std::string> registered_services_inverse;
 
     template <class Archive>
-    void save(Archive& ar, const unsigned int file_version) const {
+    void save(Archive& ar, const unsigned int) const {
         DEBUG_SERIALIZATION_POINT;
         ar << registered_services;
+        ar << service_owners;
     }
 
     template <class Archive>
     void load(Archive& ar, const unsigned int file_version) {
         DEBUG_SERIALIZATION_POINT;
         ar >> registered_services;
+        if (file_version > 0) {
+            ar >> service_owners;
+        } else {
+            service_owners.clear();
+            for (const auto& service : registered_services) {
+                service_owners.emplace(service.first, 0);
+            }
+        }
         registered_services_inverse.clear();
         for (const auto& pair : registered_services) {
             registered_services_inverse.emplace(pair.second->GetObjectId(), pair.first);
@@ -109,3 +125,5 @@ private:
 };
 
 } // namespace Service::SM
+
+BOOST_CLASS_VERSION(Service::SM::ServiceManager, 1)

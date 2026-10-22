@@ -126,6 +126,8 @@ public:
 
     // EmuWindow implementation.
     void MakeCurrent() override;
+    bool TryMakeCurrent() override;
+    bool MoveToThread(QThread* thread) override;
     void DoneCurrent() override;
     void PollEvents() override;
     std::unique_ptr<Frontend::GraphicsContext> CreateSharedContext() const override;
