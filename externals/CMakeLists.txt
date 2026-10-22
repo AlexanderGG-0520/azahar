@@ -131,9 +131,15 @@ if ("x86_64" IN_LIST ARCHITECTURE OR "arm64" IN_LIST ARCHITECTURE)
         add_subdirectory(dynarmic EXCLUDE_FROM_ALL)
         if (MINGW AND CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
             # Dynarmic's PCH includes ir_emitter.h, which uses std::vector without
-            # including <vector>. Prepend the missing dependency for MSYS2 Clang
-            # without modifying the pinned third-party submodule.
-            target_precompile_headers(dynarmic BEFORE PRIVATE <vector>)
+            # including <vector>. Prepend the dependency to the existing PCH
+            # property: target_precompile_headers() has no BEFORE argument.
+            # Keep the pinned third-party submodule unchanged.
+            get_target_property(_dynarmic_pch dynarmic PRECOMPILE_HEADERS)
+            if (_dynarmic_pch)
+                set_property(TARGET dynarmic PROPERTY PRECOMPILE_HEADERS
+                    "<vector>;${_dynarmic_pch}")
+            endif()
+            unset(_dynarmic_pch)
         endif()
     endif()
 endif()
