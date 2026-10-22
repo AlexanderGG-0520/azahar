@@ -4,9 +4,24 @@ add_executable(tests
     common/param_package.cpp
     core/core_timing.cpp
     core/file_sys/path_parser.cpp
+    core/file_sys/plugin_3gx.cpp
     core/file_sys/yw2_save_date.cpp
+    core/gdbstub/thread_debug_info.cpp
+    core/hle/service/sm/process_service_redirect.cpp
+    core/hle/service/sm/srv_redirect.cpp
+    core/hle/service/plgldr_level256_lfcs.cpp
+    core/hle/service/plgldr_level256_process_view.cpp
+    core/hle/service/soc/soc_u_address.cpp
+    core/hle/service/plgldr_path.cpp
     core/hle/kernel/hle_ipc.cpp
     core/hle/kernel/dsp_semaphore_signal_grace.cpp
+    core/hle/kernel/level256_diagnostic.cpp
+    core/hle/kernel/luma3ds/compatibility.cpp
+    core/hle/kernel/luma3ds/compatibility_dispatch.cpp
+    core/hle/kernel/luma3ds/custom_backdoor.cpp
+    core/hle/kernel/luma3ds/level256_process_view.cpp
+    core/hle/kernel/luma3ds/level256_memory_operations.cpp
+    core/hle/kernel/luma3ds/level256_system_info.cpp
     core/memory/memory.cpp
     core/memory/vm_manager.cpp
     precompiled_headers.h

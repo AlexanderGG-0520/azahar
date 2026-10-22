@@ -42,7 +42,7 @@ public:
     explicit OGLTextureMailbox(bool has_debug_tool = false);
     ~OGLTextureMailbox() override;
 
-    void ReloadPresentFrame(Frontend::Frame* frame, u32 height, u32 width) override;
+    bool ReloadPresentFrame(Frontend::Frame* frame, u32 width, u32 height) override;
     void ReloadRenderFrame(Frontend::Frame* frame, u32 width, u32 height) override;
     void ReleaseRenderFrame(Frontend::Frame* frame) override;
 

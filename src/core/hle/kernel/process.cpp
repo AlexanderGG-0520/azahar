@@ -26,6 +26,7 @@
 #include "core/hle/kernel/thread.h"
 #include "core/hle/kernel/vm_manager.h"
 #include "core/hle/service/plgldr/plgldr.h"
+#include "core/hle/service/sm/srv.h"
 #include "core/loader/loader.h"
 #include "core/memory.h"
 
@@ -279,6 +280,11 @@ void Process::Run(s32 main_thread_priority, u32 stack_size) {
 }
 
 void Process::Exit() {
+    Core::System::GetInstance().ServiceManager().UnregisterServicesForProcess(process_id);
+    if (auto srv = Core::System::GetInstance().ServiceManager().GetService<Service::SM::SRV>(
+            "srv:")) {
+        srv->OnProcessExit(process_id);
+    }
 #ifdef ENABLE_GDBSTUB
     GDBStub::OnProcessExit(process_id);
 #endif
@@ -691,6 +697,10 @@ Kernel::Process::Process(KernelSystem& kernel)
 }
 Kernel::Process::~Process() {
     LOG_INFO(Kernel, "Cleaning up process {}", process_id);
+
+    if (auto plgldr = Service::PLGLDR::GetService(Core::System::GetInstance())) {
+        plgldr->OnProcessDestroyed(*this);
+    }
 
     // Release all objects this process owns first so that their potential destructor can do clean
     // up with this process before further destruction.

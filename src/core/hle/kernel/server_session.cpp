@@ -10,6 +10,7 @@
 #include "core/hle/kernel/client_port.h"
 #include "core/hle/kernel/client_session.h"
 #include "core/hle/kernel/hle_ipc.h"
+#include "core/hle/kernel/memory.h"
 #include "core/hle/kernel/server_session.h"
 #include "core/hle/kernel/session.h"
 #include "core/hle/kernel/thread.h"
@@ -137,6 +138,44 @@ Result ServerSession::HandleSyncRequest(std::shared_ptr<Thread> thread) {
     // on it.
     WakeupAllWaitingThreads();
     return ResultSuccess;
+}
+
+Result ServerSession::ReceiveRequest(std::shared_ptr<Thread> thread) {
+    R_UNLESS(parent->client, ResultSessionClosed);
+    R_UNLESS(currently_handling, ResultSessionClosed);
+
+    const VAddr target_address = thread->GetCommandBufferAddress();
+    const VAddr source_address = currently_handling->GetCommandBufferAddress();
+    const auto result = TranslateCommandBuffer(kernel, kernel.memory, currently_handling, thread,
+                                               source_address, target_address,
+                                               mapped_buffer_context, false);
+    if (result.IsError()) {
+        auto request_thread = std::move(currently_handling);
+        currently_handling.reset();
+        request_thread->SetWaitSynchronizationResult(result);
+        request_thread->ResumeFromWait();
+        return result;
+    }
+    return result;
+}
+
+Result ServerSession::ReplyRequest(std::shared_ptr<Thread> thread) {
+    auto request_thread = std::move(currently_handling);
+    currently_handling = nullptr;
+    R_UNLESS(request_thread && parent->client, ResultSessionClosed);
+
+    const VAddr source_address = thread->GetCommandBufferAddress();
+    const VAddr target_address = request_thread->GetCommandBufferAddress();
+    const auto result = TranslateCommandBuffer(kernel, kernel.memory, thread, request_thread,
+                                               source_address, target_address,
+                                               mapped_buffer_context, true);
+    if (result.IsError()) {
+        request_thread->SetWaitSynchronizationResult(result);
+        request_thread->ResumeFromWait();
+        return result;
+    }
+    request_thread->ResumeFromWait();
+    return result;
 }
 
 KernelSystem::SessionPair KernelSystem::CreateSessionPair(const std::string& name,

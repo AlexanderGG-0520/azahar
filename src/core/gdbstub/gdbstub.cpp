@@ -39,6 +39,7 @@
 #include "core/core.h"
 #include "core/gdbstub/gdbstub.h"
 #include "core/gdbstub/hio.h"
+#include "core/gdbstub/thread_debug_info.h"
 #include "core/hle/kernel/process.h"
 #include "core/loader/loader.h"
 #include "core/memory.h"
@@ -733,8 +734,22 @@ static void HandleQuery() {
         buffer += "<threads>";
         auto thread_list = current_process->GetThreadList();
         for (const auto& thread : thread_list) {
-            buffer += fmt::format(R"*(<thread id="{:x}" name="Thread {:x}"></thread>)*",
-                                  thread->GetThreadId(), thread->GetThreadId());
+            ThreadDebugInfo info{
+                .thread_id = thread->GetThreadId(),
+                .pc = thread->context.cpu_registers[15],
+                .status = thread->status,
+                .wait_address = thread->wait_address,
+                .wait_object_count = thread->wait_objects.size(),
+            };
+            constexpr std::size_t MaxWaitObjects = 4;
+            for (std::size_t i = 0; i < std::min(thread->wait_objects.size(), MaxWaitObjects); ++i) {
+                const auto& object = thread->wait_objects[i];
+                if (object) {
+                    info.wait_objects.push_back({object->GetObjectId(), object->GetTypeName()});
+                }
+            }
+            buffer += fmt::format(R"*(<thread id="{:x}" name="{}"></thread>)*",
+                                  thread->GetThreadId(), FormatThreadDebugName(info));
         }
         buffer += "</threads>";
 

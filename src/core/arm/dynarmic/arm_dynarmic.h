@@ -32,6 +32,10 @@ public:
 
     void Run() override;
     void Step() override;
+    void StartPluginInstructionTrace(u32 process_id, u32 thread_id, u32 code_begin, u32 code_end,
+                                     u32 bootloader_begin, u32 bootloader_end,
+                                     u32 instruction_limit, bool focus_open_process = false,
+                                     bool wait_for_target = false) override;
 
     void SetPC(u32 pc) override;
     u32 GetPC() const override;
@@ -79,6 +83,21 @@ private:
     Dynarmic::A32::Jit* jit = nullptr;
     std::shared_ptr<Memory::PageTable> current_page_table = nullptr;
     std::map<std::shared_ptr<Memory::PageTable>, std::unique_ptr<Dynarmic::A32::Jit>> jits;
+    u32 plugin_trace_process_id = UINT32_MAX;
+    u32 plugin_trace_thread_id = UINT32_MAX;
+    u32 plugin_trace_code_begin = 0;
+    u32 plugin_trace_code_end = 0;
+    u32 plugin_trace_bootloader_begin = 0;
+    u32 plugin_trace_bootloader_end = 0;
+    u32 plugin_trace_instruction_limit = 0;
+    u32 plugin_trace_instruction_index = 0;
+    u32 plugin_trace_log_count = 0;
+    u32 plugin_trace_critical_log_count = 0;
+    u32 plugin_trace_context_log_count = 0;
+    u32 plugin_trace_wait_count = 0;
+    bool plugin_trace_focus_open_process = false;
+    bool plugin_trace_wait_for_target = false;
+    bool plugin_trace_waiting_reported = false;
 };
 
 } // namespace Core

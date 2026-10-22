@@ -290,7 +290,7 @@ private:
                 (context.*svc)(u...);
             } else {
                 Result r = (context.*svc)(u...);
-                if (r.IsError()) {
+                if (r.IsError() && context.ShouldLogSVCError(static_cast<u32>(id), r.raw)) {
                     LOG_ERROR(
                         Kernel_SVC,
                         "svc=0x{:02X} raw=0x{:08X} level={} summary={} module={} description={}",

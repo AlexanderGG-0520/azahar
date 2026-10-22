@@ -507,6 +507,7 @@ struct Values {
     Setting<s64> init_ticks_override{0, Keys::init_ticks_override};
     Setting<bool> plugin_loader_enabled{false, Keys::plugin_loader};
     Setting<bool> allow_plugin_loader{true, Keys::allow_plugin_loader};
+    Setting<bool> level256_compatibility_enabled{false, Keys::level256_compatibility_enabled};
     Setting<u16> steps_per_hour{0, Keys::steps_per_hour};
     Setting<bool> apply_region_free_patch{true, Keys::apply_region_free_patch};
 

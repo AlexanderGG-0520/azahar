@@ -115,6 +115,17 @@ void AddressArbiter::WakeUp(ThreadWakeupReason reason, std::shared_ptr<Thread> t
                           waiting_threads.end());
 };
 
+std::vector<std::pair<u32, ThreadStatus>> AddressArbiter::GetWaitersForAddress(
+    VAddr address) const {
+    std::vector<std::pair<u32, ThreadStatus>> result;
+    for (const auto& thread : waiting_threads) {
+        if (thread->wait_address == address) {
+            result.emplace_back(thread->GetThreadId(), thread->status);
+        }
+    }
+    return result;
+}
+
 Result AddressArbiter::ArbitrateAddress(std::shared_ptr<Thread> thread, ArbitrationType type,
                                         VAddr address, s32 value, u64 nanoseconds) {
     switch (type) {
