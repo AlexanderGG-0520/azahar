@@ -12,6 +12,7 @@
 #include "core/file_sys/path_parser.h"
 #include "core/file_sys/savedata_archive.h"
 #include "core/file_sys/yw2_save_date.h"
+#include "core/file_sys/ywb_save_date.h"
 
 namespace FileSys {
 
@@ -96,13 +97,17 @@ ResultVal<std::unique_ptr<FileBackend>> SaveDataArchive::OpenFile(const Path& pa
 
     std::unique_ptr<DelayGenerator> delay_generator = std::make_unique<SaveDataDelayGenerator>();
     std::string yw2_save_path;
+    std::string ywb_save_path;
     const auto filename = std::filesystem::path(full_path).filename().string();
     if (mode.write_flag && IsYw2ObservedSaveFile(mount_point, filename)) {
         yw2_save_path = full_path;
         LOG_INFO(Service_FS, "YW2 datefix tracking write handle {}", filename);
     }
+    if (mode.write_flag && IsYwbObservedSaveFile(mount_point, filename)) {
+        ywb_save_path = full_path;
+    }
     return std::make_unique<DiskFile>(std::move(file), mode, std::move(delay_generator),
-                                      std::move(yw2_save_path));
+                                      std::move(yw2_save_path), std::move(ywb_save_path));
 }
 
 Result SaveDataArchive::DeleteFile(const Path& path) const {
@@ -165,6 +170,8 @@ Result SaveDataArchive::RenameFile(const Path& src_path, const Path& dest_path) 
                      std::filesystem::path(src_path_full).filename().string(), filename);
             NormalizeYw2SaveDateOnCommit(dest_path_full);
         }
+        if (IsYwbObservedSaveFile(mount_point, filename))
+            NormalizeYwbSaveDateOnCommit(dest_path_full);
         return ResultSuccess;
     }
 

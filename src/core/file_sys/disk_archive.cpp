@@ -14,6 +14,7 @@
 #include "core/file_sys/disk_archive.h"
 #include "core/file_sys/errors.h"
 #include "core/file_sys/yw2_save_date.h"
+#include "core/file_sys/ywb_save_date.h"
 
 SERIALIZE_EXPORT_IMPL(FileSys::DiskFile)
 SERIALIZE_EXPORT_IMPL(FileSys::DiskDirectory)
@@ -34,10 +35,24 @@ ResultVal<std::size_t> DiskFile::Write(const u64 offset, const std::size_t lengt
     if (!mode.write_flag)
         return ResultInvalidOpenFlags;
 
-    file->Seek(offset, SEEK_SET);
+    const bool seek_succeeded = file->Seek(offset, SEEK_SET);
     std::size_t written = file->WriteBytes(buffer, length);
-    if (flush)
-        file->Flush();
+    if (!ywb_save_path.empty()) {
+        if (length > 0) {
+            ywb_has_write = true;
+            if (seek_succeeded && written == length) {
+                ywb_write_succeeded = true;
+            } else {
+                ywb_write_failed = true;
+            }
+        }
+    }
+    if (flush) {
+        const bool flush_succeeded = file->Flush();
+        if (!flush_succeeded && !ywb_save_path.empty()) {
+            ywb_write_failed = true;
+        }
+    }
     return written;
 }
 
@@ -59,6 +74,24 @@ bool DiskFile::Close() {
         } else {
             LOG_WARNING(Service_FS, "YW2 datefix skipped: save-file close failed for {}",
                         std::filesystem::path(yw2_save_path).filename().string());
+        }
+    }
+    if (!ywb_save_path.empty()) {
+        const bool write_succeeded = ywb_write_succeeded && !ywb_write_failed;
+        const auto normalize = [this](const std::string& path) {
+            if (ywb_commit_hook) {
+                ywb_commit_hook(path);
+            } else {
+                NormalizeYwbSaveDateOnCommit(path);
+            }
+        };
+        static YwbSaveCommitCoordinator ywb_commit_coordinator;
+        ywb_commit_coordinator.OnFileClose(ywb_save_path, ywb_has_write, write_succeeded, closed,
+                                           normalize);
+        if (!closed || (ywb_has_write && !write_succeeded)) {
+            LOG_WARNING(Service_FS, "YWB datefix skipped: file={} reason={}",
+                        std::filesystem::path(ywb_save_path).filename().string(),
+                        !closed ? "close-failed" : "write-failed");
         }
     }
     return closed;
