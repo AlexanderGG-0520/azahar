@@ -60,8 +60,8 @@ TEST_CASE("memory.TryGetFCRAMOffset", "[core][memory]") {
     Core::System system;
     Memory::MemorySystem memory{system};
 
-    CHECK(memory.TryGetFCRAMOffset(memory.GetFCRAMPointer(0)) == 0);
-    CHECK(memory.TryGetFCRAMOffset(memory.GetFCRAMPointer(0x1234)) == 0x1234);
+    CHECK(memory.TryGetFCRAMOffset(memory.GetFCRAMPointer(0)) == 0u);
+    CHECK(memory.TryGetFCRAMOffset(memory.GetFCRAMPointer(0x1234)) == 0x1234u);
     CHECK(memory.TryGetFCRAMOffset(
               memory.GetFCRAMPointer(Memory::FCRAM_N3DS_SIZE)) == Memory::FCRAM_N3DS_SIZE);
 
