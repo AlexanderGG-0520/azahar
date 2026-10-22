@@ -3,6 +3,7 @@
 // Refer to the license.txt file included.
 
 #include <algorithm>
+#include <filesystem>
 #include <memory>
 #include <vector>
 #include <fmt/format.h>
@@ -16,6 +17,7 @@
 #include "core/file_sys/errors.h"
 #include "core/file_sys/path_parser.h"
 #include "core/file_sys/savedata_archive.h"
+#include "core/file_sys/ywb_save_date.h"
 #include "core/hle/service/fs/archive.h"
 
 SERIALIZE_EXPORT_IMPL(FileSys::ArchiveFactory_ExtSaveData)
@@ -29,8 +31,9 @@ namespace FileSys {
 class FixSizeDiskFile : public DiskFile {
 public:
     FixSizeDiskFile(FileUtil::IOFile&& file, const Mode& mode,
-                    std::unique_ptr<DelayGenerator> delay_generator_)
-        : DiskFile(std::move(file), mode, std::move(delay_generator_)) {
+                    std::unique_ptr<DelayGenerator> delay_generator_, std::string ywb_save_path_)
+        : DiskFile(std::move(file), mode, std::move(delay_generator_), {},
+                   std::move(ywb_save_path_)) {
         size = GetSize();
     }
 
@@ -158,9 +161,16 @@ public:
         Mode rwmode;
         rwmode.write_flag.Assign(1);
         rwmode.read_flag.Assign(1);
+        std::string ywb_save_path;
+        const auto filename = std::filesystem::path(full_path).filename().string();
+        if (mode.write_flag &&
+            IsYwbObservedSaveFile(std::filesystem::path(full_path).parent_path().string(),
+                                  filename)) {
+            ywb_save_path = full_path;
+        }
         auto delay_generator = std::make_unique<ExtSaveDataDelayGenerator>();
-        return std::make_unique<FixSizeDiskFile>(std::move(file), rwmode,
-                                                 std::move(delay_generator));
+        return std::make_unique<FixSizeDiskFile>(
+            std::move(file), rwmode, std::move(delay_generator), std::move(ywb_save_path));
     }
 
 private:

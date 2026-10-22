@@ -96,6 +96,8 @@ add_library(citra_core STATIC EXCLUDE_FROM_ALL
     file_sys/romfs_reader.h
     file_sys/savedata_archive.cpp
     file_sys/savedata_archive.h
+    file_sys/ywb_save_date.cpp
+    file_sys/ywb_save_date.h
     file_sys/yw2_save_date.cpp
     file_sys/yw2_save_date.h
     file_sys/secure_value_backend_artic.cpp
