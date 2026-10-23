@@ -157,6 +157,24 @@ public:
 
 TEST_CASE("Level256 StartScan beacon header snapshot reads only valid 12-byte ranges",
           "[core][service][sm][level256][diagnostic]") {
+    const auto translated = Service::SM::TranslateLevel256UdsCommand(15, 16, 4);
+    REQUIRE(translated);
+    REQUIRE((translated == Service::SM::UdsCommandShape{15, 20, 0}));
+
+    std::array<u32, 21> start_scan_request{};
+    start_scan_request[0] = IPC::MakeHeader(15, 16, 4);
+    start_scan_request[1] = 0x4000;
+    start_scan_request[19] = IPC::MappedBufferDesc(0x4000, IPC::W);
+    start_scan_request[20] = 0x00200000;
+    const auto original_request = Kernel::DecodeLevel256StartScanBuffer(start_scan_request);
+    start_scan_request[0] = IPC::MakeHeader(translated->command_id, translated->normal_params,
+                                            translated->translate_params);
+    REQUIRE(start_scan_request[0] == 0x000F0500);
+    const auto forwarded_request = Kernel::DecodeLevel256StartScanBuffer(start_scan_request);
+    REQUIRE(forwarded_request.status == Kernel::Level256StartScanBufferStatus::Valid);
+    REQUIRE(forwarded_request.descriptor == original_request.descriptor);
+    REQUIRE(forwarded_request.output_address == original_request.output_address);
+
     TestEnvironment env;
     auto process = env.MakeProcess();
     constexpr VAddr output_address = 0x00200000;
