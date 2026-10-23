@@ -22,8 +22,8 @@ constexpr bool Matches(bool enabled = true, u64 title_id = Kernel::LEVEL256_DIAG
                        s32 param = Kernel::LEVEL256_VERIFICATION_PARAM,
                        bool official_plugin_hash_matches = true) {
     return Kernel::ShouldProvideLevel256VerificationResponse(
-        enabled, official_plugin_hash_matches, title_id, pid, plugin_pid, plugin_loaded,
-        code_begin, code_end, pc, svc_id, type, param);
+        enabled, official_plugin_hash_matches, title_id, pid, plugin_pid, plugin_loaded, code_begin,
+        code_end, pc, svc_id, type, param);
 }
 
 } // namespace
@@ -286,8 +286,8 @@ TEST_CASE("CTRPF startup watchpoints match only known text reads and OSD candida
 
     for (std::size_t i = 0; i < LEVEL256_CTRPF_STARTUP_TEXT_ADDRESSES.size(); ++i) {
         REQUIRE(GetLevel256CtrpfStartupWatchTarget(LEVEL256_CTRPF_STARTUP_TEXT_ADDRESSES[i], 1,
-                                                   false, LEVEL256_CTRPF_OSD_CANDIDATE_ADDRESS) ==
-                i);
+                                                   false,
+                                                   LEVEL256_CTRPF_OSD_CANDIDATE_ADDRESS) == i);
         REQUIRE(GetLevel256CtrpfStartupWatchTarget(LEVEL256_CTRPF_STARTUP_TEXT_ADDRESSES[i], 1,
                                                    true, LEVEL256_CTRPF_OSD_CANDIDATE_ADDRESS) ==
                 LEVEL256_CTRPF_STARTUP_WATCH_TARGET_COUNT);
@@ -310,8 +310,7 @@ TEST_CASE("CTRPF startup watchpoints match only known text reads and OSD candida
             LEVEL256_CTRPF_STARTUP_WATCH_TARGET_COUNT);
 }
 
-TEST_CASE("CTRPF startup memory watch logging is bounded per target",
-          "[core][kernel][level256]") {
+TEST_CASE("CTRPF startup memory watch logging is bounded per target", "[core][kernel][level256]") {
     using Kernel::ShouldLogLevel256CtrpfStartupWatch;
     REQUIRE(ShouldLogLevel256CtrpfStartupWatch(1));
     REQUIRE(ShouldLogLevel256CtrpfStartupWatch(2));
@@ -364,8 +363,7 @@ TEST_CASE("Level256 ARM LDR diagnostic decodes all architectural registers safel
     registers[14] = 0xE000;
     registers[15] = 0xF000;
 
-    const auto sp_load = Kernel::DecodeLevel256ArmLdrAddress(0xE59D10C8, 0x07046C70,
-                                                              registers);
+    const auto sp_load = Kernel::DecodeLevel256ArmLdrAddress(0xE59D10C8, 0x07046C70, registers);
     REQUIRE(sp_load.valid);
     REQUIRE(sp_load.rn == 13);
     REQUIRE(sp_load.rd == 1);
@@ -381,16 +379,14 @@ TEST_CASE("Level256 ARM LDR diagnostic decodes all architectural registers safel
         REQUIRE(decoded.base == registers[reg]);
     }
 
-    const auto pc_load = Kernel::DecodeLevel256ArmLdrAddress(0xE59F0004, 0x07001000,
-                                                              registers);
+    const auto pc_load = Kernel::DecodeLevel256ArmLdrAddress(0xE59F0004, 0x07001000, registers);
     REQUIRE(pc_load.valid);
     REQUIRE(pc_load.rn == 15);
     REQUIRE(pc_load.base == 0x07001008);
     REQUIRE(pc_load.effective_address == 0x0700100C);
 
     REQUIRE_FALSE(Kernel::ReadLevel256ArmRegister(16, 0x1000, registers).valid);
-    REQUIRE_FALSE(Kernel::DecodeLevel256ArmLdrAddress(0xE79D10C8, 0x07046C70,
-                                                       registers).valid);
+    REQUIRE_FALSE(Kernel::DecodeLevel256ArmLdrAddress(0xE79D10C8, 0x07046C70, registers).valid);
 }
 
 TEST_CASE("Level256 OpenProcess trace separates instruction and log budgets",
@@ -622,8 +618,12 @@ TEST_CASE("Level256 KProcess compatibility view uses guest addresses and copies 
                 .Succeeded());
 
     std::array<u32, Kernel::LEVEL256_PROCESS_VIEW_SIZE / sizeof(u32)> view{};
-    const Kernel::Level256CodeSetViewInfo code_info{0x00100000, 0x005EC000, 0x006EC000,
-                                                    0x00020000, 0x0070C000, 0x00010000,
+    const Kernel::Level256CodeSetViewInfo code_info{0x00100000,
+                                                    0x005EC000,
+                                                    0x006EC000,
+                                                    0x00020000,
+                                                    0x0070C000,
+                                                    0x00010000,
                                                     Kernel::LEVEL256_DIAGNOSTIC_TITLE_ID};
     Kernel::BuildLevel256ProcessView(view, view_address, pid, 0x18, 0x20, code_info, false);
     memory.WriteBlock(*process, view_address, view.data(), sizeof(view));
@@ -665,8 +665,7 @@ TEST_CASE("Level256 KProcess compatibility view uses guest addresses and copies 
     memory.WriteBlock(*process, copy_destination, copied.data(), copied.size());
     std::array<u32, 16> registers{};
     registers[13] = caller_sp;
-    const auto pid_load = Kernel::DecodeLevel256ArmLdrAddress(
-        0xE59D20CC, 0x07046C7C, registers);
+    const auto pid_load = Kernel::DecodeLevel256ArmLdrAddress(0xE59D20CC, 0x07046C7C, registers);
     REQUIRE(pid_load.valid);
     REQUIRE(pid_load.rn == 13);
     REQUIRE(pid_load.rd == 2);
@@ -682,8 +681,8 @@ TEST_CASE("Level256 KProcess compatibility view uses guest addresses and copies 
     REQUIRE(open_process_r1 == pid);
 
     // The distinct copy-source LDR reads the embedded KCodeSet, not the PID slot.
-    const auto copy_source_load = Kernel::DecodeLevel256ArmLdrAddress(
-        0xE59D10C8, 0x07046C70, registers);
+    const auto copy_source_load =
+        Kernel::DecodeLevel256ArmLdrAddress(0xE59D10C8, 0x07046C70, registers);
     REQUIRE(copy_source_load.valid);
     REQUIRE(copy_source_load.rd == 1);
     REQUIRE(copy_source_load.effective_address == caller_sp + 0xC8);
@@ -735,114 +734,113 @@ TEST_CASE("Level256 CustomBackdoor process-view callbacks require the exact sign
     constexpr u32 svc = LEVEL256_CUSTOM_BACKDOOR_SVC_ID;
     constexpr u32 view = 0x08000000;
 
-    REQUIRE(ShouldHandleLevel256CurrentProcessCallback(
-        on, trusted, title, pid, pid, true, begin, end, pc, svc,
-        LEVEL256_BACKDOOR_CURRENT_PROCESS_CALLBACK, 0, 0, 0));
-    REQUIRE(ShouldHandleLevel256CurrentProcessCallback(
-        on, trusted, 0x000400000016C700ULL, pid, pid, true, begin, end, pc, svc,
-        LEVEL256_BACKDOOR_CURRENT_PROCESS_CALLBACK, 0, 0, 0));
-    REQUIRE_FALSE(ShouldHandleLevel256CurrentProcessCallback(
-        false, trusted, title, pid, pid, true, begin, end, pc, svc,
-        LEVEL256_BACKDOOR_CURRENT_PROCESS_CALLBACK, 0, 0, 0));
-    REQUIRE_FALSE(ShouldHandleLevel256CurrentProcessCallback(
-        on, false, title, pid, pid, true, begin, end, pc, svc,
-        LEVEL256_BACKDOOR_CURRENT_PROCESS_CALLBACK, 0, 0, 0));
-    REQUIRE_FALSE(ShouldHandleLevel256CurrentProcessCallback(
-        on, trusted, title + 1, pid, pid, true, begin, end, pc, svc,
-        LEVEL256_BACKDOOR_CURRENT_PROCESS_CALLBACK, 0, 0, 0));
-    REQUIRE_FALSE(ShouldHandleLevel256CurrentProcessCallback(
-        on, trusted, title, pid + 1, pid, true, begin, end, pc, svc,
-        LEVEL256_BACKDOOR_CURRENT_PROCESS_CALLBACK, 0, 0, 0));
-    REQUIRE_FALSE(ShouldHandleLevel256CurrentProcessCallback(
-        on, trusted, title, pid, pid + 1, true, begin, end, pc, svc,
-        LEVEL256_BACKDOOR_CURRENT_PROCESS_CALLBACK, 0, 0, 0));
-    REQUIRE(ShouldHandleLevel256CurrentProcessCallback(
-        on, trusted, title, pid, pid, true, begin + 4, end, pc, svc,
-        LEVEL256_BACKDOOR_CURRENT_PROCESS_CALLBACK, 0, 0, 0));
-    REQUIRE(ShouldHandleLevel256CurrentProcessCallback(
-        on, trusted, title, pid, pid, true, begin, end, pc + 4, svc,
-        LEVEL256_BACKDOOR_CURRENT_PROCESS_CALLBACK, 0, 0, 0));
-    REQUIRE(ShouldHandleLevel256CurrentProcessCallback(
-        on, trusted, title, pid, pid, true, begin, 0x0710A000, 0x0709D290, svc,
-        LEVEL256_BACKDOOR_CURRENT_PROCESS_CALLBACK, 0, 0, 0));
-    REQUIRE_FALSE(ShouldHandleLevel256CurrentProcessCallback(
-        on, trusted, title, pid, pid, true, begin, end, pc, svc,
-        LEVEL256_BACKDOOR_CURRENT_PROCESS_CALLBACK, 1, 0, 0));
+    REQUIRE(ShouldHandleLevel256CurrentProcessCallback(on, trusted, title, pid, pid, true, begin,
+                                                       end, pc, svc, true, 0, 0, 0));
+    REQUIRE(ShouldHandleLevel256CurrentProcessCallback(on, trusted, 0x000400000016C700ULL, pid, pid,
+                                                       true, begin, end, pc, svc, true, 0, 0, 0));
+    REQUIRE_FALSE(ShouldHandleLevel256CurrentProcessCallback(false, trusted, title, pid, pid, true,
+                                                             begin, end, pc, svc, true, 0, 0, 0));
+    REQUIRE_FALSE(ShouldHandleLevel256CurrentProcessCallback(on, false, title, pid, pid, true,
+                                                             begin, end, pc, svc, true, 0, 0, 0));
+    REQUIRE_FALSE(ShouldHandleLevel256CurrentProcessCallback(on, trusted, title + 1, pid, pid, true,
+                                                             begin, end, pc, svc, true, 0, 0, 0));
+    REQUIRE_FALSE(ShouldHandleLevel256CurrentProcessCallback(on, trusted, title, pid + 1, pid, true,
+                                                             begin, end, pc, svc, true, 0, 0, 0));
+    REQUIRE_FALSE(ShouldHandleLevel256CurrentProcessCallback(on, trusted, title, pid, pid + 1, true,
+                                                             begin, end, pc, svc, true, 0, 0, 0));
+    REQUIRE(ShouldHandleLevel256CurrentProcessCallback(on, trusted, title, pid, pid, true,
+                                                       begin + 4, end, pc, svc, true, 0, 0, 0));
+    REQUIRE(ShouldHandleLevel256CurrentProcessCallback(on, trusted, title, pid, pid, true, begin,
+                                                       end, pc + 4, svc, true, 0, 0, 0));
+    REQUIRE(ShouldHandleLevel256CurrentProcessCallback(on, trusted, title, pid, pid, true, begin,
+                                                       0x0710A000, 0x0709D290, svc, true, 0, 0, 0));
+    REQUIRE_FALSE(ShouldHandleLevel256CurrentProcessCallback(on, trusted, title, pid, pid, true,
+                                                             begin, end, pc, svc, true, 1, 0, 0));
+    REQUIRE_FALSE(ShouldHandleLevel256CurrentProcessCallback(on, trusted, title, pid, pid, true,
+                                                             begin, end, pc, svc, false, 0, 0, 0));
 
     REQUIRE(ShouldHandleLevel256ResourceLimitCallback(
-        on, trusted, title, pid, pid, true, begin, end, pc, svc,
-        LEVEL256_BACKDOOR_RESOURCE_LIMIT_CALLBACK, view, view,
+        on, trusted, title, pid, pid, true, begin, end, pc, svc, true, view, view,
         LEVEL256_PROCESS_VIEW_RESOURCE_LIMIT_OFFSET, 1));
     REQUIRE(ShouldHandleLevel256ResourceLimitCallback(
-        on, trusted, 0x000400000016C700ULL, pid, pid, true, begin, end, pc, svc,
-        LEVEL256_BACKDOOR_RESOURCE_LIMIT_CALLBACK, view, view,
+        on, trusted, 0x000400000016C700ULL, pid, pid, true, begin, end, pc, svc, true, view, view,
         LEVEL256_PROCESS_VIEW_RESOURCE_LIMIT_OFFSET, 1));
     REQUIRE(ShouldHandleLevel256ResourceLimitCallback(
-        on, trusted, title, pid, pid, true, begin, end, pc, svc,
-        LEVEL256_BACKDOOR_RESOURCE_LIMIT_CALLBACK, view, view,
+        on, trusted, title, pid, pid, true, begin, end, pc, svc, true, view, view,
         LEVEL256_PROCESS_VIEW_O3DS8X_RESOURCE_LIMIT_OFFSET, 1,
         LEVEL256_PROCESS_VIEW_O3DS8X_RESOURCE_LIMIT_OFFSET));
     REQUIRE_FALSE(ShouldHandleLevel256ResourceLimitCallback(
-        on, trusted, title, pid, pid, true, begin, end, pc, svc,
-        LEVEL256_BACKDOOR_RESOURCE_LIMIT_CALLBACK, view, view, 0x88, 1));
+        on, trusted, title, pid, pid, true, begin, end, pc, svc, true, view, view, 0x88, 1));
     REQUIRE_FALSE(ShouldHandleLevel256ResourceLimitCallback(
-        on, trusted, title, pid, pid, true, begin, end, pc, svc,
-        LEVEL256_BACKDOOR_RESOURCE_LIMIT_CALLBACK, view, view, 0x84, 2));
+        on, trusted, title, pid, pid, true, begin, end, pc, svc, true, view, view, 0x84, 2));
+    REQUIRE_FALSE(ShouldHandleLevel256ResourceLimitCallback(
+        on, trusted, title, pid, pid, true, begin, end, pc, svc, false, view, view, 0x84, 1));
 
+    REQUIRE(ShouldHandleLevel256ProcessSnapshotCopy(on, trusted, title, pid, pid, true, begin, end,
+                                                    pc, svc, true, 0x070F3BD8, view, view,
+                                                    LEVEL256_PROCESS_VIEW_COPY_SIZE, true));
     REQUIRE(ShouldHandleLevel256ProcessSnapshotCopy(
-        on, trusted, title, pid, pid, true, begin, end, pc, svc, LEVEL256_BACKDOOR_COPY_CALLBACK,
-        LEVEL256_PROCESS_VIEW_COPY_DESTINATION, view, view, LEVEL256_PROCESS_VIEW_COPY_SIZE));
+        on, trusted, 0x000400000016C700ULL, pid, pid, true, begin, end, pc, svc, true, 0x070F3BD8,
+        view, view, LEVEL256_PROCESS_VIEW_COPY_SIZE, true));
     REQUIRE(ShouldHandleLevel256ProcessSnapshotCopy(
-        on, trusted, 0x000400000016C700ULL, pid, pid, true, begin, end, pc, svc,
-        LEVEL256_BACKDOOR_COPY_CALLBACK, LEVEL256_PROCESS_VIEW_COPY_DESTINATION, view, view,
-        LEVEL256_PROCESS_VIEW_COPY_SIZE));
-    REQUIRE(ShouldHandleLevel256ProcessSnapshotCopy(
-        on, trusted, title, pid, pid, true, begin, end, pc, svc, LEVEL256_BACKDOOR_COPY_CALLBACK,
-        LEVEL256_CODESET_COPY_DESTINATION, view + LEVEL256_PROCESS_VIEW_CODESET_OFFSET, view,
-        LEVEL256_CODESET_SNAPSHOT_SIZE));
+        on, trusted, title, pid, pid, true, begin, end, pc, svc, true, 0x070F5664,
+        view + LEVEL256_PROCESS_VIEW_CODESET_OFFSET, view, LEVEL256_CODESET_SNAPSHOT_SIZE, true));
+    REQUIRE_FALSE(ShouldHandleLevel256ProcessSnapshotCopy(on, trusted, title, pid, pid, true, begin,
+                                                          end, pc, svc, true, 0x070F3BD8, 0, view,
+                                                          LEVEL256_PROCESS_VIEW_COPY_SIZE, true));
+    REQUIRE_FALSE(ShouldHandleLevel256ProcessSnapshotCopy(on, trusted, title, pid, pid, true, begin,
+                                                          end, pc, svc, true, 0x070F3BD8, view,
+                                                          view, 0x64, true));
+    REQUIRE_FALSE(ShouldHandleLevel256ProcessSnapshotCopy(on, trusted, title, pid, pid, true, begin,
+                                                          end, pc, svc, true, 0x070F5664, 0, view,
+                                                          LEVEL256_CODESET_SNAPSHOT_SIZE, true));
     REQUIRE_FALSE(ShouldHandleLevel256ProcessSnapshotCopy(
-        on, trusted, title, pid, pid, true, begin, end, pc, svc, LEVEL256_BACKDOOR_COPY_CALLBACK,
-        LEVEL256_PROCESS_VIEW_COPY_DESTINATION, 0, view, LEVEL256_PROCESS_VIEW_COPY_SIZE));
+        on, trusted, title, pid, pid, true, begin, end, pc, svc, false, 0x070F3BD8, view, view,
+        LEVEL256_PROCESS_VIEW_COPY_SIZE, true));
     REQUIRE_FALSE(ShouldHandleLevel256ProcessSnapshotCopy(
-        on, trusted, title, pid, pid, true, begin, end, pc, svc, LEVEL256_BACKDOOR_COPY_CALLBACK,
-        LEVEL256_PROCESS_VIEW_COPY_DESTINATION, view, view, 0x64));
-    REQUIRE_FALSE(ShouldHandleLevel256ProcessSnapshotCopy(
-        on, trusted, title, pid, pid, true, begin, end, pc, svc, LEVEL256_BACKDOOR_COPY_CALLBACK,
-        LEVEL256_CODESET_COPY_DESTINATION, 0, view, LEVEL256_CODESET_SNAPSHOT_SIZE));
+        on, trusted, title, pid, pid, true, begin, end, pc, svc, true, 0x070F3BD8, view, view,
+        LEVEL256_PROCESS_VIEW_COPY_SIZE, false));
+
+    REQUIRE(IsLevel256PluginDataRange(0x070F3BD8, 0x100, 0x070F3000, 0x10000));
+    REQUIRE_FALSE(IsLevel256PluginDataRange(0x070F3BD8, 0x100, 0x070F4000, 0x1000));
+    REQUIRE_FALSE(IsLevel256PluginDataRange(0xFFFFFFF0, 0x100, 0xFFFFFF00, 0x100));
 
     REQUIRE(Kernel::ShouldHandleLevel256ViewFlagCallback(
-        Kernel::LEVEL256_BACKDOOR_VIEW_FLAG_CALLBACK, 0, 1, 0));
+        Kernel::Level256BackdoorCallbackKind::ViewFlag, 0x07047C68, 0, 1, 0));
     REQUIRE(Kernel::ShouldHandleLevel256ViewFlagCallback(
-        Kernel::LEVEL256_BACKDOOR_VIEW_FLAG_CALLBACK, 16, 1, 0));
+        Kernel::Level256BackdoorCallbackKind::ViewFlag, 0x07047C68, 16, 1, 0));
     REQUIRE(Kernel::ShouldHandleLevel256ViewFlagCallback(
-        Kernel::LEVEL256_BACKDOOR_VIEW_FLAG_CALLBACK, 0, 1, 1));
+        Kernel::Level256BackdoorCallbackKind::ViewFlag, 0x07047C68, 0, 1, 1));
     REQUIRE_FALSE(Kernel::ShouldHandleLevel256ViewFlagCallback(
-        Kernel::LEVEL256_BACKDOOR_VIEW_FLAG_CALLBACK, 16, 0, 0));
-    REQUIRE(Kernel::ApplyLevel256ViewFlagCallback(Kernel::LEVEL256_BACKDOOR_VIEW_FLAG_CALLBACK, 0,
+        Kernel::Level256BackdoorCallbackKind::ViewFlag, 0x07047C68, 16, 0, 0));
+    REQUIRE(Kernel::ApplyLevel256ViewFlagCallback(Kernel::Level256BackdoorCallbackKind::ViewFlag, 0,
                                                   0) == 0x2000);
     const u32 observed_flag_update = Kernel::ApplyLevel256ViewFlagCallback(
-        Kernel::LEVEL256_BACKDOOR_VIEW_FLAG_CALLBACK, 0, 16);
+        Kernel::Level256BackdoorCallbackKind::ViewFlag, 0, 16);
     REQUIRE(observed_flag_update == 0x2000);
     REQUIRE(Kernel::ShouldHandleLevel256ViewFlagCallback(
-        Kernel::LEVEL256_BACKDOOR_VIEW_FIELD_CALLBACK, 0x300, 0xB0, observed_flag_update));
+        Kernel::Level256BackdoorCallbackKind::ViewField, 0x07047C78, 0x300, 0xB0,
+        observed_flag_update));
     REQUIRE(Kernel::ShouldHandleLevel256ViewFlagCallback(
-        Kernel::LEVEL256_BACKDOOR_VIEW_FIELD_CALLBACK, 0x300, 0xB0, 0x2000));
+        Kernel::Level256BackdoorCallbackKind::ViewField, 0x07047C78, 0x300, 0xB0, 0x2000));
     REQUIRE_FALSE(Kernel::ShouldHandleLevel256ViewFlagCallback(
-        Kernel::LEVEL256_BACKDOOR_VIEW_FIELD_CALLBACK, 0x300, 0xB0, 0));
+        Kernel::Level256BackdoorCallbackKind::ViewField, 0x07047C78, 0x300, 0xB0, 0));
     const u32 first_field_update = Kernel::ApplyLevel256ViewFlagCallback(
-        Kernel::LEVEL256_BACKDOOR_VIEW_FIELD_CALLBACK, 0x2000, 0x300);
+        Kernel::Level256BackdoorCallbackKind::ViewField, 0x2000, 0x300);
     REQUIRE(first_field_update == 0x2300);
     REQUIRE(Kernel::GetLevel256FieldUpdateResult(0x2000) == 0);
     REQUIRE(Kernel::ShouldHandleLevel256ViewFlagCallback(
-        Kernel::LEVEL256_BACKDOOR_VIEW_FIELD_CALLBACK,
-        Kernel::LEVEL256_BACKDOOR_VIEW_FIELD_CALLBACK, 0xB0, 0x2300));
+        Kernel::Level256BackdoorCallbackKind::ViewField, 0x07046440, 0x07046440, 0xB0, 0x2300));
     REQUIRE(Kernel::ShouldHandleLevel256ViewFlagCallback(
-        Kernel::LEVEL256_BACKDOOR_VIEW_FIELD_CALLBACK, 0, 0xB0, 0x2300));
+        Kernel::Level256BackdoorCallbackKind::ViewField, 0x07047C78, 0, 0xB0, 0x2300));
+    REQUIRE(Kernel::ShouldHandleLevel256ViewFlagCallback(
+        Kernel::Level256BackdoorCallbackKind::ViewField, 0x07047C78, 0x07047C78, 0xB0, 0x2300));
+    REQUIRE_FALSE(Kernel::ShouldHandleLevel256ViewFlagCallback(
+        Kernel::Level256BackdoorCallbackKind::ViewField, 0x07047C78, 0x07046440, 0xB0, 0x2300));
     REQUIRE(Kernel::ApplyLevel256FieldUpdate(0x2300, 0) == 0x2000);
     REQUIRE(Kernel::GetLevel256FieldUpdateResult(0x2300) == 0x300);
     const u32 second_field_update = Kernel::ApplyLevel256ViewFlagCallback(
-        Kernel::LEVEL256_BACKDOOR_VIEW_FIELD_CALLBACK, first_field_update,
-        Kernel::LEVEL256_BACKDOOR_VIEW_FIELD_CALLBACK);
+        Kernel::Level256BackdoorCallbackKind::ViewField, first_field_update, 0x07046440);
     REQUIRE(second_field_update == 0x07046440);
     REQUIRE(Kernel::GetLevel256FieldUpdateResult(first_field_update) == 0x300);
 
@@ -851,6 +849,75 @@ TEST_CASE("Level256 CustomBackdoor process-view callbacks require the exact sign
     REQUIRE(guest_r0 == view);
     REQUIRE_FALSE(ApplyLevel256BackdoorSVCResult(false, 0, guest_r0));
     REQUIRE(guest_r0 == view);
+}
+
+TEST_CASE("Level256 v2 callbacks resolve from verified code signatures instead of fixed PCs",
+          "[core][kernel][level256]") {
+    using Kernel::Level256BackdoorCallbackKind;
+    using Kernel::ResolveLevel256BackdoorCallback;
+
+    constexpr u32 begin = 0x07000100;
+    constexpr u32 end = 0x0710A000;
+    constexpr std::array<u32, 3> current_process{
+        0xE3E03A06,
+        0xE5130FFB,
+        0xE12FFF1E,
+    };
+    constexpr std::array<u32, 4> view_flag{
+        0xE59030B0,
+        0xE3833A02,
+        0xE58030B0,
+        0xE12FFF1E,
+    };
+    constexpr std::array<u32, 6> view_field{
+        0xE790C002, 0xE3CC3C0F, 0xE1833001, 0xE7803002, 0xE20C0C0F, 0xE12FFF1E,
+    };
+    constexpr std::array<u32, 17> resource_limit{
+        0xE7902001, 0xE5D2C011, 0xE5D23010, 0xE5D20012, 0xE5D21013, 0xE183340C,
+        0xE1833800, 0xE1833C01, 0xE2833004, 0xE1A0C423, 0xE1A00823, 0xE1A01C23,
+        0xE5C23010, 0xE5C2C011, 0xE5C20012, 0xE5C21013, 0xE12FFF1E,
+    };
+    constexpr std::array<u32, 16> priority_limit{
+        0xE7903002, 0xE1A0C421, 0xE5D30009, 0xE5D32008, 0xE5C3C009, 0xE1822400,
+        0xE5D3000A, 0xE1A0C821, 0xE1822800, 0xE5D3000B, 0xE5C31008, 0xE1A01C21,
+        0xE5C3C00A, 0xE5C3100B, 0xE1820C00, 0xE12FFF1E,
+    };
+    constexpr std::array<u32, 6> process_snapshot_copy{
+        0xE92D4010, 0xF10C01C0, 0xEB018BD1, 0xF10801C0, 0xE8BD8010, 0xE12FFF1E,
+    };
+
+    REQUIRE(ResolveLevel256BackdoorCallback(0x07047C5C, current_process, begin, end, false) ==
+            Level256BackdoorCallbackKind::CurrentProcess);
+    REQUIRE(ResolveLevel256BackdoorCallback(0x07080000, current_process, begin, end, false) ==
+            Level256BackdoorCallbackKind::CurrentProcess);
+    REQUIRE(ResolveLevel256BackdoorCallback(0x07047C68, view_flag, begin, end, false) ==
+            Level256BackdoorCallbackKind::ViewFlag);
+    REQUIRE(ResolveLevel256BackdoorCallback(0x07047C78, view_field, begin, end, false) ==
+            Level256BackdoorCallbackKind::ViewField);
+    REQUIRE(ResolveLevel256BackdoorCallback(0x07047CD0, resource_limit, begin, end, false) ==
+            Level256BackdoorCallbackKind::ResourceLimit);
+    REQUIRE(ResolveLevel256BackdoorCallback(0x07047CD0, priority_limit, begin, end, false) ==
+            Level256BackdoorCallbackKind::PriorityLimit);
+    REQUIRE(ResolveLevel256BackdoorCallback(0x07047D14, process_snapshot_copy, begin, end, false) ==
+            Level256BackdoorCallbackKind::ProcessSnapshotCopy);
+    auto relocated_copy = process_snapshot_copy;
+    relocated_copy[2] = 0xEB018BD0;
+    REQUIRE(ResolveLevel256BackdoorCallback(0x07090000, relocated_copy, begin, end, false) ==
+            Level256BackdoorCallbackKind::ProcessSnapshotCopy);
+
+    auto modified_current_process = current_process;
+    modified_current_process[0] ^= 1;
+    REQUIRE(ResolveLevel256BackdoorCallback(0x07047C5C, modified_current_process, begin, end,
+                                            false) == Level256BackdoorCallbackKind::Unknown);
+    REQUIRE(ResolveLevel256BackdoorCallback(0x07047C5C, current_process, begin, 0x07047C67,
+                                            false) == Level256BackdoorCallbackKind::Unknown);
+    REQUIRE(ResolveLevel256BackdoorCallback(0x07047C5C, current_process, begin, end, false) !=
+            Level256BackdoorCallbackKind::Unknown);
+    constexpr std::array<u32, 1> legacy_callback_word{0};
+    REQUIRE(ResolveLevel256BackdoorCallback(0x07046424, legacy_callback_word, begin, end, false) ==
+            Level256BackdoorCallbackKind::Unknown);
+    REQUIRE(ResolveLevel256BackdoorCallback(0x07046424, legacy_callback_word, begin, end, true) ==
+            Level256BackdoorCallbackKind::CurrentProcess);
 }
 
 TEST_CASE("Level256 process-view offset 0x08 mirrors maxPriority, not Event current value",
@@ -872,13 +939,11 @@ TEST_CASE("Level256 process-view offset 0x08 mirrors maxPriority, not Event curr
     u32 updated_limit = priority_limit;
     u32 callback_return = 0;
     REQUIRE(ShouldApplyLevel256PriorityLimitCallback(true, true, priority_limit, priority_limit, 0,
-                                                    0x84, 0x84, updated_limit,
-                                                    callback_return));
+                                                     0x84, 0x84, updated_limit, callback_return));
     REQUIRE(updated_limit == 0);
     REQUIRE(callback_return == priority_limit);
-    REQUIRE_FALSE(ShouldApplyLevel256PriorityLimitCallback(true, true, 1, priority_limit, 0,
-                                                          0x84, 0x84, updated_limit,
-                                                          callback_return));
+    REQUIRE_FALSE(ShouldApplyLevel256PriorityLimitCallback(true, true, 1, priority_limit, 0, 0x84,
+                                                           0x84, updated_limit, callback_return));
     REQUIRE(updated_limit == 0);
     REQUIRE(callback_return == priority_limit);
     REQUIRE_FALSE(CanCreateThreadWithPriority(priority_limit, 0, false));
@@ -982,7 +1047,8 @@ TEST_CASE("Level256 CTRPF OSD scan reports exact signatures and prologue candida
     REQUIRE(result.candidate3 == Kernel::LEVEL256_CTRPF_OSD_NOT_FOUND);
 
     const std::array<u8, 0x800> empty_text{};
-    const auto absent = Kernel::ScanLevel256CtrpfOSDPatterns(empty_text.data(), empty_text.size(), base);
+    const auto absent =
+        Kernel::ScanLevel256CtrpfOSDPatterns(empty_text.data(), empty_text.size(), base);
     REQUIRE(absent.pattern0_offset == Kernel::LEVEL256_CTRPF_OSD_NOT_FOUND);
     REQUIRE(absent.pattern0_fallback_offset == Kernel::LEVEL256_CTRPF_OSD_NOT_FOUND);
     REQUIRE(absent.pattern3_offset == Kernel::LEVEL256_CTRPF_OSD_NOT_FOUND);

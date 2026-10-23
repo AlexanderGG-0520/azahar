@@ -78,6 +78,10 @@ public:
         bool plugin_code_reached = false;
         u32 plugin_code_begin = 0;
         u32 plugin_code_end = 0;
+        // Runtime guest range for the 3GX .data and .bss sections. Not serialized as authority;
+        // it is populated again only when the plugin is loaded from its verified artifact.
+        u32 plugin_data_begin = 0;
+        u32 plugin_data_end = 0;
         u32 plugin_bootloader_begin = 0;
         u32 plugin_bootloader_end = 0;
         u32 plugin_trace_count = 0;

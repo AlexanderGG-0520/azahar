@@ -46,6 +46,17 @@ VM manager does not yet track enough provenance to prove that an arbitrary reque
 belongs to a prior `0xA0` mapping. The exact historical legacy SHA-256 retains its previous
 `0xA1` exposure for compatibility. SVC `0xA2` has no handler and remains denied.
 
+### CustomBackdoor callback contracts
+
+The v2.0.1 `CustomBackdoor` adapters are selected by exact ARM instruction signatures inside the
+verified plugin's mapped code range, not by the old callback PCs. The checked contracts cover the
+current-process view, view flag, view field, resource-limit adjustment, and process-snapshot copy
+callbacks. The old exact-SHA plugin retains its historical callback table. The process view is a
+guest mapping owned by the calling process; snapshot copies are limited to the view's known
+structures and the loaded 3GX `.data`/`.bss` range recorded by the loader. Level256's model-specific
+view layout follows Azahar's emulated hardware model. Unknown or modified callback code remains
+unhandled. The signature matcher does not execute guest callbacks as host code.
+
 `PluginUdsControlIPC`, `PluginUdsDataIPC`, `NdmControlIPC`, and `SocAttachIPC` are narrow adapters
 inside the normal `SendSyncRequest` path. They match specific service names and command/header
 shapes, then preserve ordinary IPC forwarding for commands they do not handle. Service redirection

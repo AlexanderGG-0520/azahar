@@ -143,6 +143,8 @@ PLG_LDR::PLG_LDR(Core::System& system_) : ServiceFramework{"plg:ldr", 1}, system
     plgldr_context.plugin_code_reached = false;
     plgldr_context.plugin_code_begin = 0;
     plgldr_context.plugin_code_end = 0;
+    plgldr_context.plugin_data_begin = 0;
+    plgldr_context.plugin_data_end = 0;
     plgldr_context.plugin_bootloader_begin = 0;
     plgldr_context.plugin_bootloader_end = 0;
     plgldr_context.plugin_trace_count = 0;
@@ -208,6 +210,8 @@ void PLG_LDR::PluginLoaderContext::serialize(Archive& ar, const unsigned int) {
         // A savestate does not preserve trust in the loaded plugin bytes. The compatibility gate
         // is re-established only after a fresh file hash during plugin loading.
         ResetTransientLevel256Authorization();
+        plugin_data_begin = 0;
+        plugin_data_end = 0;
         // A restored process owns any restored VM mapping. The transient manager deliberately
         // does not inherit a raw Process pointer or plugin trust across savestate loading.
         level256_open_process_trace_started = false;
@@ -657,6 +661,8 @@ void PLG_LDR::OnProcessRun(Kernel::Process& process, Kernel::KernelSystem& kerne
     plgldr_context.plugin_code_reached = false;
     plgldr_context.plugin_code_begin = 0;
     plgldr_context.plugin_code_end = 0;
+    plgldr_context.plugin_data_begin = 0;
+    plgldr_context.plugin_data_end = 0;
     plgldr_context.plugin_bootloader_begin = 0;
     plgldr_context.plugin_bootloader_end = 0;
     plgldr_context.plugin_trace_count = 0;
@@ -906,6 +912,8 @@ void PLG_LDR::OnProcessExit(Kernel::Process& process, Kernel::KernelSystem& kern
         plgldr_context.plugin_code_reached = false;
         plgldr_context.plugin_code_begin = 0;
         plgldr_context.plugin_code_end = 0;
+        plgldr_context.plugin_data_begin = 0;
+        plgldr_context.plugin_data_end = 0;
         plgldr_context.plugin_bootloader_begin = 0;
         plgldr_context.plugin_bootloader_end = 0;
         plgldr_context.plugin_trace_count = 0;

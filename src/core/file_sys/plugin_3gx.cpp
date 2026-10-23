@@ -69,6 +69,8 @@ Loader::ResultStatus FileSys::Plugin3GXLoader::Load(
     Service::PLGLDR::PLG_LDR::PluginLoaderContext& plg_context, Kernel::Process& process,
     Kernel::KernelSystem& kernel, Service::PLGLDR::PLG_LDR& plg_ldr) {
     plg_context.ResetTransientLevel256Authorization();
+    plg_context.plugin_data_begin = 0;
+    plg_context.plugin_data_end = 0;
     FileUtil::IOFile file(plg_context.plugin_path, "rb");
     if (!file.IsOpen()) {
         LOG_ERROR(Service_PLGLDR, "Failed to load 3GX plugin. Not found: {}",
@@ -361,6 +363,20 @@ Loader::ResultStatus FileSys::Plugin3GXLoader::Map(
     const u32 exe_size = (sizeof(PluginHeader) + text_section.size() + rodata_section.size() +
                           data_section.size() + header.executable.bss_size + 0x1000) &
                          ~0xFFFu;
+    const u64 plugin_data_begin = static_cast<u64>(_3GX_exe_load_addr) + sizeof(PluginHeader) +
+                                  header.executable.code_size + header.executable.rodata_size;
+    const u64 plugin_data_end =
+        plugin_data_begin + header.executable.data_size + header.executable.bss_size;
+    if (plugin_data_begin > UINT32_MAX || plugin_data_end > UINT32_MAX ||
+        plugin_data_end < plugin_data_begin ||
+        plugin_data_end > static_cast<u64>(_3GX_exe_load_addr) + exe_size) {
+        LOG_ERROR(Service_PLGLDR,
+                  "3GX load failed stage=plugin-data-range pid={} title_id={:016X} "
+                  "data=0x{:X}-0x{:X} executable_end=0x{:08X}",
+                  process.process_id, process.codeset->program_id, plugin_data_begin,
+                  plugin_data_end, _3GX_exe_load_addr + exe_size);
+        return Loader::ResultStatus::Error;
+    }
     const u32 bootloader_offset = exe_offset + exe_size;
     const u32 bootloader_size = bootloader_memory_size;
     const u32 heap_offset = bootloader_offset + bootloader_size;
@@ -478,6 +494,8 @@ Loader::ResultStatus FileSys::Plugin3GXLoader::Map(
     plg_context.plugin_code_reached = false;
     plg_context.plugin_code_begin = _3GX_exe_load_addr + sizeof(PluginHeader);
     plg_context.plugin_code_end = _3GX_exe_load_addr + exe_size;
+    plg_context.plugin_data_begin = static_cast<u32>(plugin_data_begin);
+    plg_context.plugin_data_end = static_cast<u32>(plugin_data_end);
     plg_context.plugin_bootloader_begin = _3GX_exe_load_addr - bootloader_memory_size;
     plg_context.plugin_bootloader_end = _3GX_exe_load_addr;
     plg_context.plugin_trace_count = 0;
