@@ -11,8 +11,22 @@ SvcDispatchOutcome DispatchExtensionSvc(const SvcRequest& request,
     if (!IsExtensionSVC(request.svc_id)) {
         return {.kind = SvcDispatchKind::NotExtension};
     }
-    if (!CanDispatchExtension(context, authorization, request.process_id, request.entry_pc)) {
-        return {.kind = SvcDispatchKind::Rejected};
+    const auto capability = ExtensionSvcCapability(request.svc_id);
+    if (static_cast<u8>(capability) == 0xFF) {
+        return {.kind = SvcDispatchKind::Rejected,
+                .reject_reason = SvcDispatchRejectReason::UnsupportedCapability};
+    }
+    if (!context.enabled) {
+        return {.kind = SvcDispatchKind::Rejected,
+                .reject_reason = SvcDispatchRejectReason::CompatibilityDisabled};
+    }
+    if (!authorization.OwnsCode(request.process_id, request.entry_pc)) {
+        return {.kind = SvcDispatchKind::Rejected,
+                .reject_reason = SvcDispatchRejectReason::PluginScopeRejected};
+    }
+    if (!HasCapability(authorization.capabilities, capability)) {
+        return {.kind = SvcDispatchKind::Rejected,
+                .reject_reason = SvcDispatchRejectReason::UnsupportedCapability};
     }
     return {.kind = SvcDispatchKind::DelegateToRegisteredHandler};
 }

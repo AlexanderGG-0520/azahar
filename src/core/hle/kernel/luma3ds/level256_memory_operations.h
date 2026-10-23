@@ -29,11 +29,13 @@ struct Level256MemoryOperationResult {
 
 /// Matches the one observed Level256 ControlMemoryUnsafe request. This is backend policy, not a
 /// general Luma SVC rule.
-constexpr bool ShouldHandleLevel256ControlMemoryUnsafe(
-    bool enabled, bool official_plugin_hash_matches, u64 title_id, u32 pid, u32 plugin_pid,
-    bool plugin_loaded, u32 code_begin, u32 code_end, u32 pc, u32 svc_id, u32 out_address,
-    u32 address, u32 size, u32 operation, u32 permissions) {
-    return enabled && official_plugin_hash_matches && IsLevel256SupportedTitleId(title_id) &&
+constexpr bool ShouldHandleLevel256ControlMemoryUnsafe(bool enabled, bool capability_authorized,
+                                                       u64 title_id, u32 pid, u32 plugin_pid,
+                                                       bool plugin_loaded, u32 code_begin,
+                                                       u32 code_end, u32 pc, u32 svc_id,
+                                                       u32 out_address, u32 address, u32 size,
+                                                       u32 operation, u32 permissions) {
+    return enabled && capability_authorized && IsLevel256SupportedTitleId(title_id) &&
            pid == plugin_pid && plugin_loaded && code_begin == LEVEL256_DIAGNOSTIC_CODE_BEGIN &&
            code_end == LEVEL256_DIAGNOSTIC_CODE_END &&
            pc == LEVEL256_CONTROL_MEMORY_UNSAFE_SVC_PC &&

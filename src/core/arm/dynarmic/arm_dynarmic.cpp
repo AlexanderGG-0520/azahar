@@ -331,7 +331,7 @@ void ARM_Dynarmic::Run() {
                 auto& context = plugin_loader->GetPluginLoaderContext();
                 if (context.ctrpf_hook_execution_trace_armed &&
                     context.ctrpf_hook_trace_process_id == process->process_id &&
-                    context.plugin_loaded && context.level256_hle_compatibility_verified &&
+                    context.plugin_loaded && context.level256_plugin_identity_verified &&
                     context.plugin_process_id == process->process_id &&
                     memory.IsValidVirtualAddress(*process, osd_candidate_pc)) {
                     const u32 instruction = memory.Read32(*process, osd_candidate_pc);
@@ -371,7 +371,7 @@ void ARM_Dynarmic::Run() {
                     }
                     return;
                 }
-                if (context.plugin_loaded && context.level256_hle_compatibility_verified &&
+                if (context.plugin_loaded && context.level256_plugin_identity_verified &&
                     context.plugin_process_id == process->process_id &&
                     context.ctrpf_osd_candidate_execution_seen &&
                     context.ctrpf_hook_callback_target ==
@@ -402,7 +402,7 @@ void ARM_Dynarmic::Run() {
                 auto& context = plugin_loader->GetPluginLoaderContext();
                 const u32 candidate = context.ctrpf_osd_scan.selected_candidate;
                 const u32 pc_before = osd_candidate_pc;
-                if (context.plugin_loaded && context.level256_hle_compatibility_verified &&
+                if (context.plugin_loaded && context.level256_plugin_identity_verified &&
                     context.plugin_process_id == process->process_id &&
                     candidate == Kernel::LEVEL256_CTRPF_OSD_CANDIDATE_ADDRESS &&
                     context.ctrpf_osd_candidate_initial_words[0] == 0xE92D5FF0 &&
@@ -532,7 +532,7 @@ void ARM_Dynarmic::Run() {
             if (const auto plugin_loader = Service::PLGLDR::GetService(system)) {
                 auto& context = plugin_loader->GetPluginLoaderContext();
                 if (context.ctrpf_hook_trace_started && context.plugin_loaded &&
-                    context.level256_hle_compatibility_verified &&
+                    context.level256_plugin_identity_verified &&
                     context.plugin_process_id == process->process_id &&
                     context.ctrpf_hook_trace_thread_id == thread->GetThreadId() &&
                     context.ctrpf_hook_trace_runs < Kernel::LEVEL256_CTRPF_HOOK_TRACE_RUN_LIMIT) {

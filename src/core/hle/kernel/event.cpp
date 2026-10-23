@@ -56,7 +56,7 @@ void Event::Signal() {
             auto& system = Core::Global<Core::System>();
             if (auto plugin_loader = Service::PLGLDR::GetService(system)) {
                 const auto& context = plugin_loader->GetPluginLoaderContext();
-                if (!context.plugin_loaded || !context.level256_hle_compatibility_verified ||
+                if (!context.plugin_loaded || !context.level256_plugin_identity_verified ||
                     context.plugin_process_id != process->process_id || !process->codeset ||
                     !Service::PLGLDR::IsLevel256SupportedTitle(process->codeset->program_id)) {
                     continue;

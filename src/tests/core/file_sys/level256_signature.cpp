@@ -12,6 +12,7 @@
 #include <cryptopp/xed25519.h>
 
 #include "core/file_sys/level256_signature.h"
+#include "core/hle/kernel/luma3ds/compatibility.h"
 
 namespace {
 
@@ -37,12 +38,12 @@ struct SignedFixture {
     ManifestBytes manifest{};
     std::array<u8, 32> public_key{};
 
-    SignedFixture() {
+    explicit SignedFixture(u32 artifact_version = 20031) {
         constexpr std::array<u8, 8> magic = {'L', '2', '5', '6', 'M', 'A', 'N', 0x01};
         std::copy(magic.begin(), magic.end(), manifest.begin());
         WriteU32(manifest, 8, FileSys::Level256::MANIFEST_FORMAT_VERSION);
         WriteU32(manifest, 12, FileSys::Level256::PLUGIN_ARTIFACT_TYPE);
-        WriteU32(manifest, 16, 20031);
+        WriteU32(manifest, 16, artifact_version);
         WriteU32(manifest, 64, static_cast<u32>(payload.size()));
         const auto digest = HashPayload(payload);
         std::copy(digest.begin(), digest.end(), manifest.begin() + 32);
@@ -131,7 +132,7 @@ TEST_CASE("Level256 signed 3GX manifest rejects malformed fields and truncation"
         fixture.public_key.data())); // Ordinary 3GX bytes have no manifest.
 }
 
-TEST_CASE("Level256 signature trust and HLE compatibility profiles are independent",
+TEST_CASE("Level256 signature trust is independent from capability compatibility",
           "[core][file_sys][level256][signature]") {
     const auto& release_key = FileSys::Level256::TrustedReleasePublicKey();
     std::array<u8, 32> fingerprint{};
@@ -143,13 +144,32 @@ TEST_CASE("Level256 signature trust and HLE compatibility profiles are independe
     REQUIRE(
         std::equal(expected_fingerprint.begin(), expected_fingerprint.end(), fingerprint.begin()));
 
-    using FileSys::Level256::IsHleCompatibilityVerified;
-    using FileSys::Level256::IsHleCompatibleArtifactVersion;
+    const SignedFixture known_version{20031};
+    const SignedFixture arbitrary_version{99999};
+    FileSys::Level256::PluginManifest known_manifest{};
+    FileSys::Level256::PluginManifest arbitrary_manifest{};
+    const bool known_version_signature_verified = FileSys::Level256::VerifyPluginManifest(
+        known_version.manifest, known_version.payload.size(), HashPayload(known_version.payload),
+        known_version.public_key.data(), &known_manifest);
+    const bool arbitrary_version_signature_verified = FileSys::Level256::VerifyPluginManifest(
+        arbitrary_version.manifest, arbitrary_version.payload.size(),
+        HashPayload(arbitrary_version.payload), arbitrary_version.public_key.data(),
+        &arbitrary_manifest);
+    REQUIRE(known_version_signature_verified);
+    REQUIRE(arbitrary_version_signature_verified);
+    REQUIRE(known_manifest.artifact_version == 20031);
+    REQUIRE(arbitrary_manifest.artifact_version == 99999);
 
-    REQUIRE(IsHleCompatibleArtifactVersion(20031));
-    REQUIRE_FALSE(IsHleCompatibleArtifactVersion(20032));
-    REQUIRE(IsHleCompatibilityVerified(true, false, 99999)); // Exact legacy SHA path.
-    REQUIRE(IsHleCompatibilityVerified(false, true, 20031));
-    REQUIRE_FALSE(IsHleCompatibilityVerified(false, true, 20032));
-    REQUIRE_FALSE(IsHleCompatibilityVerified(false, false, 20031));
+    const auto known_version_capabilities = Kernel::Luma3DS::CapabilitiesForVerifiedPlugin(
+        FileSys::Level256::IsTrustedPluginIdentity(false, known_version_signature_verified));
+    const auto arbitrary_version_capabilities = Kernel::Luma3DS::CapabilitiesForVerifiedPlugin(
+        FileSys::Level256::IsTrustedPluginIdentity(false, arbitrary_version_signature_verified));
+    REQUIRE(known_version_capabilities == arbitrary_version_capabilities);
+    REQUIRE(Kernel::Luma3DS::HasCapability(known_version_capabilities,
+                                           Kernel::Luma3DS::Level256Capability::SystemInfo));
+    REQUIRE(Kernel::Luma3DS::HasCapability(arbitrary_version_capabilities,
+                                           Kernel::Luma3DS::Level256Capability::CustomBackdoor));
+    REQUIRE(Kernel::Luma3DS::CapabilitiesForVerifiedPlugin(false) == 0);
+    REQUIRE(FileSys::Level256::IsTrustedPluginIdentity(true, false)); // Legacy digest path.
+    REQUIRE_FALSE(FileSys::Level256::IsTrustedPluginIdentity(false, false));
 }

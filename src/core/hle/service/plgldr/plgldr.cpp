@@ -88,7 +88,7 @@ bool IsLevel256SupportedTitle(u64 title_id) {
 
 Kernel::Luma3DS::PluginAuthorization PLG_LDR::GetLumaExtensionAuthorization(u64 title_id) const {
     const bool verified_level256_plugin =
-        IsLevel256SupportedTitle(title_id) && plgldr_context.level256_hle_compatibility_verified;
+        IsLevel256SupportedTitle(title_id) && plgldr_context.level256_plugin_identity_verified;
     return {
         .plugin_loaded = plgldr_context.plugin_loaded,
         .plugin_integrity_verified = verified_level256_plugin,
@@ -97,6 +97,8 @@ Kernel::Luma3DS::PluginAuthorization PLG_LDR::GetLumaExtensionAuthorization(u64 
         .plugin_code_end = plgldr_context.plugin_code_end,
         .bootloader_code_begin = plgldr_context.plugin_bootloader_begin,
         .bootloader_code_end = plgldr_context.plugin_bootloader_end,
+        .capabilities = Kernel::Luma3DS::CapabilitiesForLevel256Plugin(
+            verified_level256_plugin, plgldr_context.level256_official_plugin_hash_matches),
     };
 }
 
@@ -105,7 +107,9 @@ Kernel::Luma3DS::Level256VerificationPolicy PLG_LDR::GetLevel256VerificationPoli
     return {
         .enabled = enabled,
         .supported_title = IsLevel256SupportedTitle(title_id),
-        .official_plugin_verified = plgldr_context.level256_hle_compatibility_verified,
+        .capabilities = Kernel::Luma3DS::CapabilitiesForLevel256Plugin(
+            IsLevel256SupportedTitle(title_id) && plgldr_context.level256_plugin_identity_verified,
+            plgldr_context.level256_official_plugin_hash_matches),
         .plugin_loaded = plgldr_context.plugin_loaded,
         .owner_process_id = plgldr_context.plugin_process_id,
         .plugin_code_begin = plgldr_context.plugin_code_begin,
@@ -148,11 +152,7 @@ PLG_LDR::PLG_LDR(Core::System& system_) : ServiceFramework{"plg:ldr", 1}, system
     plgldr_context.plugin_instruction_trace_started = false;
     plgldr_context.plugin_service_trace_count = 0;
     plgldr_context.plugin_query_process_memory_failures = 0;
-    plgldr_context.level256_official_plugin_hash_matches = false;
-    plgldr_context.level256_official_plugin_signature_verified = false;
-    plgldr_context.level256_hle_compatibility_verified = false;
-    plgldr_context.level256_signed_plugin_artifact_version = 0;
-    plgldr_context.level256_lfcs_request_count = 0;
+    plgldr_context.ResetTransientLevel256Authorization();
     plgldr_context.level256_open_process_trace_started = false;
     plgldr_context.level256_thread_create_log_count = 0;
     plgldr_context.ctrpf_osd_scan = {};
@@ -202,11 +202,7 @@ void PLG_LDR::PluginLoaderContext::serialize(Archive& ar, const unsigned int) {
     if constexpr (Archive::is_loading::value) {
         // A savestate does not preserve trust in the loaded plugin bytes. The compatibility gate
         // is re-established only after a fresh file hash during plugin loading.
-        level256_official_plugin_hash_matches = false;
-        level256_official_plugin_signature_verified = false;
-        level256_hle_compatibility_verified = false;
-        level256_signed_plugin_artifact_version = 0;
-        level256_lfcs_request_count = 0;
+        ResetTransientLevel256Authorization();
         // A restored process owns any restored VM mapping. The transient manager deliberately
         // does not inherit a raw Process pointer or plugin trust across savestate loading.
         level256_open_process_trace_started = false;
@@ -337,7 +333,7 @@ void PLG_LDR::TraceCtrpfStartupMemoryAccess(const Kernel::Process& process,
                                             bool is_write, u64 value, u32 pc, u32 lr) {
     if (!Settings::values.level256_compatibility_enabled.GetValue() ||
         !plgldr_context.ctrpf_startup_watchpoints_armed || !plgldr_context.plugin_loaded ||
-        !plgldr_context.level256_hle_compatibility_verified ||
+        !plgldr_context.level256_plugin_identity_verified ||
         process.process_id != plgldr_context.plugin_process_id || !process.codeset ||
         process.codeset->program_id != Kernel::LEVEL256_DIAGNOSTIC_TITLE_ID) {
         return;
@@ -406,7 +402,7 @@ void PLG_LDR::TraceLevel256GuestWait(const Kernel::Process& process, u32 thread_
                                      u32 object_id, const std::string& object_name, u32 resume_pc) {
     auto& context = plgldr_context;
     if (!Settings::values.level256_compatibility_enabled.GetValue() || !context.plugin_loaded ||
-        !context.level256_hle_compatibility_verified ||
+        !context.level256_plugin_identity_verified ||
         process.process_id != context.plugin_process_id || !process.codeset ||
         !IsLevel256SupportedTitle(process.codeset->program_id)) {
         return;
@@ -598,7 +594,7 @@ void PLG_LDR::OnProcessRun(Kernel::Process& process, Kernel::KernelSystem& kerne
 
 void PLG_LDR::OnProcessExit(Kernel::Process& process, Kernel::KernelSystem& kernel) {
     if (plgldr_context.plugin_loaded && process.process_id == plgldr_context.plugin_process_id) {
-        if (plgldr_context.level256_hle_compatibility_verified && process.codeset &&
+        if (plgldr_context.level256_plugin_identity_verified && process.codeset &&
             IsLevel256SupportedTitle(process.codeset->program_id)) {
             LOG_INFO(
                 Service_PLGLDR,
@@ -684,11 +680,7 @@ void PLG_LDR::OnProcessExit(Kernel::Process& process, Kernel::KernelSystem& kern
         }
         plgldr_context.plugin_loaded = false;
         plgldr_context.plugin_process_id = UINT32_MAX;
-        plgldr_context.level256_official_plugin_hash_matches = false;
-        plgldr_context.level256_official_plugin_signature_verified = false;
-        plgldr_context.level256_hle_compatibility_verified = false;
-        plgldr_context.level256_signed_plugin_artifact_version = 0;
-        plgldr_context.level256_lfcs_request_count = 0;
+        plgldr_context.ResetTransientLevel256Authorization();
         plgldr_context.ctrpf_osd_scan = {};
         plgldr_context.ctrpf_osd_candidate_initial_words = {};
         plgldr_context.ctrpf_osd_post_init_compared = false;
@@ -922,8 +914,11 @@ void PLG_LDR::GetLevel256LFCS(Kernel::HLERequestContext& ctx) {
     const bool authorized = Level256LFCS::IsAuthorized(
         Settings::values.level256_compatibility_enabled.GetValue() && plgldr_context.is_enabled,
         IsLevel256SupportedTitle(caller_title_id), plgldr_context.plugin_loaded,
-        plgldr_context.level256_hle_compatibility_verified, caller_process_id,
-        plgldr_context.plugin_process_id, descriptor_process_id);
+        Kernel::Luma3DS::HasCapability(Kernel::Luma3DS::CapabilitiesForLevel256Plugin(
+                                           plgldr_context.level256_plugin_identity_verified,
+                                           plgldr_context.level256_official_plugin_hash_matches),
+                                       Kernel::Luma3DS::Level256Capability::Level256LFCS),
+        caller_process_id, plgldr_context.plugin_process_id, descriptor_process_id);
 
     Result result = ResultSuccess;
     Level256LFCS::Selection selection{};

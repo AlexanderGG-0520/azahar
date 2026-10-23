@@ -12,7 +12,7 @@ namespace Kernel::Luma3DS {
 struct Level256VerificationPolicy {
     bool enabled{};
     bool supported_title{};
-    bool official_plugin_verified{};
+    Level256CapabilityMask capabilities{};
     bool plugin_loaded{};
     u32 owner_process_id{};
     u32 plugin_code_begin{};
@@ -24,7 +24,8 @@ constexpr bool TryGetLevel256VerificationResponse(const Level256VerificationPoli
                                                   s32 param, SystemInfoResponse& response) {
     const bool caller_is_plugin = policy.plugin_code_begin < policy.plugin_code_end &&
                                   pc >= policy.plugin_code_begin && pc < policy.plugin_code_end;
-    if (!policy.enabled || !policy.supported_title || !policy.official_plugin_verified ||
+    if (!policy.enabled || !policy.supported_title ||
+        !HasCapability(policy.capabilities, Level256Capability::SystemInfo) ||
         !policy.plugin_loaded || policy.owner_process_id == 0 ||
         process_id != policy.owner_process_id || !caller_is_plugin || svc_id != 0x2A ||
         type != 0x30000 || param != 0) {
@@ -46,7 +47,9 @@ constexpr bool TryGetSystemInfoCompatibilityResponse(
                                            response)) {
         return true;
     }
-    return svc_id == 0x2A && CanDispatchExtension(context, authorization, process_id, pc) &&
+    return svc_id == 0x2A &&
+           CanDispatchExtension(context, authorization, process_id, pc,
+                                Level256Capability::SystemInfo) &&
            TryGetLumaSystemInfoResponse(context.enabled, type, param, response);
 }
 

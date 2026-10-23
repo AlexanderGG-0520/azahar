@@ -1,16 +1,84 @@
 # Level256 3GX signature verification
 
-Azahar accepts two separately constrained Level256 HLE compatibility profiles:
+Azahar accepts two separately constrained publisher identities:
 
 - The previously reviewed plugin identified by the legacy full-file SHA-256.
-- A plugin with a valid Level256 release signature and manifest artifact version `20031` (the
-  official v2.0.1 `Level256.3gx`).
+- A plugin with a valid Level256 release signature, independent of its manifest artifact version.
 
 A valid signature authenticates the publisher and payload. It does not establish that an arbitrary
-future plugin uses an HLE ABI Azahar understands. Other signed artifact versions are therefore
-recognized by the verifier but do not enable the privileged Level256 HLE paths until reviewed.
-The existing explicit compatibility option, supported-title check, plugin-owner PID check, and
-plugin PC range checks remain required.
+future plugin uses an HLE ABI Azahar understands. HLE authorization is therefore evaluated per
+operation using the capability table in `core/hle/kernel/luma3ds/compatibility.h`; the artifact
+version is recorded for diagnosis but is not an authorization input. A signed plugin using a new
+artifact version can use an existing capability only when it reaches the same implemented SVC or
+IPC handler and satisfies that handler's ABI, argument, memory, title, process, and code-range
+checks. Unknown extension SVCs and unimplemented `ControlMemoryEx` (`0xA2`) remain denied. An
+unrecognized IPC command receives no emulator-side Level256 translation and follows its ordinary
+session path unchanged. The explicit compatibility option,
+supported-title check, plugin-owner PID check, and plugin PC range checks remain required.
+
+## Capability and ABI policy
+
+Authenticity and compatibility are separate. `IsTrustedPluginIdentity()` accepts either the exact
+legacy digest or a valid release manifest. `CapabilitiesForVerifiedPlugin()` supplies the set of
+implemented operation adapters, and `DispatchExtensionSvc()` maps each recognized SVC ID to its
+own capability before dispatch. The version number is not consulted. The capability mask is not a
+blanket permission: each operation retains its existing handler-level checks.
+
+| Capability | Interface | Enforcement retained |
+|---|---|---|
+| `SystemInfo` | `svcGetSystemInfo` (`0x2A`) | Exact type/parameter pairs, explicit mode, supported title, verified identity, loaded plugin, owning PID and plugin PC range. |
+| `CustomBackdoor` | Luma SVC `0x80` | Owning process and plugin/bootloader PC; aligned callback inside plugin code; only individually recognized callback adapters and exact argument/state checks are handled. Other callbacks fail as unimplemented. |
+| `ControlMemoryUnsafe` | Luma SVC `0xA3` | Exact observed SVC PC, title, plugin code range, address, size, operation, permissions, output pointer, VMAs and overlap checks. |
+| `ConvertVaToPa` | Luma SVC `0x90` | Only the existing conversion implementation is dispatched for an authorized plugin call. |
+| `DataCacheMaintenance` | Luma SVCs `0x91`/`0x92` | Existing cache-operation handlers; they do not grant memory-write access. |
+| `InstructionCacheMaintenance` | Luma SVCs `0x93`/`0x94` | Existing cache invalidation handlers; they do not grant memory-write access. |
+| `PluginUdsControlIPC` | `plg:UDS_Client` control IPC | Only the existing `ProcessPlgUdsControl` command/header/owner checks can alter Level256 connection state. |
+| `PluginUdsDataIPC` | `plg:UDS_Client` data IPC | Only command IDs and parameter shapes recognized by `TranslateLevel256UdsCommand` are translated; all other requests pass through unchanged. |
+| `NdmControlIPC` | `ndm:u_Client` | Only header `0x00010042`, argument `2`, while connected and unpaused is normalized to `1`. |
+| `SocAttachIPC` | `soc:U_Client` | Only the existing exact attach/detach headers trigger the plugin event path; requests still use the normal session. |
+| `Level256LFCS` | `plg:ldr` command `0x2560` | Exact IPC header, PID and writable mapped-buffer shape; caller PID must own the plugin and match the PID descriptor; output is zeroed on denial and requests are rate limited. Seed data is still validated by its existing cryptographic loader. |
+
+The signed-plugin capability set does **not** grant `MapProcessMemoryEx` (`0xA0`) or
+`UnmapProcessMemoryEx` (`0xA1`). The current map handler still contains a fix-up TODO and makes
+the result RWX; the unmap handler does not enforce a narrow destination range. These contracts are
+not independently safe to infer from publisher signature or use. The exact historical legacy
+SHA-256 retains those two previously exposed SVCs for compatibility; this exception does not
+extend to newly signed artifacts. SVC `0xA2` has no handler and remains denied.
+
+No `plg:DLP` or `plg:FKCL` IPC adapter is granted here. `QueryProcessMemory`, `OpenProcess`, thread creation, and event observations remain ordinary 3DS
+SVC behavior or bounded diagnostics; this patch does not turn them into Level256-specific HLE
+success responses. There is no active `plg:UDS`, `plg:DLP`, or `plg:FKCL` Level256 bridge in this
+policy. The existing process service-redirect plumbing remains opt-in and has no production caller.
+Do not infer complete Level256 network compatibility from the signed-plugin capabilities above.
+
+The legacy SHA-256 path retains its previous SVC exposure, including the two legacy-only memory-map
+capabilities. New signed files receive only the reviewed baseline set and no longer need a new
+baked-in hash or a preapproved manifest version. Every identity still passes through the same
+per-operation dispatcher; newly signed files receive no capability for the unreviewed mapping
+operations. Savestates do not serialize signature trust; loading a state clears the transient
+identity and capability basis.
+
+## v2.0.1 startup `NoExecuteFault` investigation
+
+The available run for title `000400000016C700` confirms that the 3GX mapped for PID 16, guest code
+reached `0x070A535C`, `GetSystemInfo(type=0x20000,param=0)` returned result 0/value 2, and the next
+reported fault was an unmapped read/fetch at `0xEB000FB0`. The supplied register snapshot has
+`LR=0x06FFF0F0`. This is consistent with the bootloader's `adr lr,g_gameentrypoint`, but it does
+not prove what word the following `ldr pc,[lr]` read.
+
+Statically, `MapBootloader()` replaces the `0xDEAD0002` placeholder with the original code segment
+base. The bootloader then restores saved CPSR/registers and executes the `adr lr` / `ldr pc,[lr]`
+sequence. The expected saved return pointer in this run is `0x00100000`. The captured log does not
+include the post-map/post-SVC values at `0x06FFF0E8`, `0x06FFF0EC`, and `0x06FFF0F0`, the D0/D4
+instruction trace, the D4 effective address/load value, or CPSR T-state. Therefore it cannot
+establish whether F0 was overwritten, D4 read a different address, or the PC changed elsewhere.
+No bootloader, exception, mapping, permission, or SVC behavior is changed on this evidence.
+
+To prove the cause, collect one opt-in run with the bounded diagnostic on title `000400000016C700`
+and retain the MapBootloader and post-GetSystemInfo snapshots plus D0/D4 records. The decisive
+fields are the executing PID/TID, D0/D4 instruction words, LR before/after D0, F0, D4 effective
+address, source word, post-instruction PC and CPSR. A correction should be considered only after
+those values identify the faulty transfer and a focused regression reproduces it.
 
 ## Manifest and algorithms
 

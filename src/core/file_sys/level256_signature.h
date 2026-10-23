@@ -29,17 +29,10 @@ bool VerifyPluginManifest(std::span<const u8> raw_manifest, u64 payload_size,
                           const std::array<u8, 32>& payload_digest, const u8* public_key,
                           PluginManifest* parsed = nullptr);
 
-/// The v2.0.1 manifest version is the only signed release with an established HLE profile.
-/// Validly signed newer artifacts remain authenticated but do not receive privileged HLE support
-/// until their SVC/IPC ABI is reviewed.
-constexpr bool IsHleCompatibleArtifactVersion(u32 artifact_version) {
-    return artifact_version == 20031;
-}
-
-constexpr bool IsHleCompatibilityVerified(bool legacy_hash_verified, bool signature_verified,
-                                          u32 artifact_version) {
-    return legacy_hash_verified ||
-           (signature_verified && IsHleCompatibleArtifactVersion(artifact_version));
+/// Publisher identity only. HLE compatibility is decided separately by per-operation ABI policy;
+/// the signed artifact version must never act as an authorization profile.
+constexpr bool IsTrustedPluginIdentity(bool legacy_hash_verified, bool signature_verified) {
+    return legacy_hash_verified || signature_verified;
 }
 
 } // namespace FileSys::Level256

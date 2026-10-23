@@ -146,8 +146,10 @@ public:
         // Publisher identity from the appended Ed25519 manifest, transient across savestates.
         bool level256_official_plugin_signature_verified = false;
         // Privileged HLE profile authorization; stricter than publisher identity.
-        bool level256_hle_compatibility_verified = false;
+        bool level256_plugin_identity_verified = false;
         u32 level256_signed_plugin_artifact_version = 0;
+        // Rejections are diagnostic only and bounded per plugin-load attempt.
+        u32 level256_capability_rejection_log_count = 0;
         // Count of 0x2560 requests for the current plugin load; deliberately transient.
         u32 level256_lfcs_request_count = 0;
         bool is_default_path = false;
@@ -155,6 +157,15 @@ public:
         u32 plugin_process_id = UINT32_MAX;
         Kernel::MemoryRegion memory_region{};
         std::pair<u32, u32> memory_block{};
+
+        void ResetTransientLevel256Authorization() {
+            level256_official_plugin_hash_matches = false;
+            level256_official_plugin_signature_verified = false;
+            level256_plugin_identity_verified = false;
+            level256_signed_plugin_artifact_version = 0;
+            level256_capability_rejection_log_count = 0;
+            level256_lfcs_request_count = 0;
+        }
 
         bool use_user_load_parameters = false;
         PluginLoadParameters user_load_parameters;

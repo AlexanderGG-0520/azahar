@@ -67,10 +67,7 @@ static bool ReadSection(std::vector<u8>& data_out, std::span<const u8> file_data
 Loader::ResultStatus FileSys::Plugin3GXLoader::Load(
     Service::PLGLDR::PLG_LDR::PluginLoaderContext& plg_context, Kernel::Process& process,
     Kernel::KernelSystem& kernel, Service::PLGLDR::PLG_LDR& plg_ldr) {
-    plg_context.level256_official_plugin_hash_matches = false;
-    plg_context.level256_official_plugin_signature_verified = false;
-    plg_context.level256_hle_compatibility_verified = false;
-    plg_context.level256_signed_plugin_artifact_version = 0;
+    plg_context.ResetTransientLevel256Authorization();
     FileUtil::IOFile file(plg_context.plugin_path, "rb");
     if (!file.IsOpen()) {
         LOG_ERROR(Service_PLGLDR, "Failed to load 3GX plugin. Not found: {}",
@@ -122,18 +119,16 @@ Loader::ResultStatus FileSys::Plugin3GXLoader::Load(
                     parsed_manifest.artifact_version;
             }
         }
-        plg_context.level256_hle_compatibility_verified = Level256::IsHleCompatibilityVerified(
+        plg_context.level256_plugin_identity_verified = Level256::IsTrustedPluginIdentity(
             plg_context.level256_official_plugin_hash_matches,
-            plg_context.level256_official_plugin_signature_verified,
-            plg_context.level256_signed_plugin_artifact_version);
+            plg_context.level256_official_plugin_signature_verified);
 
         if (plg_context.level256_official_plugin_signature_verified) {
             LOG_INFO(Service_PLGLDR,
                      "Level256 signed plugin verified pid={} title_id={:016X} "
-                     "artifact_version={} hle_compatible={}",
+                     "artifact_version={} publisher_identity=verified",
                      process.process_id, process.codeset ? process.codeset->program_id : 0,
-                     plg_context.level256_signed_plugin_artifact_version,
-                     plg_context.level256_hle_compatibility_verified);
+                     plg_context.level256_signed_plugin_artifact_version);
         }
     }
 

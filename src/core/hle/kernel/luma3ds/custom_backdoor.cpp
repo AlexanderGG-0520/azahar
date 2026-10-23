@@ -11,7 +11,8 @@ CustomBackdoorStatus ValidateCustomBackdoorRequest(const SvcRequest& request,
     if (request.svc_id != 0x80) {
         return CustomBackdoorStatus::NotApplicable;
     }
-    if (!CanDispatchExtension(context, authorization, request.process_id, request.entry_pc) ||
+    if (!CanDispatchExtension(context, authorization, request.process_id, request.entry_pc,
+                              Level256Capability::CustomBackdoor) ||
         !IsValidCustomBackdoorCallback(context, authorization, request.process_id,
                                        request.arguments[0])) {
         return CustomBackdoorStatus::Rejected;

@@ -590,7 +590,7 @@ Result SVC::ControlMemory(u32* out_addr, u32 addr0, u32 addr1, u32 size, u32 ope
             return;
         }
         const auto& context = plugin_loader->GetPluginLoaderContext();
-        if (!context.plugin_loaded || !context.level256_hle_compatibility_verified ||
+        if (!context.plugin_loaded || !context.level256_plugin_identity_verified ||
             context.plugin_process_id != process.process_id ||
             GetReg(15) < context.plugin_code_begin || GetReg(15) >= context.plugin_code_end) {
             return;
@@ -756,21 +756,40 @@ Result SVC::SendSyncRequest(Handle handle) {
     const bool soc_client = session->name == "soc:U_Client";
     std::shared_ptr<Service::SM::SRV> srv;
     std::shared_ptr<Service::PLGLDR::PLG_LDR> plugin_loader;
-    bool level256_owner = false;
+    bool level256_uds_control = false;
+    bool level256_uds_data = false;
+    bool level256_ndm_control = false;
+    bool level256_soc_attach = false;
+    Luma3DS::PluginAuthorization level256_ipc_authorization{};
     if (Settings::values.level256_compatibility_enabled.GetValue() && process && process->codeset &&
         Service::PLGLDR::IsLevel256SupportedTitle(process->codeset->program_id) &&
         (uds_client || ndm_client || soc_client)) {
         plugin_loader = Service::PLGLDR::GetService(system);
         if (plugin_loader) {
-            const auto& context = plugin_loader->GetPluginLoaderContext();
-            level256_owner = IsVerifiedLevel256PluginContext(
-                Settings::values.level256_compatibility_enabled.GetValue(), true,
-                context.level256_hle_compatibility_verified, process->process_id,
-                context.plugin_process_id, context.plugin_loaded, context.plugin_code_begin,
-                context.plugin_code_end, GetReg(15));
-        }
-        if (level256_owner) {
-            srv = system.ServiceManager().GetService<Service::SM::SRV>("srv:");
+            level256_ipc_authorization =
+                plugin_loader->GetLumaExtensionAuthorization(process->codeset->program_id);
+            const auto& context = plugin_loader->GetLumaCompatibilityContext(
+                Settings::values.level256_compatibility_enabled.GetValue());
+            level256_uds_control =
+                uds_client && Luma3DS::CanDispatchLevel256IPC(
+                                  context, level256_ipc_authorization, process->process_id,
+                                  GetReg(15), Luma3DS::Level256Capability::PluginUdsControlIPC);
+            level256_uds_data =
+                uds_client && Luma3DS::CanDispatchLevel256IPC(
+                                  context, level256_ipc_authorization, process->process_id,
+                                  GetReg(15), Luma3DS::Level256Capability::PluginUdsDataIPC);
+            level256_ndm_control =
+                ndm_client && Luma3DS::CanDispatchLevel256IPC(
+                                  context, level256_ipc_authorization, process->process_id,
+                                  GetReg(15), Luma3DS::Level256Capability::NdmControlIPC);
+            level256_soc_attach =
+                soc_client && Luma3DS::CanDispatchLevel256IPC(
+                                  context, level256_ipc_authorization, process->process_id,
+                                  GetReg(15), Luma3DS::Level256Capability::SocAttachIPC);
+            if (level256_uds_control || level256_uds_data || level256_ndm_control ||
+                level256_soc_attach) {
+                srv = system.ServiceManager().GetService<Service::SM::SRV>("srv:");
+            }
         }
     }
     const VAddr command_address = thread->GetCommandBufferAddress();
@@ -779,7 +798,7 @@ Result SVC::SendSyncRequest(Handle handle) {
     // Luma's PLGUDS control commands are carried over the guest-registered plg:UDS session.
     // Only process state and commands are handled here; commands that require the guest server
     // continue through the real ClientSession/ServerSession path.
-    if (level256_owner && uds_client && srv) {
+    if (level256_uds_control && srv) {
         const u32 header = memory.Read32(*process, command_address);
         const u16 command_id = static_cast<u16>(header >> 16);
         const u8 normal_params = static_cast<u8>((header >> 6) & 0x3F);
@@ -796,9 +815,9 @@ Result SVC::SendSyncRequest(Handle handle) {
         }
     }
 
-    if (level256_owner && srv && srv->IsLevel256Connected(process->process_id)) {
+    if (srv && srv->IsLevel256Connected(process->process_id)) {
         const u32 header = memory.Read32(*process, command_address);
-        if (ndm_client && header == 0x00010042 &&
+        if (level256_ndm_control && header == 0x00010042 &&
             memory.Read32(*process, command_address + sizeof(u32)) == 2 &&
             !srv->IsLevel256Paused(process->process_id)) {
             // NDM's local-communication exclusivity is incompatible with the plugin's
@@ -806,7 +825,7 @@ Result SVC::SendSyncRequest(Handle handle) {
             memory.Write32(*process, command_address + sizeof(u32), 1);
         }
 
-        if (uds_client && !srv->IsLevel256Paused(process->process_id)) {
+        if (level256_uds_data && !srv->IsLevel256Paused(process->process_id)) {
             const u16 command_id = static_cast<u16>(header >> 16);
             const u8 normal_params = static_cast<u8>((header >> 6) & 0x3F);
             const u8 translate_params = static_cast<u8>(header & 0x3F);
@@ -829,7 +848,7 @@ Result SVC::SendSyncRequest(Handle handle) {
             }
         }
 
-        if (soc_client && !srv->IsLevel256Paused(process->process_id)) {
+        if (level256_soc_attach && !srv->IsLevel256Paused(process->process_id)) {
             if (srv->Level256SignalOnAttach(process->process_id) && header == 0x00010044) {
                 std::shared_ptr<Kernel::ClientSession> signal_session;
                 if (system.ServiceManager().ConnectToService(&signal_session, "plg:UDS") ==
@@ -1693,10 +1712,9 @@ Result SVC::CreateThread(Handle* out_handle, u32 entry_point, u32 arg, VAddr sta
             auto& context = plugin_loader->GetPluginLoaderContext();
             if (ShouldStartLevel256OpenProcessTrace(
                     Settings::values.level256_compatibility_enabled.GetValue(),
-                    context.level256_hle_compatibility_verified,
-                    current_process->codeset->program_id, current_process->process_id,
-                    context.plugin_process_id, context.plugin_loaded, context.plugin_code_begin,
-                    context.plugin_code_end, entry_point,
+                    context.level256_plugin_identity_verified, current_process->codeset->program_id,
+                    current_process->process_id, context.plugin_process_id, context.plugin_loaded,
+                    context.plugin_code_begin, context.plugin_code_end, entry_point,
                     context.level256_open_process_trace_started)) {
                 const auto created_thread = current_process->handle_table.Get<Thread>(*out_handle);
                 if (created_thread && created_thread->processor_id >= 0 &&
@@ -2518,7 +2536,7 @@ u32 SVC::ConvertVaToPa(u32 addr) {
             if (plugin_loader) {
                 const auto& context = plugin_loader->GetPluginLoaderContext();
                 level256_target = context.plugin_loaded &&
-                                  context.level256_hle_compatibility_verified &&
+                                  context.level256_plugin_identity_verified &&
                                   context.plugin_process_id == process->process_id &&
                                   pc >= context.plugin_code_begin && pc < context.plugin_code_end;
             }
@@ -2940,13 +2958,14 @@ void SVC::CallSVC(u32 immediate) {
                 Settings::values.level256_compatibility_enabled.GetValue());
             luma_plugin_authorization = plugin_loader->GetLumaExtensionAuthorization(
                 process->codeset ? process->codeset->program_id : 0);
-            level256_plugin_context = Luma3DS::CanDispatchExtension(
-                luma_compatibility_context, luma_plugin_authorization, process->process_id, in_pc);
+            level256_plugin_context =
+                luma_compatibility_context.enabled &&
+                luma_plugin_authorization.OwnsCode(process->process_id, in_pc);
             const bool supported_title =
                 process->codeset &&
                 Service::PLGLDR::IsLevel256SupportedTitle(process->codeset->program_id);
             level256_official_plugin_context = IsVerifiedLevel256PluginContext(
-                true, supported_title, plugin_context.level256_hle_compatibility_verified,
+                true, supported_title, plugin_context.level256_plugin_identity_verified,
                 process->process_id, plugin_context.plugin_process_id, plugin_context.plugin_loaded,
                 plugin_context.plugin_code_begin, plugin_context.plugin_code_end, in_pc);
             plugin_svc = plugin_loader->TracePluginSVC(
@@ -2955,8 +2974,8 @@ void SVC::CallSVC(u32 immediate) {
         }
     }
 
-    // ARM11 kernel-extension SVCs are not part of the ordinary 3DS SVC ABI. Expose them only to
-    // the active, hash-verified plugin mapping when the compatibility mode is enabled. The
+    // ARM11 kernel-extension SVCs are not part of the ordinary 3DS SVC ABI. Expose each only to
+    // its capability-authorized call in the active verified plugin mapping. The
     // ordinary SVC table and its behavior remain unchanged for games and unverified code.
     Luma3DS::SvcRequest luma_svc_request{.svc_id = immediate,
                                          .process_id = process ? process->process_id : 0,
@@ -2966,6 +2985,20 @@ void SVC::CallSVC(u32 immediate) {
     const auto luma_dispatch = Luma3DS::DispatchExtensionSvc(
         luma_svc_request, luma_compatibility_context, luma_plugin_authorization);
     if (luma_dispatch.kind == Luma3DS::SvcDispatchKind::Rejected) {
+        if (plugin_loader && process && thread &&
+            plugin_loader->GetPluginLoaderContext().plugin_loaded &&
+            plugin_loader->GetPluginLoaderContext().plugin_process_id == process->process_id) {
+            auto& plugin_context = plugin_loader->GetPluginLoaderContext();
+            if (plugin_context.level256_capability_rejection_log_count < 8) {
+                ++plugin_context.level256_capability_rejection_log_count;
+                LOG_WARNING(Kernel_SVC,
+                            "Level256 capability rejected pid={} thread={} pc=0x{:08X} "
+                            "svc=0x{:02X} reason={} rejection={}",
+                            process->process_id, thread->GetThreadId(), in_pc, immediate,
+                            Luma3DS::SvcDispatchRejectReasonName(luma_dispatch.reject_reason),
+                            plugin_context.level256_capability_rejection_log_count);
+            }
+        }
         SetReg(0, ResultNotImplemented.raw);
         system.perf_stats->EndSVCProcessing();
         return;
@@ -3152,7 +3185,7 @@ void SVC::CallSVC(u32 immediate) {
         if (level256_plugin_context && immediate == LEVEL256_QUERY_PROCESS_MEMORY_SVC_ID &&
             in_pc == LEVEL256_QUERY_PROCESS_MEMORY_SVC_PC &&
             GetReg(0) == LEVEL256_QUERY_PROCESS_MEMORY_FAILURE &&
-            plugin_loader->GetPluginLoaderContext().level256_hle_compatibility_verified) {
+            plugin_loader->GetPluginLoaderContext().level256_plugin_identity_verified) {
             auto& plugin_context = plugin_loader->GetPluginLoaderContext();
             auto& failure_count = plugin_context.plugin_query_process_memory_failures;
             if (RecordLevel256QueryProcessMemoryFailure(failure_count)) {
@@ -3333,7 +3366,7 @@ bool SVC::ShouldLogSVCError(u32 svc_id, u32 raw_result) {
     const auto& context = plugin_loader->GetPluginLoaderContext();
     const u32 pc = GetReg(15);
     const bool suppress = ShouldSuppressDuplicateLevel256SVCError(
-        true, context.level256_hle_compatibility_verified, process->codeset->program_id,
+        true, context.level256_plugin_identity_verified, process->codeset->program_id,
         process->process_id, context.plugin_process_id, context.plugin_loaded,
         context.plugin_code_begin, context.plugin_code_end, pc, svc_id, raw_result);
     return !suppress;

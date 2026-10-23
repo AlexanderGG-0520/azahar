@@ -37,10 +37,11 @@ Level256MemoryOperationResult ControlMemoryUnsafe(
         const u32 permissions = in_r4;
         const bool exact_request = ShouldHandleLevel256ControlMemoryUnsafe(
             Settings::values.level256_compatibility_enabled.GetValue(),
-            context.level256_hle_compatibility_verified, process.codeset->program_id,
-            process.process_id, context.plugin_process_id, context.plugin_loaded,
-            context.plugin_code_begin, context.plugin_code_end, in_pc, immediate, output_address,
-            address, in_r2, operation, permissions);
+            HasCapability(CapabilitiesForVerifiedPlugin(context.level256_plugin_identity_verified),
+                          Level256Capability::ControlMemoryUnsafe),
+            process.codeset->program_id, process.process_id, context.plugin_process_id,
+            context.plugin_loaded, context.plugin_code_begin, context.plugin_code_end, in_pc,
+            immediate, output_address, address, in_r2, operation, permissions);
         if (exact_request) {
             Result result = ResultInvalidAddress;
             const u64 output_end = static_cast<u64>(output_address) + sizeof(u32);

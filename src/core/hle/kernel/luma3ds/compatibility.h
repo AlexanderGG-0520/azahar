@@ -13,6 +13,70 @@ struct CompatibilityContext {
     bool enabled{};
 };
 
+/// Independently gated HLE contracts implemented by this fork. The manifest's artifact version
+/// is deliberately absent: publisher authenticity and an operation's ABI compatibility are
+/// separate decisions.
+enum class Level256Capability : u8 {
+    SystemInfo,
+    CustomBackdoor,
+    ControlMemoryUnsafe,
+    Level256LFCS,
+    ConvertVaToPa,
+    DataCacheMaintenance,
+    InstructionCacheMaintenance,
+    PluginUdsControlIPC,
+    PluginUdsDataIPC,
+    NdmControlIPC,
+    SocAttachIPC,
+    MapProcessMemoryEx,
+    UnmapProcessMemoryEx,
+};
+
+using Level256CapabilityMask = u32;
+
+constexpr Level256CapabilityMask CapabilityBit(Level256Capability capability) {
+    const u8 bit = static_cast<u8>(capability);
+    return bit < 32 ? 1U << bit : 0;
+}
+
+constexpr bool HasCapability(Level256CapabilityMask capabilities, Level256Capability capability) {
+    const auto bit = CapabilityBit(capability);
+    return bit != 0 && (capabilities & bit) != 0;
+}
+
+/// Capabilities whose individual ABI adapters have reviewed, operation-specific validation.
+/// MapProcessMemoryEx and UnmapProcessMemoryEx are intentionally omitted: the former still has an
+/// unconditional RWX mapping TODO and the latter lacks a narrow Level256 target/range contract.
+/// New extension IDs are not added here implicitly; unsupported entries remain fail-closed.
+constexpr Level256CapabilityMask CapabilitiesForVerifiedPlugin(bool identity_verified) {
+    if (!identity_verified) {
+        return 0;
+    }
+    return CapabilityBit(Level256Capability::SystemInfo) |
+           CapabilityBit(Level256Capability::CustomBackdoor) |
+           CapabilityBit(Level256Capability::ControlMemoryUnsafe) |
+           CapabilityBit(Level256Capability::Level256LFCS) |
+           CapabilityBit(Level256Capability::ConvertVaToPa) |
+           CapabilityBit(Level256Capability::DataCacheMaintenance) |
+           CapabilityBit(Level256Capability::InstructionCacheMaintenance) |
+           CapabilityBit(Level256Capability::PluginUdsControlIPC) |
+           CapabilityBit(Level256Capability::PluginUdsDataIPC) |
+           CapabilityBit(Level256Capability::NdmControlIPC) |
+           CapabilityBit(Level256Capability::SocAttachIPC);
+}
+
+/// Preserve the previously shipped exact-digest profile for existing users. This exception does
+/// not apply to a newly signed artifact: its cross-process mapping ABI has not been proven safe.
+constexpr Level256CapabilityMask CapabilitiesForLevel256Plugin(bool identity_verified,
+                                                               bool legacy_hash_verified) {
+    auto capabilities = CapabilitiesForVerifiedPlugin(identity_verified);
+    if (identity_verified && legacy_hash_verified) {
+        capabilities |= CapabilityBit(Level256Capability::MapProcessMemoryEx) |
+                        CapabilityBit(Level256Capability::UnmapProcessMemoryEx);
+    }
+    return capabilities;
+}
+
 /// Generic capability for a plugin mapping that passed its own loader policy. Level256 may be the
 /// current provider, but its title and digest rules are not part of common Luma SVC semantics.
 struct PluginAuthorization {
@@ -23,14 +87,19 @@ struct PluginAuthorization {
     u32 plugin_code_end{};
     u32 bootloader_code_begin{};
     u32 bootloader_code_end{};
+    Level256CapabilityMask capabilities{};
 
-    constexpr bool Authorizes(u32 process_id, u32 pc) const {
+    constexpr bool OwnsCode(u32 process_id, u32 pc) const {
         const bool in_plugin =
             plugin_code_begin < plugin_code_end && pc >= plugin_code_begin && pc < plugin_code_end;
         const bool in_bootloader = bootloader_code_begin < bootloader_code_end &&
                                    pc >= bootloader_code_begin && pc < bootloader_code_end;
         return plugin_loaded && plugin_integrity_verified && owner_process_id != 0 &&
                process_id == owner_process_id && (in_plugin || in_bootloader);
+    }
+
+    constexpr bool Authorizes(u32 process_id, u32 pc, Level256Capability capability) const {
+        return OwnsCode(process_id, pc) && HasCapability(capabilities, capability);
     }
 };
 
@@ -48,9 +117,17 @@ enum class SvcDispatchKind {
     Handled,
 };
 
+enum class SvcDispatchRejectReason {
+    None,
+    CompatibilityDisabled,
+    PluginScopeRejected,
+    UnsupportedCapability,
+};
+
 struct SvcDispatchOutcome {
     SvcDispatchKind kind{SvcDispatchKind::NotExtension};
     u32 result{};
+    SvcDispatchRejectReason reject_reason{SvcDispatchRejectReason::None};
 };
 
 struct SystemInfoResponse {
@@ -62,17 +139,62 @@ struct SystemInfoResponse {
 /// authority comes from the verified plugin mapping and the compatibility-mode setting.
 constexpr bool CanDispatchExtension(const CompatibilityContext& context,
                                     const PluginAuthorization& authorization, u32 process_id,
-                                    u32 pc) {
-    return context.enabled && authorization.Authorizes(process_id, pc);
+                                    u32 pc, Level256Capability capability) {
+    return context.enabled && authorization.Authorizes(process_id, pc, capability);
+}
+
+/// IPC adapters are selected by service/command and keep their own command-shape validation.
+constexpr bool CanDispatchLevel256IPC(const CompatibilityContext& context,
+                                      const PluginAuthorization& authorization, u32 process_id,
+                                      u32 pc, Level256Capability capability) {
+    return context.enabled && authorization.Authorizes(process_id, pc, capability);
 }
 
 SvcDispatchOutcome DispatchExtensionSvc(const SvcRequest& request,
                                         const CompatibilityContext& context,
                                         const PluginAuthorization& authorization);
 
+constexpr const char* SvcDispatchRejectReasonName(SvcDispatchRejectReason reason) {
+    switch (reason) {
+    case SvcDispatchRejectReason::CompatibilityDisabled:
+        return "compatibility_disabled";
+    case SvcDispatchRejectReason::PluginScopeRejected:
+        return "plugin_scope_rejected";
+    case SvcDispatchRejectReason::UnsupportedCapability:
+        return "unsupported_capability";
+    case SvcDispatchRejectReason::None:
+    default:
+        return "none";
+    }
+}
+
 constexpr bool IsExtensionSVC(u32 svc_id) {
     return svc_id == 0x80 || (svc_id >= 0x90 && svc_id <= 0x94) ||
            (svc_id >= 0xA0 && svc_id <= 0xA3);
+}
+
+constexpr Level256Capability ExtensionSvcCapability(u32 svc_id) {
+    switch (svc_id) {
+    case 0x80:
+        return Level256Capability::CustomBackdoor;
+    case 0x90:
+        return Level256Capability::ConvertVaToPa;
+    case 0x91:
+    case 0x92:
+        return Level256Capability::DataCacheMaintenance;
+    case 0x93:
+    case 0x94:
+        return Level256Capability::InstructionCacheMaintenance;
+    case 0xA0:
+        return Level256Capability::MapProcessMemoryEx;
+    case 0xA1:
+        return Level256Capability::UnmapProcessMemoryEx;
+    case 0xA3:
+        return Level256Capability::ControlMemoryUnsafe;
+    default:
+        // Includes unknown extension IDs and the currently unimplemented ControlMemoryEx (A2).
+        return static_cast<Level256Capability>(0xFF);
+    }
 }
 
 /// Luma models the data cache as coherent with the emulated memory system. These operations are
@@ -91,7 +213,8 @@ constexpr bool IsValidCustomBackdoorCallback(const CompatibilityContext& context
                                              const PluginAuthorization& authorization,
                                              u32 process_id, u32 callback) {
     return (callback & 3) == 0 &&
-           CanDispatchExtension(context, authorization, process_id, callback) &&
+           CanDispatchExtension(context, authorization, process_id, callback,
+                                Level256Capability::CustomBackdoor) &&
            authorization.plugin_code_begin < authorization.plugin_code_end &&
            callback >= authorization.plugin_code_begin && callback < authorization.plugin_code_end;
 }
