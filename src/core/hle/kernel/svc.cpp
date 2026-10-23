@@ -751,9 +751,12 @@ Result SVC::SendSyncRequest(Handle handle) {
 
     auto thread = SharedFrom(kernel.GetCurrentThreadManager().GetCurrentThread());
     const auto process = kernel.GetCurrentProcess();
-    const bool uds_client = session->name == "plg:UDS_Client";
-    const bool ndm_client = session->name == "ndm:u_Client";
-    const bool soc_client = session->name == "soc:U_Client";
+    const auto port_name =
+        session->parent && session->parent->port ? session->parent->port->GetName() : std::string{};
+    const auto ipc_service = Luma3DS::ClassifyLevel256IpcPortName(port_name);
+    const bool uds_client = ipc_service == Luma3DS::Level256IpcService::PluginUds;
+    const bool ndm_client = ipc_service == Luma3DS::Level256IpcService::Ndm;
+    const bool soc_client = ipc_service == Luma3DS::Level256IpcService::Soc;
     std::shared_ptr<Service::SM::SRV> srv;
     std::shared_ptr<Service::PLGLDR::PLG_LDR> plugin_loader;
     bool level256_uds_control = false;

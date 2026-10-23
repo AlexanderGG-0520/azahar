@@ -4,6 +4,7 @@
 #pragma once
 
 #include <array>
+#include <string_view>
 #include "common/common_types.h"
 
 namespace Kernel::Luma3DS {
@@ -31,6 +32,28 @@ enum class Level256Capability : u8 {
     MapProcessMemoryEx,
     UnmapProcessMemoryEx,
 };
+
+/// Identifies the service that owns an IPC session by its connected ClientPort name. Session
+/// names are generated from the ServerPort name and therefore include an extra `_Server` suffix.
+enum class Level256IpcService : u8 {
+    None,
+    PluginUds,
+    Ndm,
+    Soc,
+};
+
+constexpr Level256IpcService ClassifyLevel256IpcPortName(std::string_view port_name) {
+    if (port_name == "plg:UDS_Client") {
+        return Level256IpcService::PluginUds;
+    }
+    if (port_name == "ndm:u_Client") {
+        return Level256IpcService::Ndm;
+    }
+    if (port_name == "soc:U_Client") {
+        return Level256IpcService::Soc;
+    }
+    return Level256IpcService::None;
+}
 
 using Level256CapabilityMask = u32;
 

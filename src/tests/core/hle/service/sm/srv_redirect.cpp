@@ -1,20 +1,23 @@
 // Copyright 2026 Azahar Emulator Project
 // Licensed under GPLv2 or any later version
 
-#include <catch2/catch_test_macros.hpp>
 #include <cstring>
 #include <stdexcept>
+#include <catch2/catch_test_macros.hpp>
 #include "core/core.h"
 #include "core/core_timing.h"
 #include "core/hle/ipc.h"
 #include "core/hle/ipc_helpers.h"
+#include "core/hle/kernel/client_port.h"
 #include "core/hle/kernel/client_session.h"
 #include "core/hle/kernel/hle_ipc.h"
 #include "core/hle/kernel/kernel.h"
+#include "core/hle/kernel/luma3ds/compatibility.h"
 #include "core/hle/kernel/process.h"
 #include "core/hle/kernel/resource_limit.h"
-#include "core/hle/kernel/server_session.h"
 #include "core/hle/kernel/server_port.h"
+#include "core/hle/kernel/server_session.h"
+#include "core/hle/kernel/session.h"
 #include "core/hle/kernel/thread.h"
 #include "core/hle/service/sm/sm.h"
 #include "core/hle/service/sm/srv.h"
@@ -63,8 +66,8 @@ struct TestEnvironment {
     }
 
     std::shared_ptr<Kernel::Thread> MakeThread(const std::shared_ptr<Kernel::Process>& process) {
-        auto thread = kernel.CreateThread("ipc-test", 0x00100000, 0x30, 0, 0, 0x08000000,
-                                          process, false);
+        auto thread =
+            kernel.CreateThread("ipc-test", 0x00100000, 0x30, 0, 0, 0x08000000, process, false);
         if (thread.Failed()) {
             throw std::runtime_error("failed to create mock thread");
         }
@@ -110,8 +113,8 @@ struct TestEnvironment {
     std::array<u32, IPC::COMMAND_BUFFER_LENGTH> GetService(
         const std::shared_ptr<Kernel::Process>& process,
         const std::shared_ptr<Kernel::Thread>& thread,
-        const std::shared_ptr<Kernel::ClientSession>& srv_session,
-        const std::string& service_name, u32 flags = 1) {
+        const std::shared_ptr<Kernel::ClientSession>& srv_session, const std::string& service_name,
+        u32 flags = 1) {
         std::array<u32, IPC::COMMAND_BUFFER_LENGTH> request{};
         request[0] = IPC::MakeHeader(5, 4, 0);
         std::memcpy(&request[1], service_name.data(), service_name.size());
@@ -124,8 +127,8 @@ struct TestEnvironment {
     std::array<u32, IPC::COMMAND_BUFFER_LENGTH> RegisterGuestService(
         const std::shared_ptr<Kernel::Process>& process,
         const std::shared_ptr<Kernel::Thread>& thread,
-        const std::shared_ptr<Kernel::ClientSession>& srv_session,
-        const std::string& service_name, u32 max_sessions = 8) {
+        const std::shared_ptr<Kernel::ClientSession>& srv_session, const std::string& service_name,
+        u32 max_sessions = 8) {
         std::array<u32, IPC::COMMAND_BUFFER_LENGTH> request{};
         request[0] = IPC::MakeHeader(3, 4, 0);
         std::memcpy(&request[1], service_name.data(), service_name.size());
@@ -150,6 +153,39 @@ public:
 };
 
 } // namespace
+
+TEST_CASE("Level256 IPC classification uses the connected ClientPort name",
+          "[core][service][sm][level256][integration]") {
+    TestEnvironment env;
+
+    const auto verify_port = [&env](const std::string& service_name,
+                                    Kernel::Luma3DS::Level256IpcService expected) {
+        auto [server_port, client_port] = env.kernel.CreatePortPair(4, service_name);
+        std::shared_ptr<Kernel::ClientSession> session;
+        REQUIRE(client_port->Connect(&session) == ResultSuccess);
+        REQUIRE(server_port->GetName() == service_name + "_Server");
+        REQUIRE(client_port->GetName() == service_name + "_Client");
+        REQUIRE(session->GetName() == service_name + "_Server_Client");
+        REQUIRE(session->parent);
+        REQUIRE(session->parent->port == client_port);
+        REQUIRE(Kernel::Luma3DS::ClassifyLevel256IpcPortName(session->GetName()) ==
+                Kernel::Luma3DS::Level256IpcService::None);
+        REQUIRE(Kernel::Luma3DS::ClassifyLevel256IpcPortName(client_port->GetName()) == expected);
+    };
+
+    verify_port("plg:UDS", Kernel::Luma3DS::Level256IpcService::PluginUds);
+    verify_port("ndm:u", Kernel::Luma3DS::Level256IpcService::Ndm);
+    verify_port("soc:U", Kernel::Luma3DS::Level256IpcService::Soc);
+
+    auto [portless_server, portless_client] = env.kernel.CreateSessionPair("plg:UDS", nullptr);
+    REQUIRE(portless_server);
+    REQUIRE(portless_client->parent);
+    REQUIRE_FALSE(portless_client->parent->port);
+    REQUIRE(Kernel::Luma3DS::ClassifyLevel256IpcPortName({}) ==
+            Kernel::Luma3DS::Level256IpcService::None);
+    REQUIRE(Kernel::Luma3DS::ClassifyLevel256IpcPortName("other:service_Client") ==
+            Kernel::Luma3DS::Level256IpcService::None);
+}
 
 TEST_CASE("LLE session close completes pending IPC and wakes server waiters",
           "[core][service][sm][integration][ipc]") {
@@ -211,8 +247,7 @@ TEST_CASE("LLE malformed IPC translation returns an error and keeps session reus
     server->Acquire(server_thread.get());
     REQUIRE(server->ReceiveRequest(server_thread) == Kernel::ResultInvalidBufferDescriptor);
     REQUIRE(client_thread->status == Kernel::ThreadStatus::Ready);
-    REQUIRE(client_thread->context.cpu_registers[0] ==
-            Kernel::ResultInvalidBufferDescriptor.raw);
+    REQUIRE(client_thread->context.cpu_registers[0] == Kernel::ResultInvalidBufferDescriptor.raw);
     REQUIRE(server->currently_handling == nullptr);
 
     std::array<u32, IPC::COMMAND_BUFFER_LENGTH> valid{};
@@ -247,6 +282,24 @@ TEST_CASE("SRV redirects one guest process through registered guest services",
     auto srv_session_a = env.ConnectSrv();
     auto srv_session_b = env.ConnectSrv();
 
+    const Kernel::Luma3DS::CompatibilityContext compatibility{.enabled = true};
+    const Kernel::Luma3DS::PluginAuthorization authorization{
+        .plugin_loaded = true,
+        .plugin_integrity_verified = true,
+        .owner_process_id = process_a->process_id,
+        .plugin_code_begin = 0x07000100,
+        .plugin_code_end = 0x07100000,
+        .capabilities =
+            Kernel::Luma3DS::CapabilityBit(
+                Kernel::Luma3DS::Level256Capability::PluginUdsControlIPC) |
+            Kernel::Luma3DS::CapabilityBit(Kernel::Luma3DS::Level256Capability::PluginUdsDataIPC),
+    };
+    REQUIRE_FALSE(Kernel::Luma3DS::CanDispatchLevel256IPC(
+        compatibility, authorization, process_a->process_id, 0x00100000,
+        Kernel::Luma3DS::Level256Capability::PluginUdsControlIPC));
+    REQUIRE(Kernel::Luma3DS::CanDispatchLevel256IPC(
+        compatibility, authorization, process_a->process_id, 0x07001000,
+        Kernel::Luma3DS::Level256Capability::PluginUdsControlIPC));
     const auto initialize =
         srv->ProcessPlgUdsControl(process_a->process_id, 100, 2, 0, process_a->process_id, 0);
     REQUIRE(initialize.handled);
@@ -257,8 +310,8 @@ TEST_CASE("SRV redirects one guest process through registered guest services",
     std::shared_ptr<Kernel::ClientPort> ordinary_uds_port;
     REQUIRE(env.manager.GetServicePort(&ordinary_uds_port, "nwm::UDS").IsSuccess());
 
-    const auto registration = env.RegisterGuestService(process_b, thread_b, srv_session_b,
-                                                       "plg:UDS", 3);
+    const auto registration =
+        env.RegisterGuestService(process_b, thread_b, srv_session_b, "plg:UDS", 3);
     REQUIRE(registration[1] == ResultSuccess.raw);
     const auto plugin_server_handle = registration[3];
     const auto plugin_server_port =
@@ -269,8 +322,8 @@ TEST_CASE("SRV redirects one guest process through registered guest services",
     // process whose requested nwm::UDS name resolves to this guest LLE service.
     REQUIRE(srv->ResolveProcessService(process_a->process_id, "nwm::UDS") == "plg:UDS");
 
-    const auto duplicate_registration = env.RegisterGuestService(
-        process_b, thread_b, srv_session_b, "plg:UDS");
+    const auto duplicate_registration =
+        env.RegisterGuestService(process_b, thread_b, srv_session_b, "plg:UDS");
     REQUIRE(duplicate_registration[1] == Service::SM::ResultAlreadyRegistered.raw);
 
     const auto lookup_a = env.GetService(process_a, thread_a, srv_session_a, "nwm::UDS");
@@ -281,6 +334,22 @@ TEST_CASE("SRV redirects one guest process through registered guest services",
     const auto session_b = process_b->handle_table.Get<Kernel::ClientSession>(lookup_b[3]);
     REQUIRE(session_a);
     REQUIRE(session_b);
+    REQUIRE(session_a->parent);
+    REQUIRE(session_a->parent->port);
+    REQUIRE(session_a->parent->port->GetName() == "plg:UDS_Client");
+    REQUIRE(session_a->GetName() == "plg:UDS_Server_Client");
+    REQUIRE(Kernel::Luma3DS::ClassifyLevel256IpcPortName(session_a->parent->port->GetName()) ==
+            Kernel::Luma3DS::Level256IpcService::PluginUds);
+    REQUIRE(Kernel::Luma3DS::CanDispatchLevel256RoutedIPC(
+        compatibility, authorization, process_a->process_id,
+        srv->IsLevel256Connected(process_a->process_id),
+        Kernel::Luma3DS::Level256Capability::PluginUdsDataIPC));
+    REQUIRE_FALSE(Kernel::Luma3DS::CanDispatchLevel256RoutedIPC(
+        compatibility, authorization, process_b->process_id,
+        srv->IsLevel256Connected(process_a->process_id),
+        Kernel::Luma3DS::Level256Capability::PluginUdsDataIPC));
+    const auto translated_scan = Service::SM::TranslateLevel256UdsCommand(15, 16, 4);
+    REQUIRE((translated_scan == Service::SM::UdsCommandShape{15, 20, 0}));
 
     // The registered guest service has no HLE handler. Connect the real server endpoint and
     // exercise the same request/reply buffer translator used by SVC::ReplyAndReceive.
