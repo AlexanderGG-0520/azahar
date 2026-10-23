@@ -8,8 +8,8 @@
 #include <unordered_map>
 #include <vector>
 #include <boost/serialization/export.hpp>
-#include "core/hle/service/sm/process_service_redirect.h"
 #include "core/hle/service/service.h"
+#include "core/hle/service/sm/process_service_redirect.h"
 
 namespace Core {
 class System;
@@ -35,11 +35,11 @@ public:
     void OnProcessExit(u32 process_id);
     std::optional<std::string> ResolveProcessService(u32 process_id,
                                                      const std::string& service_name) const;
-    PlgUdsControlResult ProcessPlgUdsControl(u32 process_id, u16 command_id,
-                                             u8 normal_params, u8 translate_params, u32 arg1,
-                                             u32 arg2);
+    PlgUdsControlResult ProcessPlgUdsControl(u32 process_id, u16 command_id, u8 normal_params,
+                                             u8 translate_params, u32 arg1, u32 arg2);
     bool IsLevel256Connected(u32 process_id) const;
     bool IsLevel256Paused(u32 process_id) const;
+    std::optional<ProcessServiceRedirect::State> GetLevel256RedirectState(u32 process_id) const;
     bool Level256SignalOnAttach(u32 process_id) const;
     bool Level256SignalOnDetach(u32 process_id) const;
     void SetLevel256SignalOnDetach(u32 process_id, bool enabled);

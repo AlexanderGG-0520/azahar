@@ -796,6 +796,59 @@ Result SVC::SendSyncRequest(Handle handle) {
     }
     const VAddr command_address = thread->GetCommandBufferAddress();
     bool notify_socket_detach = false;
+    const bool level256_network_trace =
+        process && plugin_loader && plugin_loader->ShouldTraceLevel256NetworkIPC(*process);
+    const u32 client_session_id = session->GetObjectId();
+    const u32 server_session_id =
+        session->parent && session->parent->server ? session->parent->server->GetObjectId() : 0;
+    const auto trace_network_ipc = [&](const char* stage, u32 input_header, u32 forwarded_header,
+                                       bool authorized, const char* reason, bool handled,
+                                       bool forward_to_server, u32 result) {
+        if (!level256_network_trace || !uds_client ||
+            !plugin_loader->ConsumeLevel256NetworkIPCTraceSlot()) {
+            return;
+        }
+        const auto redirect_state =
+            srv ? srv->GetLevel256RedirectState(process->process_id) : std::nullopt;
+        const IPC::Header input{input_header};
+        const IPC::Header forwarded{forwarded_header};
+        LOG_INFO(Kernel_SVC,
+                 "Level256 E2E IPC stage={} pid={} thread={} service={} client_session={} "
+                 "server_session={} pc=0x{:08X} request_cmd=0x{:04X} "
+                 "request_header=0x{:08X} request_normal={} request_translate={} "
+                 "forward_header=0x{:08X} forward_normal={} forward_translate={} "
+                 "authorized={} reason={} handled={} forward_to_server={} result=0x{:08X} "
+                 "redirect_present={} log_mode={} paused={} dlp_enabled={} status={}",
+                 stage, process->process_id, thread->GetThreadId(), port_name, client_session_id,
+                 server_session_id, GetReg(15), input.command_id.Value(), input_header,
+                 input.normal_params_size.Value(), input.translate_params_size.Value(),
+                 forwarded_header, forwarded.normal_params_size.Value(),
+                 forwarded.translate_params_size.Value(), authorized, reason, handled,
+                 forward_to_server, result, redirect_state.has_value(),
+                 redirect_state ? redirect_state->is_log_mode : false,
+                 redirect_state ? redirect_state->is_paused : false,
+                 redirect_state ? redirect_state->dlp_enabled : false,
+                 Level256DiagnosticThreadStatusName(thread->status));
+    };
+    const u32 level256_trace_request_header =
+        level256_network_trace && uds_client ? memory.Read32(*process, command_address) : 0;
+
+    if (level256_network_trace && uds_client &&
+        IPC::Header{level256_trace_request_header}.command_id == 100 && !level256_uds_control) {
+        const char* reason =
+            !level256_ipc_authorization.plugin_loaded               ? "plugin_not_loaded"
+            : !level256_ipc_authorization.plugin_integrity_verified ? "plugin_identity_unverified"
+            : level256_ipc_authorization.owner_process_id != process->process_id
+                ? "not_plugin_owner"
+            : !level256_ipc_authorization.OwnsCode(process->process_id, GetReg(15))
+                ? "caller_pc_outside_plugin"
+            : !Luma3DS::HasCapability(level256_ipc_authorization.capabilities,
+                                      Luma3DS::Level256Capability::PluginUdsControlIPC)
+                ? "control_capability_missing"
+                : "control_authorization_rejected";
+        trace_network_ipc("plguds_initialize_rejected", level256_trace_request_header,
+                          level256_trace_request_header, false, reason, false, true, 0);
+    }
 
     // Luma's PLGUDS control commands are carried over the guest-registered plg:UDS session.
     // Only process state and commands are handled here; commands that require the guest server
@@ -807,14 +860,45 @@ Result SVC::SendSyncRequest(Handle handle) {
         const u8 translate_params = static_cast<u8>(header & 0x3F);
         const u32 arg1 = memory.Read32(*process, command_address + sizeof(u32));
         const u32 arg2 = memory.Read32(*process, command_address + 2 * sizeof(u32));
+        const auto control_authorized = level256_uds_control;
+        const auto control_reason = control_authorized ? "authorized" : "authorization_failed";
+        if (command_id == 100) {
+            trace_network_ipc("plguds_initialize_before", header, header, control_authorized,
+                              control_reason, false, true, 0);
+        }
         const auto control = srv->ProcessPlgUdsControl(process->process_id, command_id,
                                                        normal_params, translate_params, arg1, arg2);
+        if (command_id == 100) {
+            const auto state_after = srv->GetLevel256RedirectState(process->process_id);
+            const u32 control_result = control.handled ? control.response_value : 0xFFFFFFFF;
+            trace_network_ipc("plguds_initialize_after", header, header, control_authorized,
+                              control_reason, control.handled, control.forward_to_server,
+                              control_result);
+            if (state_after && control.handled && control.response_value == 0 &&
+                plugin_loader->ConsumeLevel256NetworkIPCTraceSlot()) {
+                LOG_INFO(Kernel_SVC,
+                         "Level256 E2E redirect transition pid={} thread={} command=100 "
+                         "present=true log_mode={} paused={} dlp_enabled={}",
+                         process->process_id, thread->GetThreadId(), state_after->is_log_mode,
+                         state_after->is_paused, state_after->dlp_enabled);
+            }
+        }
         if (control.handled && !control.forward_to_server) {
             memory.Write32(*process, command_address,
                            IPC::MakeHeader(control.response_command, 1, 0));
             memory.Write32(*process, command_address + sizeof(u32), control.response_value);
             return ResultSuccess;
         }
+    }
+
+    u32 uds_scan_original_header = 0;
+    u32 uds_scan_forward_header = 0;
+    bool trace_uds_scan = false;
+    if (level256_network_trace && uds_client) {
+        uds_scan_original_header = level256_trace_request_header;
+        const IPC::Header header{uds_scan_original_header};
+        trace_uds_scan = header.command_id == 15;
+        uds_scan_forward_header = uds_scan_original_header;
     }
 
     if (srv && srv->IsLevel256Connected(process->process_id)) {
@@ -844,9 +928,10 @@ Result SVC::SendSyncRequest(Handle handle) {
                     memory.Write32(*process, command_address + 4 * sizeof(u32),
                                    memory.Read32(*process, static_buffer_address + sizeof(u32)));
                 }
-                memory.Write32(*process, command_address,
-                               IPC::MakeHeader(translated->command_id, translated->normal_params,
-                                               translated->translate_params));
+                uds_scan_forward_header =
+                    IPC::MakeHeader(translated->command_id, translated->normal_params,
+                                    translated->translate_params);
+                memory.Write32(*process, command_address, uds_scan_forward_header);
             }
         }
 
@@ -875,6 +960,17 @@ Result SVC::SendSyncRequest(Handle handle) {
         }
     }
 
+    if (trace_uds_scan) {
+        const bool route_authorized = level256_uds_data;
+        const char* reason = route_authorized ? "authorized"
+                             : !srv || !srv->IsLevel256Connected(process->process_id)
+                                 ? "redirect_inactive"
+                                 : "capability_or_owner_rejected";
+        trace_network_ipc("uds_scan_forward", uds_scan_original_header,
+                          memory.Read32(*process, command_address), route_authorized, reason, false,
+                          true, 0);
+    }
+
     if (kernel.GetIPCRecorder().IsEnabled()) {
         kernel.GetIPCRecorder().RegisterRequest(session, thread);
     }
@@ -888,6 +984,14 @@ Result SVC::SendSyncRequest(Handle handle) {
     const auto res = session->SendSyncRequest(thread);
     if (is_hle) {
         system.perf_stats->EndIPCProcessing();
+    }
+
+    if (trace_uds_scan) {
+        trace_network_ipc("uds_scan_send_return", uds_scan_original_header,
+                          memory.Read32(*process, command_address), level256_uds_data,
+                          level256_uds_data ? "svc_return_only_check_server_reply"
+                                            : "adapter_not_authorized",
+                          false, true, res.raw);
     }
 
     if (notify_socket_detach && process && srv) {

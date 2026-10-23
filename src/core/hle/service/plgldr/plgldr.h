@@ -172,6 +172,8 @@ public:
         // Detailed MapProcessMemoryEx request/result records are opt-in and bounded.
         u32 level256_map_process_memory_ex_trace_count = 0;
         u32 level256_map_process_memory_ex_result_trace_count = 0;
+        // One-run E2E PLGUDS request/reply trace; transient and deliberately not savestated.
+        u32 level256_network_ipc_trace_count = 0;
         // Count of 0x2560 requests for the current plugin load; deliberately transient.
         u32 level256_lfcs_request_count = 0;
         bool is_default_path = false;
@@ -188,6 +190,7 @@ public:
             level256_capability_rejection_log_count = 0;
             level256_map_process_memory_ex_trace_count = 0;
             level256_map_process_memory_ex_result_trace_count = 0;
+            level256_network_ipc_trace_count = 0;
             level256_lfcs_request_count = 0;
         }
 
@@ -241,6 +244,8 @@ public:
     Kernel::Luma3DS::PluginAuthorization GetLumaExtensionAuthorization(u64 title_id) const;
     Kernel::Luma3DS::Level256VerificationPolicy GetLevel256VerificationPolicy(bool enabled,
                                                                               u64 title_id) const;
+    bool ShouldTraceLevel256NetworkIPC(const Kernel::Process& process) const;
+    bool ConsumeLevel256NetworkIPCTraceSlot();
     Kernel::Luma3DS::Level256ProcessViewManager& GetProcessViewManager() {
         return process_view_manager;
     }

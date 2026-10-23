@@ -118,6 +118,20 @@ Kernel::Luma3DS::Level256VerificationPolicy PLG_LDR::GetLevel256VerificationPoli
     };
 }
 
+bool PLG_LDR::ShouldTraceLevel256NetworkIPC(const Kernel::Process& process) const {
+    return process.codeset &&
+           Kernel::ShouldCaptureLevel256NetworkIpcDiagnostic(
+               Settings::values.level256_compatibility_enabled.GetValue(),
+               Settings::values.level256_bootloader_diagnostics_enabled.GetValue(),
+               plgldr_context.level256_plugin_identity_verified, process.codeset->program_id,
+               process.process_id, plgldr_context.plugin_process_id, plgldr_context.plugin_loaded);
+}
+
+bool PLG_LDR::ConsumeLevel256NetworkIPCTraceSlot() {
+    return Kernel::ConsumeLevel256NetworkIpcTraceSlot(
+        true, plgldr_context.level256_network_ipc_trace_count);
+}
+
 PLG_LDR::PLG_LDR(Core::System& system_) : ServiceFramework{"plg:ldr", 1}, system(system_) {
     static const FunctionInfo functions[] = {
         // clang-format off

@@ -15,6 +15,8 @@ namespace Kernel {
 
 constexpr u64 LEVEL256_DIAGNOSTIC_TITLE_ID = 0x0004000000155100ULL;
 constexpr u64 LEVEL256_BOOTLOADER_DIAGNOSTIC_TITLE_ID = 0x000400000016C700ULL;
+constexpr u64 LEVEL256_NETWORK_IPC_DIAGNOSTIC_TITLE_ID = 0x000400000016C700ULL;
+constexpr u32 LEVEL256_NETWORK_IPC_TRACE_LIMIT = 48;
 constexpr std::array<u32, 3> LEVEL256_BOOTLOADER_SNAPSHOT_ADDRESSES = {
     0x06FFF0E8, // saved game instruction 0
     0x06FFF0EC, // saved game instruction 1
@@ -60,6 +62,24 @@ constexpr bool ShouldCaptureLevel256BootloaderExceptionDiagnostic(
            title_id == LEVEL256_BOOTLOADER_DIAGNOSTIC_TITLE_ID && process_id != 0 &&
            process_id == plugin_process_id && plugin_loaded && thread_id != UINT32_MAX &&
            thread_id == plugin_thread_id;
+}
+
+constexpr bool ShouldCaptureLevel256NetworkIpcDiagnostic(bool compatibility_enabled,
+                                                         bool diagnostics_enabled,
+                                                         bool identity_verified, u64 title_id,
+                                                         u32 process_id, u32 plugin_process_id,
+                                                         bool plugin_loaded) {
+    return compatibility_enabled && diagnostics_enabled && identity_verified &&
+           title_id == LEVEL256_NETWORK_IPC_DIAGNOSTIC_TITLE_ID && process_id != 0 &&
+           process_id == plugin_process_id && plugin_loaded;
+}
+
+constexpr bool ConsumeLevel256NetworkIpcTraceSlot(bool eligible, u32& count) {
+    if (!eligible || count >= LEVEL256_NETWORK_IPC_TRACE_LIMIT) {
+        return false;
+    }
+    ++count;
+    return true;
 }
 /// Title IDs included by the official Level256 online-support list.
 constexpr bool IsLevel256SupportedTitleId(u64 title_id) {

@@ -7,17 +7,49 @@
 #include <boost/serialization/string.hpp>
 #include <boost/serialization/vector.hpp>
 #include "common/archives.h"
+#include "common/logging/log.h"
+#include "core/core.h"
+#include "core/global.h"
 #include "core/hle/kernel/client_port.h"
 #include "core/hle/kernel/client_session.h"
 #include "core/hle/kernel/hle_ipc.h"
+#include "core/hle/kernel/level256_diagnostic.h"
+#include "core/hle/kernel/luma3ds/compatibility.h"
 #include "core/hle/kernel/memory.h"
+#include "core/hle/kernel/process.h"
 #include "core/hle/kernel/server_session.h"
 #include "core/hle/kernel/session.h"
 #include "core/hle/kernel/thread.h"
+#include "core/hle/service/plgldr/plgldr.h"
+#include "core/hle/service/sm/sm.h"
+#include "core/hle/service/sm/srv.h"
 
 SERIALIZE_EXPORT_IMPL(Kernel::ServerSession)
 
 namespace Kernel {
+
+namespace {
+
+std::shared_ptr<Service::PLGLDR::PLG_LDR> GetLevel256UdsTraceLoader(
+    const ServerSession& server_session, const std::shared_ptr<Thread>& client_thread) {
+    if (!server_session.parent || !server_session.parent->port || !client_thread ||
+        Luma3DS::ClassifyLevel256IpcPortName(server_session.parent->port->GetName()) !=
+            Luma3DS::Level256IpcService::PluginUds) {
+        return nullptr;
+    }
+    const auto client_process = client_thread->owner_process.lock();
+    if (!client_process) {
+        return nullptr;
+    }
+    auto& system = Core::Global<Core::System>();
+    auto plugin_loader = Service::PLGLDR::GetService(system);
+    if (!plugin_loader || !plugin_loader->ShouldTraceLevel256NetworkIPC(*client_process)) {
+        return nullptr;
+    }
+    return plugin_loader;
+}
+
+} // namespace
 
 template <class Archive>
 void ServerSession::serialize(Archive& ar, const unsigned int) {
@@ -146,9 +178,31 @@ Result ServerSession::ReceiveRequest(std::shared_ptr<Thread> thread) {
 
     const VAddr target_address = thread->GetCommandBufferAddress();
     const VAddr source_address = currently_handling->GetCommandBufferAddress();
-    const auto result = TranslateCommandBuffer(kernel, kernel.memory, currently_handling, thread,
-                                               source_address, target_address,
-                                               mapped_buffer_context, false);
+    const auto client_process = currently_handling->owner_process.lock();
+    const auto plugin_loader = GetLevel256UdsTraceLoader(*this, currently_handling);
+    const u32 request_header =
+        client_process ? kernel.memory.Read32(*client_process, source_address) : 0;
+    const IPC::Header decoded_request{request_header};
+    const auto result =
+        TranslateCommandBuffer(kernel, kernel.memory, currently_handling, thread, source_address,
+                               target_address, mapped_buffer_context, false);
+    if ((decoded_request.command_id == 15 || decoded_request.command_id == 100) && plugin_loader &&
+        plugin_loader->ConsumeLevel256NetworkIPCTraceSlot()) {
+        const auto server_process = thread->owner_process.lock();
+        const u32 delivered_header =
+            server_process ? kernel.memory.Read32(*server_process, target_address) : 0;
+        LOG_INFO(Kernel_SVC,
+                 "Level256 E2E IPC stage=server_receive client_pid={} client_thread={} "
+                 "server_pid={} server_thread={} service={} client_session={} server_session={} "
+                 "request_cmd=0x{:04X} request_header=0x{:08X} request_normal={} "
+                 "request_translate={} delivered_header=0x{:08X} result=0x{:08X}",
+                 client_process ? client_process->process_id : 0, currently_handling->GetThreadId(),
+                 server_process ? server_process->process_id : 0, thread->GetThreadId(),
+                 parent->port->GetName(), parent->client->GetObjectId(), GetObjectId(),
+                 decoded_request.command_id.Value(), request_header,
+                 decoded_request.normal_params_size.Value(),
+                 decoded_request.translate_params_size.Value(), delivered_header, result.raw);
+    }
     if (result.IsError()) {
         auto request_thread = std::move(currently_handling);
         currently_handling.reset();
@@ -160,15 +214,51 @@ Result ServerSession::ReceiveRequest(std::shared_ptr<Thread> thread) {
 }
 
 Result ServerSession::ReplyRequest(std::shared_ptr<Thread> thread) {
+    const auto client_thread = currently_handling;
+    const auto client_process = client_thread ? client_thread->owner_process.lock() : nullptr;
+    const auto plugin_loader = GetLevel256UdsTraceLoader(*this, client_thread);
+    const VAddr source_address = thread->GetCommandBufferAddress();
+    const VAddr target_address = client_thread ? client_thread->GetCommandBufferAddress() : 0;
+    const u32 client_request_header =
+        client_process ? kernel.memory.Read32(*client_process, target_address) : 0;
+    const IPC::Header decoded_request{client_request_header};
+    const auto server_process = thread->owner_process.lock();
+    const u32 server_response_header =
+        server_process ? kernel.memory.Read32(*server_process, source_address) : 0;
+    const u32 server_response_result =
+        server_process ? kernel.memory.Read32(*server_process, source_address + sizeof(u32)) : 0;
     auto request_thread = std::move(currently_handling);
     currently_handling = nullptr;
     R_UNLESS(request_thread && parent->client, ResultSessionClosed);
 
-    const VAddr source_address = thread->GetCommandBufferAddress();
-    const VAddr target_address = request_thread->GetCommandBufferAddress();
-    const auto result = TranslateCommandBuffer(kernel, kernel.memory, thread, request_thread,
-                                               source_address, target_address,
-                                               mapped_buffer_context, true);
+    const auto result =
+        TranslateCommandBuffer(kernel, kernel.memory, thread, request_thread, source_address,
+                               target_address, mapped_buffer_context, true);
+    if ((decoded_request.command_id == 15 || decoded_request.command_id == 100) && plugin_loader &&
+        plugin_loader->ConsumeLevel256NetworkIPCTraceSlot()) {
+        const u32 client_response_header =
+            client_process ? kernel.memory.Read32(*client_process, target_address) : 0;
+        const u32 client_response_result =
+            client_process ? kernel.memory.Read32(*client_process, target_address + sizeof(u32))
+                           : 0;
+        LOG_INFO(Kernel_SVC,
+                 "Level256 E2E IPC stage=server_reply client_pid={} client_thread={} "
+                 "server_pid={} server_thread={} service={} client_session={} server_session={} "
+                 "request_cmd=0x{:04X} request_header=0x{:08X} response_header=0x{:08X} "
+                 "response_cmd=0x{:04X} response_normal={} response_translate={} "
+                 "server_ipc_result=0x{:08X} client_header=0x{:08X} "
+                 "client_ipc_result=0x{:08X} translate_result=0x{:08X}",
+                 client_process ? client_process->process_id : 0, request_thread->GetThreadId(),
+                 server_process ? server_process->process_id : 0, thread->GetThreadId(),
+                 parent->port ? parent->port->GetName() : std::string{"<portless>"},
+                 parent->client ? parent->client->GetObjectId() : 0, GetObjectId(),
+                 decoded_request.command_id.Value(), client_request_header, server_response_header,
+                 IPC::Header{server_response_header}.command_id.Value(),
+                 IPC::Header{server_response_header}.normal_params_size.Value(),
+                 IPC::Header{server_response_header}.translate_params_size.Value(),
+                 server_response_result, client_response_header, client_response_result,
+                 result.raw);
+    }
     if (result.IsError()) {
         request_thread->SetWaitSynchronizationResult(result);
         request_thread->ResumeFromWait();

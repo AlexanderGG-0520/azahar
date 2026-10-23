@@ -114,6 +114,40 @@ TEST_CASE("Level256 bootloader diagnostics require explicit opt-in and exact own
         true, true, false, LEVEL256_BOOTLOADER_DIAGNOSTIC_TITLE_ID, 16, 16, true, 38, 38));
 }
 
+TEST_CASE("Level256 network IPC tracing is opt-in, authenticated, owner-scoped, and bounded",
+          "[core][kernel][level256][diagnostic]") {
+    using Kernel::ConsumeLevel256NetworkIpcTraceSlot;
+    using Kernel::LEVEL256_DIAGNOSTIC_TITLE_ID;
+    using Kernel::LEVEL256_NETWORK_IPC_DIAGNOSTIC_TITLE_ID;
+    using Kernel::LEVEL256_NETWORK_IPC_TRACE_LIMIT;
+    using Kernel::ShouldCaptureLevel256NetworkIpcDiagnostic;
+
+    const auto eligible = [&](bool compatibility = true, bool diagnostics = true,
+                              bool identity = true,
+                              u64 title_id = LEVEL256_NETWORK_IPC_DIAGNOSTIC_TITLE_ID, u32 pid = 16,
+                              u32 owner_pid = 16, bool loaded = true) {
+        return ShouldCaptureLevel256NetworkIpcDiagnostic(compatibility, diagnostics, identity,
+                                                         title_id, pid, owner_pid, loaded);
+    };
+    REQUIRE(eligible());
+    REQUIRE_FALSE(eligible(false));
+    REQUIRE_FALSE(eligible(true, false));
+    REQUIRE_FALSE(eligible(true, true, false));
+    REQUIRE_FALSE(eligible(true, true, true, LEVEL256_DIAGNOSTIC_TITLE_ID));
+    REQUIRE_FALSE(eligible(true, true, true, LEVEL256_NETWORK_IPC_DIAGNOSTIC_TITLE_ID, 17, 16));
+    REQUIRE_FALSE(
+        eligible(true, true, true, LEVEL256_NETWORK_IPC_DIAGNOSTIC_TITLE_ID, 16, 16, false));
+
+    u32 trace_count = 0;
+    REQUIRE_FALSE(ConsumeLevel256NetworkIpcTraceSlot(false, trace_count));
+    REQUIRE(trace_count == 0);
+    for (u32 i = 0; i < LEVEL256_NETWORK_IPC_TRACE_LIMIT; ++i) {
+        REQUIRE(ConsumeLevel256NetworkIpcTraceSlot(true, trace_count));
+    }
+    REQUIRE_FALSE(ConsumeLevel256NetworkIpcTraceSlot(true, trace_count));
+    REQUIRE(trace_count == LEVEL256_NETWORK_IPC_TRACE_LIMIT);
+}
+
 TEST_CASE("Level256 D4 LDR decode identifies the saved game entry pointer",
           "[core][kernel][level256]") {
     std::array<u32, 16> registers{};

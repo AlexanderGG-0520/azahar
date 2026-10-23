@@ -18,15 +18,15 @@
 #include "core/hle/kernel/errors.h"
 #include "core/hle/kernel/event.h"
 #include "core/hle/kernel/hle_ipc.h"
+#include "core/hle/kernel/process.h"
 #include "core/hle/kernel/resource_limit.h"
 #include "core/hle/kernel/semaphore.h"
 #include "core/hle/kernel/server_port.h"
 #include "core/hle/kernel/server_session.h"
-#include "core/hle/kernel/process.h"
 #include "core/hle/kernel/thread.h"
+#include "core/hle/service/plgldr/plgldr.h"
 #include "core/hle/service/sm/sm.h"
 #include "core/hle/service/sm/srv.h"
-#include "core/hle/service/plgldr/plgldr.h"
 
 SERVICE_CONSTRUCT_IMPL(Service::SM::SRV)
 SERIALIZE_EXPORT_IMPL(Service::SM::SRV)
@@ -45,9 +45,8 @@ void SRV::serialize(Archive& ar, const unsigned int) {
 constexpr int MAX_PENDING_NOTIFICATIONS = 16;
 
 static bool IsLevel256ServiceName(const std::string& name) {
-    return name == "plg:UDS" || name == "plg:DLP" || name == "plg:FKCL" ||
-           name == "nwm::UDS" || name == "dlp:SRVR" || name == "dlp:CLNT" ||
-           name == "dlp:FKCL";
+    return name == "plg:UDS" || name == "plg:DLP" || name == "plg:FKCL" || name == "nwm::UDS" ||
+           name == "dlp:SRVR" || name == "dlp:CLNT" || name == "dlp:FKCL";
 }
 
 /**
@@ -110,9 +109,8 @@ public:
         LOG_ERROR(Service_SRV, "called service={} wakeup", name);
         const auto process = thread ? thread->owner_process.lock() : nullptr;
         const auto srv = service_manager.GetService<SRV>("srv:");
-        const auto redirected = process && srv
-                                    ? srv->ResolveProcessService(process->process_id, name)
-                                    : std::nullopt;
+        const auto redirected =
+            process && srv ? srv->ResolveProcessService(process->process_id, name) : std::nullopt;
         const auto& resolved_name = redirected ? *redirected : name;
         std::shared_ptr<Kernel::ClientPort> client_port;
         const auto port_result =
@@ -186,23 +184,45 @@ void SRV::GetServiceHandle(Kernel::HLERequestContext& ctx) {
     // TODO(yuriks): Permission checks go here
 
     const auto process = ctx.ClientThread() ? ctx.ClientThread()->owner_process.lock() : nullptr;
-    const auto redirect = process ? ResolveProcessService(process->process_id, name)
-                                  : std::nullopt;
+    const auto redirect = process ? ResolveProcessService(process->process_id, name) : std::nullopt;
     const auto& resolved_name = redirect ? *redirect : name;
+    const auto plugin_loader = PLGLDR::GetService(system);
+    const bool trace_level256_uds = name == "nwm::UDS" && process && plugin_loader &&
+                                    plugin_loader->ShouldTraceLevel256NetworkIPC(*process);
+    const auto redirect_state =
+        process ? GetLevel256RedirectState(process->process_id) : std::nullopt;
+    const auto trace_stage = [&](const char* stage, u32 result, u32 port_id,
+                                 const std::string& port_name, u32 client_session_id,
+                                 u32 server_session_id) {
+        if (!trace_level256_uds || !plugin_loader->ConsumeLevel256NetworkIPCTraceSlot()) {
+            return;
+        }
+        LOG_INFO(Service_SRV,
+                 "Level256 E2E service stage={} pid={} thread={} requested={} resolved={} "
+                 "redirected={} redirect_present={} log_mode={} paused={} dlp_enabled={} "
+                 "port={} port_id={} client_session={} server_session={} result=0x{:08X}",
+                 stage, process->process_id, ctx.ClientThread()->GetThreadId(), name, resolved_name,
+                 redirect.has_value(), redirect_state.has_value(),
+                 redirect_state ? redirect_state->is_log_mode : false,
+                 redirect_state ? redirect_state->is_paused : false,
+                 redirect_state ? redirect_state->dlp_enabled : false, port_name, port_id,
+                 client_session_id, server_session_id, result);
+    };
+    trace_stage("resolve", ResultSuccess.raw, 0, {}, 0, 0);
 
     auto get_handle = std::make_shared<ThreadCallback>(system, service_manager, resolved_name);
 
     std::shared_ptr<Kernel::ClientPort> client_port;
-    auto result =
-        service_manager.GetServicePort(std::addressof(client_port), resolved_name);
+    auto result = service_manager.GetServicePort(std::addressof(client_port), resolved_name);
+    trace_stage("port_lookup", result.raw, client_port ? client_port->GetObjectId() : 0,
+                client_port ? client_port->GetName() : std::string{}, 0, 0);
     if (result.IsError()) {
         if (wait_until_available && result == ResultServiceNotRegistered) {
             LOG_INFO(Service_SRV, "called service={} delayed", resolved_name);
             std::shared_ptr<Kernel::Event> get_service_handle_event =
                 ctx.SleepClientThread("GetServiceHandle", std::chrono::nanoseconds(-1), get_handle);
-            get_service_handle_delayed_map[resolved_name].push_back(
-                DelayedServiceHandle{process ? process->process_id : 0,
-                                     std::move(get_service_handle_event)});
+            get_service_handle_delayed_map[resolved_name].push_back(DelayedServiceHandle{
+                process ? process->process_id : 0, std::move(get_service_handle_event)});
             return;
         } else {
             IPC::RequestBuilder rb = rp.MakeBuilder(1, 0);
@@ -215,6 +235,11 @@ void SRV::GetServiceHandle(Kernel::HLERequestContext& ctx) {
 
     std::shared_ptr<Kernel::ClientSession> session;
     result = client_port->Connect(std::addressof(session));
+    trace_stage("connect", result.raw, client_port->GetObjectId(), client_port->GetName(),
+                session ? session->GetObjectId() : 0,
+                session && session->parent && session->parent->server
+                    ? session->parent->server->GetObjectId()
+                    : 0);
     if (result.IsSuccess()) {
         LOG_DEBUG(Service_SRV, "called service={} -> session={}", resolved_name,
                   session->GetObjectId());
@@ -222,8 +247,7 @@ void SRV::GetServiceHandle(Kernel::HLERequestContext& ctx) {
         rb.Push(result);
         rb.PushMoveObjects(std::move(session));
     } else if (result == Kernel::ResultMaxConnectionsReached && wait_until_available) {
-        LOG_WARNING(Service_SRV, "called service={} -> ResultMaxConnectionsReached",
-                    resolved_name);
+        LOG_WARNING(Service_SRV, "called service={} -> ResultMaxConnectionsReached", resolved_name);
         // TODO(Subv): Put the caller guest thread to sleep until this port becomes available again.
         UNIMPLEMENTED_MSG("Unimplemented wait until port {} is available.", name);
     } else {
@@ -368,7 +392,7 @@ void SRV::RegisterService(Kernel::HLERequestContext& ctx) {
 
     std::shared_ptr<Kernel::ServerPort> port;
     auto result = service_manager.RegisterService(std::addressof(port), name, max_sessions,
-                                                 process->process_id);
+                                                  process->process_id);
 
     if (result.IsError()) {
         IPC::RequestBuilder rb = rp.MakeBuilder(1, 0);
@@ -458,9 +482,8 @@ std::optional<std::string> SRV::ResolveProcessService(u32 process_id,
     return process_service_redirect.Resolve(process_id, service_name);
 }
 
-PlgUdsControlResult SRV::ProcessPlgUdsControl(u32 process_id, u16 command_id,
-                                             u8 normal_params, u8 translate_params, u32 arg1,
-                                             u32 arg2) {
+PlgUdsControlResult SRV::ProcessPlgUdsControl(u32 process_id, u16 command_id, u8 normal_params,
+                                              u8 translate_params, u32 arg1, u32 arg2) {
     return process_service_redirect.ProcessPlgUdsControl(process_id, command_id, normal_params,
                                                          translate_params, arg1, arg2);
 }
@@ -471,6 +494,10 @@ bool SRV::IsLevel256Connected(u32 process_id) const {
 
 bool SRV::IsLevel256Paused(u32 process_id) const {
     return process_service_redirect.IsPaused(process_id);
+}
+
+std::optional<ProcessServiceRedirect::State> SRV::GetLevel256RedirectState(u32 process_id) const {
+    return process_service_redirect.GetState(process_id);
 }
 
 bool SRV::Level256SignalOnAttach(u32 process_id) const {

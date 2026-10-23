@@ -384,6 +384,33 @@ TEST_CASE("SRV redirects one guest process through registered guest services",
     REQUIRE(returned_response[1] == ResultSuccess.raw);
     REQUIRE(returned_response[2] == 107);
 
+    // Exercise the real guest LLE session queue and ReceiveRequest/ReplyRequest translators
+    // with the command 15 header shape expected after the SendSyncRequest adapter. This test
+    // validates the session leg; the SVC's actual header rewrite is covered by runtime tracing.
+    std::array<u32, IPC::COMMAND_BUFFER_LENGTH> scan_request{};
+    scan_request[0] = IPC::MakeHeader(15, 20, 0);
+    scan_request[1] = 0x12345678;
+    env.WriteCommand(process_a, thread_a, scan_request);
+    thread_a->status = Kernel::ThreadStatus::Running;
+    REQUIRE(session_a->SendSyncRequest(thread_a) == ResultSuccess);
+    REQUIRE(thread_a->status == Kernel::ThreadStatus::WaitIPC);
+    server_session->Acquire(thread_b.get());
+    REQUIRE(server_session->ReceiveRequest(thread_b) == ResultSuccess);
+    const auto received_scan = env.ReadCommand(process_b, thread_b);
+    REQUIRE(received_scan[0] == IPC::MakeHeader(15, 20, 0));
+    REQUIRE(received_scan[1] == 0x12345678);
+
+    std::array<u32, IPC::COMMAND_BUFFER_LENGTH> scan_response{};
+    scan_response[0] = IPC::MakeHeader(15, 2, 0);
+    scan_response[1] = ResultSuccess.raw;
+    scan_response[2] = 3; // Sentinel payload word; this test does not define the UDS ABI.
+    env.WriteCommand(process_b, thread_b, scan_response);
+    REQUIRE(server_session->ReplyRequest(thread_b) == ResultSuccess);
+    const auto returned_scan = env.ReadCommand(process_a, thread_a);
+    REQUIRE(returned_scan[0] == IPC::MakeHeader(15, 2, 0));
+    REQUIRE(returned_scan[1] == ResultSuccess.raw);
+    REQUIRE(returned_scan[2] == 3);
+
     std::array<u32, IPC::COMMAND_BUFFER_LENGTH> ordinary_request{};
     ordinary_request[0] = IPC::MakeHeader(0x55, 1, 0);
     ordinary_request[1] = 7;
