@@ -12,6 +12,7 @@
 #include "core/hle/kernel/client_session.h"
 #include "core/hle/kernel/hle_ipc.h"
 #include "core/hle/kernel/kernel.h"
+#include "core/hle/kernel/level256_start_scan_diagnostic.h"
 #include "core/hle/kernel/luma3ds/compatibility.h"
 #include "core/hle/kernel/process.h"
 #include "core/hle/kernel/resource_limit.h"
@@ -153,6 +154,46 @@ public:
 };
 
 } // namespace
+
+TEST_CASE("Level256 StartScan beacon header snapshot reads only valid 12-byte ranges",
+          "[core][service][sm][level256][diagnostic]") {
+    TestEnvironment env;
+    auto process = env.MakeProcess();
+    constexpr VAddr output_address = 0x00200000;
+    auto output_memory = std::make_shared<BufferMem>(Memory::CITRA_PAGE_SIZE);
+    REQUIRE(process->vm_manager
+                .MapBackingMemory(output_address, MemoryRef{output_memory}, Memory::CITRA_PAGE_SIZE,
+                                  Kernel::MemoryState::Shared)
+                .Succeeded());
+
+    constexpr std::array<u32, 3> expected = {0x4000, 0x78, 3};
+    env.memory.WriteBlock(*process, output_address, expected.data(), sizeof(expected));
+
+    Kernel::Level256StartScanBuffer request{};
+    request.status = Kernel::Level256StartScanBufferStatus::Valid;
+    request.request_max_size = 0x4000;
+    request.mapped_size = 0x4000;
+    request.output_address = output_address;
+    const auto snapshot = Kernel::ReadLevel256BeaconReplySnapshot(env.memory, *process, request);
+    REQUIRE(snapshot.status == Kernel::Level256StartScanBufferStatus::Valid);
+    REQUIRE(snapshot.max_size == expected[0]);
+    REQUIRE(snapshot.size == expected[1]);
+    REQUIRE(snapshot.total_entries == expected[2]);
+
+    std::array<u32, 3> after_read{};
+    env.memory.ReadBlock(*process, output_address, after_read.data(), sizeof(after_read));
+    REQUIRE(after_read == expected);
+
+    request.output_address = 0x00300000;
+    const auto invalid_pointer =
+        Kernel::ReadLevel256BeaconReplySnapshot(env.memory, *process, request);
+    REQUIRE(invalid_pointer.status == Kernel::Level256StartScanBufferStatus::UnreadableAddress);
+
+    request.mapped_size = 8;
+    const auto short_buffer =
+        Kernel::ReadLevel256BeaconReplySnapshot(env.memory, *process, request);
+    REQUIRE(short_buffer.status == Kernel::Level256StartScanBufferStatus::BufferTooSmall);
+}
 
 TEST_CASE("Level256 IPC classification uses the connected ClientPort name",
           "[core][service][sm][level256][integration]") {

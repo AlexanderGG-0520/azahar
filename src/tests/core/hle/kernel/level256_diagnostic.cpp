@@ -6,6 +6,7 @@
 #include "core/core_timing.h"
 #include "core/hle/kernel/kernel.h"
 #include "core/hle/kernel/level256_diagnostic.h"
+#include "core/hle/kernel/level256_start_scan_diagnostic.h"
 #include "core/hle/kernel/luma3ds/level256_memory_operations.h"
 #include "core/hle/kernel/process.h"
 #include "core/hle/service/plgldr/plugin_path.h"
@@ -146,6 +147,64 @@ TEST_CASE("Level256 network IPC tracing is opt-in, authenticated, owner-scoped, 
     }
     REQUIRE_FALSE(ConsumeLevel256NetworkIpcTraceSlot(true, trace_count));
     REQUIRE(trace_count == LEVEL256_NETWORK_IPC_TRACE_LIMIT);
+}
+
+TEST_CASE("Level256 StartScan output diagnostics decode and validate read-only buffer ranges",
+          "[core][kernel][level256][diagnostic]") {
+    using Kernel::DecodeLevel256StartScanBuffer;
+    using Kernel::Level256StartScanBufferStatus;
+    using Kernel::ValidateLevel256BeaconReplyRange;
+
+    std::array<u32, 21> request{};
+    request[0] = IPC::MakeHeader(15, 16, 4);
+    request[1] = 0x4000;
+    request[19] = IPC::MappedBufferDesc(0x4000, IPC::W);
+    request[20] = 0x0010FFF8;
+
+    const auto original = DecodeLevel256StartScanBuffer(request);
+    REQUIRE(original.status == Level256StartScanBufferStatus::Valid);
+    REQUIRE(original.request_max_size == 0x4000);
+    REQUIRE(original.descriptor == request[19]);
+    REQUIRE(original.mapped_size == 0x4000);
+    REQUIRE(original.output_address == 0x0010FFF8);
+
+    // Level256 moves the mapped-buffer descriptor and pointer into normal parameters without
+    // changing their word positions. The diagnostic must still decode that forwarded request.
+    request[0] = IPC::MakeHeader(15, 20, 0);
+    REQUIRE(request[0] == 0x000F0500);
+    const auto forwarded = DecodeLevel256StartScanBuffer(request);
+    REQUIRE(forwarded.status == Level256StartScanBufferStatus::Valid);
+    REQUIRE(forwarded.descriptor == original.descriptor);
+    REQUIRE(forwarded.output_address == original.output_address);
+
+    request[19] = 0;
+    REQUIRE(DecodeLevel256StartScanBuffer(request).status ==
+            Level256StartScanBufferStatus::InvalidDescriptor);
+
+    request[19] = IPC::MappedBufferDesc(8, IPC::W);
+    REQUIRE(DecodeLevel256StartScanBuffer(request).status ==
+            Level256StartScanBufferStatus::BufferTooSmall);
+
+    request[19] = IPC::MappedBufferDesc(0x4000, IPC::R);
+    REQUIRE(DecodeLevel256StartScanBuffer(request).status ==
+            Level256StartScanBufferStatus::InvalidDescriptor);
+
+    request[1] = 8;
+    request[19] = IPC::MappedBufferDesc(0x4000, IPC::W);
+    REQUIRE(DecodeLevel256StartScanBuffer(request).status ==
+            Level256StartScanBufferStatus::BufferTooSmall);
+
+    const auto readable = [](VAddr page) { return page == 0x0010F000 || page == 0x00110000; };
+    REQUIRE(ValidateLevel256BeaconReplyRange(0x0010FFF8, 0x4000, 0x1000, readable) ==
+            Level256StartScanBufferStatus::Valid);
+    REQUIRE(ValidateLevel256BeaconReplyRange(0x0010FFF8, 8, 0x1000, readable) ==
+            Level256StartScanBufferStatus::BufferTooSmall);
+    REQUIRE(ValidateLevel256BeaconReplyRange(0, 0x4000, 0x1000, readable) ==
+            Level256StartScanBufferStatus::NullPointer);
+    REQUIRE(ValidateLevel256BeaconReplyRange(0xFFFFFFFC, 0x4000, 0x1000, readable) ==
+            Level256StartScanBufferStatus::AddressOverflow);
+    REQUIRE(ValidateLevel256BeaconReplyRange(0x00102000, 0x4000, 0x1000, readable) ==
+            Level256StartScanBufferStatus::UnreadableAddress);
 }
 
 TEST_CASE("Level256 D4 LDR decode identifies the saved game entry pointer",

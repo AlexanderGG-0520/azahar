@@ -2,6 +2,8 @@
 // Licensed under GPLv2 or any later version
 // Refer to the license.txt file included.
 
+#include <algorithm>
+#include <array>
 #include <tuple>
 #include <boost/serialization/shared_ptr.hpp>
 #include <boost/serialization/string.hpp>
@@ -49,7 +51,52 @@ std::shared_ptr<Service::PLGLDR::PLG_LDR> GetLevel256UdsTraceLoader(
     return plugin_loader;
 }
 
+const char* Level256StartScanBufferStatusName(Level256StartScanBufferStatus status) {
+    switch (status) {
+    case Level256StartScanBufferStatus::Valid:
+        return "valid";
+    case Level256StartScanBufferStatus::InvalidRequestShape:
+        return "invalid_request_shape";
+    case Level256StartScanBufferStatus::InvalidDescriptor:
+        return "invalid_descriptor";
+    case Level256StartScanBufferStatus::BufferTooSmall:
+        return "buffer_too_small";
+    case Level256StartScanBufferStatus::NullPointer:
+        return "null_pointer";
+    case Level256StartScanBufferStatus::AddressOverflow:
+        return "address_overflow";
+    case Level256StartScanBufferStatus::UnreadableAddress:
+        return "unreadable_address";
+    }
+    return "unknown";
+}
+
 } // namespace
+
+Level256BeaconReplySnapshot ReadLevel256BeaconReplySnapshot(
+    Memory::MemorySystem& memory, const Process& process,
+    const Level256StartScanBuffer& output_buffer) {
+    Level256BeaconReplySnapshot snapshot{};
+    if (output_buffer.status != Level256StartScanBufferStatus::Valid) {
+        snapshot.status = output_buffer.status;
+        return snapshot;
+    }
+    snapshot.status = ValidateLevel256BeaconReplyRange(
+        output_buffer.output_address,
+        std::min(output_buffer.mapped_size, output_buffer.request_max_size),
+        Memory::CITRA_PAGE_SIZE,
+        [&memory, &process](VAddr page) { return memory.IsValidVirtualAddress(process, page); });
+    if (snapshot.status != Level256StartScanBufferStatus::Valid) {
+        return snapshot;
+    }
+
+    std::array<u32, LEVEL256_BEACON_REPLY_HEADER_SIZE / sizeof(u32)> fields{};
+    memory.ReadBlock(process, output_buffer.output_address, fields.data(), sizeof(fields));
+    snapshot.max_size = fields[0];
+    snapshot.size = fields[1];
+    snapshot.total_entries = fields[2];
+    return snapshot;
+}
 
 template <class Archive>
 void ServerSession::serialize(Archive& ar, const unsigned int) {
@@ -183,6 +230,34 @@ Result ServerSession::ReceiveRequest(std::shared_ptr<Thread> thread) {
     const u32 request_header =
         client_process ? kernel.memory.Read32(*client_process, source_address) : 0;
     const IPC::Header decoded_request{request_header};
+    level256_start_scan_buffer.reset();
+    level256_start_scan_client_session_id = 0;
+    if (decoded_request.command_id == 15 && plugin_loader) {
+        std::array<u32, LEVEL256_START_SCAN_POINTER_WORD + 1> request_words{};
+        kernel.memory.ReadBlock(*client_process, source_address, request_words.data(),
+                                sizeof(request_words));
+        const auto output_buffer = DecodeLevel256StartScanBuffer(request_words);
+        if (output_buffer.status != Level256StartScanBufferStatus::InvalidRequestShape) {
+            level256_start_scan_buffer = output_buffer;
+            level256_start_scan_client_session_id = parent->client->GetObjectId();
+            const auto before =
+                ReadLevel256BeaconReplySnapshot(kernel.memory, *client_process, output_buffer);
+            if (plugin_loader->ConsumeLevel256NetworkIPCTraceSlot()) {
+                LOG_INFO(Kernel_SVC,
+                         "Level256 StartScan output snapshot stage=request_before_delivery "
+                         "client_pid={} client_thread={} client_session={} request_header=0x{:08X} "
+                         "request_maxsize=0x{:08X} descriptor=0x{:08X} mapped_size=0x{:08X} "
+                         "output_ptr=0x{:08X} status={} maxsize=0x{:08X} size=0x{:08X} "
+                         "total_entries={}",
+                         client_process->process_id, currently_handling->GetThreadId(),
+                         level256_start_scan_client_session_id, request_header,
+                         output_buffer.request_max_size, output_buffer.descriptor,
+                         output_buffer.mapped_size, output_buffer.output_address,
+                         Level256StartScanBufferStatusName(before.status), before.max_size,
+                         before.size, before.total_entries);
+            }
+        }
+    }
     const auto result =
         TranslateCommandBuffer(kernel, kernel.memory, currently_handling, thread, source_address,
                                target_address, mapped_buffer_context, false);
@@ -234,6 +309,28 @@ Result ServerSession::ReplyRequest(std::shared_ptr<Thread> thread) {
     const auto result =
         TranslateCommandBuffer(kernel, kernel.memory, thread, request_thread, source_address,
                                target_address, mapped_buffer_context, true);
+    if (decoded_request.command_id == 15 && plugin_loader && level256_start_scan_buffer &&
+        parent->client && parent->client->GetObjectId() == level256_start_scan_client_session_id) {
+        const auto after = client_process
+                               ? ReadLevel256BeaconReplySnapshot(kernel.memory, *client_process,
+                                                                 *level256_start_scan_buffer)
+                               : Level256BeaconReplySnapshot{};
+        if (plugin_loader->ConsumeLevel256NetworkIPCTraceSlot()) {
+            LOG_INFO(Kernel_SVC,
+                     "Level256 StartScan output snapshot stage=reply_immediate "
+                     "client_pid={} client_thread={} client_session={} output_ptr=0x{:08X} "
+                     "mapped_size=0x{:08X} status={} maxsize=0x{:08X} size=0x{:08X} "
+                     "total_entries={} async_updates_possible=true translate_result=0x{:08X}",
+                     client_process ? client_process->process_id : 0, request_thread->GetThreadId(),
+                     level256_start_scan_client_session_id,
+                     level256_start_scan_buffer->output_address,
+                     level256_start_scan_buffer->mapped_size,
+                     Level256StartScanBufferStatusName(after.status), after.max_size, after.size,
+                     after.total_entries, result.raw);
+        }
+        level256_start_scan_buffer.reset();
+        level256_start_scan_client_session_id = 0;
+    }
     if ((decoded_request.command_id == 15 || decoded_request.command_id == 100) && plugin_loader &&
         plugin_loader->ConsumeLevel256NetworkIPCTraceSlot()) {
         const u32 client_response_header =
