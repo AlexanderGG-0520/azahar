@@ -770,26 +770,25 @@ Result SVC::SendSyncRequest(Handle handle) {
                 plugin_loader->GetLumaExtensionAuthorization(process->codeset->program_id);
             const auto& context = plugin_loader->GetLumaCompatibilityContext(
                 Settings::values.level256_compatibility_enabled.GetValue());
+            srv = system.ServiceManager().GetService<Service::SM::SRV>("srv:");
+            const bool process_redirect_active =
+                srv && srv->IsLevel256Connected(process->process_id);
             level256_uds_control =
                 uds_client && Luma3DS::CanDispatchLevel256IPC(
                                   context, level256_ipc_authorization, process->process_id,
                                   GetReg(15), Luma3DS::Level256Capability::PluginUdsControlIPC);
-            level256_uds_data =
-                uds_client && Luma3DS::CanDispatchLevel256IPC(
-                                  context, level256_ipc_authorization, process->process_id,
-                                  GetReg(15), Luma3DS::Level256Capability::PluginUdsDataIPC);
-            level256_ndm_control =
-                ndm_client && Luma3DS::CanDispatchLevel256IPC(
-                                  context, level256_ipc_authorization, process->process_id,
-                                  GetReg(15), Luma3DS::Level256Capability::NdmControlIPC);
-            level256_soc_attach =
-                soc_client && Luma3DS::CanDispatchLevel256IPC(
-                                  context, level256_ipc_authorization, process->process_id,
-                                  GetReg(15), Luma3DS::Level256Capability::SocAttachIPC);
-            if (level256_uds_control || level256_uds_data || level256_ndm_control ||
-                level256_soc_attach) {
-                srv = system.ServiceManager().GetService<Service::SM::SRV>("srv:");
-            }
+            level256_uds_data = uds_client && Luma3DS::CanDispatchLevel256RoutedIPC(
+                                                  context, level256_ipc_authorization,
+                                                  process->process_id, process_redirect_active,
+                                                  Luma3DS::Level256Capability::PluginUdsDataIPC);
+            level256_ndm_control = ndm_client && Luma3DS::CanDispatchLevel256RoutedIPC(
+                                                     context, level256_ipc_authorization,
+                                                     process->process_id, process_redirect_active,
+                                                     Luma3DS::Level256Capability::NdmControlIPC);
+            level256_soc_attach = soc_client && Luma3DS::CanDispatchLevel256RoutedIPC(
+                                                    context, level256_ipc_authorization,
+                                                    process->process_id, process_redirect_active,
+                                                    Luma3DS::Level256Capability::SocAttachIPC);
         }
     }
     const VAddr command_address = thread->GetCommandBufferAddress();

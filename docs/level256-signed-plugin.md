@@ -33,9 +33,9 @@ blanket permission: each operation retains its existing handler-level checks.
 | `DataCacheMaintenance` | Luma SVCs `0x91`/`0x92` | Existing cache-operation handlers; they do not grant memory-write access. |
 | `InstructionCacheMaintenance` | Luma SVCs `0x93`/`0x94` | Existing cache invalidation handlers; they do not grant memory-write access. |
 | `PluginUdsControlIPC` | `plg:UDS_Client` control IPC | Only the existing `ProcessPlgUdsControl` command/header/owner checks can alter Level256 connection state. |
-| `PluginUdsDataIPC` | `plg:UDS_Client` data IPC | Only command IDs and parameter shapes recognized by `TranslateLevel256UdsCommand` are translated; all other requests pass through unchanged. |
-| `NdmControlIPC` | `ndm:u_Client` | Only header `0x00010042`, argument `2`, while connected and unpaused is normalized to `1`. |
-| `SocAttachIPC` | `soc:U_Client` | Only the existing exact attach/detach headers trigger the plugin event path; requests still use the normal session. |
+| `PluginUdsDataIPC` | `plg:UDS_Client` data IPC | Requires an active PLGUDS redirect established by the verified owner process; only command IDs and parameter shapes recognized by `TranslateLevel256UdsCommand` are translated; all other requests pass through unchanged. |
+| `NdmControlIPC` | `ndm:u_Client` | Requires the active owner-process redirect; only header `0x00010042`, argument `2`, while connected and unpaused is normalized to `1`. |
+| `SocAttachIPC` | `soc:U_Client` | Requires the active owner-process redirect; only the existing exact attach/detach headers trigger the plugin event path; requests still use the normal session. |
 | `MapProcessMemoryEx` | Luma SVC `0xA0` | Both official wrapper ABIs are decoded; handles, flags, page truncation, source backing, destination-Free state, range overflow and non-executable RW permissions are validated before alias mapping. |
 | `Level256LFCS` | `plg:ldr` command `0x2560` | Exact IPC header, PID and writable mapped-buffer shape; caller PID must own the plugin and match the PID descriptor; output is zeroed on denial and requests are rate limited. Seed data is still validated by its existing cryptographic loader. |
 
@@ -58,10 +58,14 @@ view layout follows Azahar's emulated hardware model. Unknown or modified callba
 unhandled. The signature matcher does not execute guest callbacks as host code.
 
 `PluginUdsControlIPC`, `PluginUdsDataIPC`, `NdmControlIPC`, and `SocAttachIPC` are narrow adapters
-inside the normal `SendSyncRequest` path. They match specific service names and command/header
-shapes, then preserve ordinary IPC forwarding for commands they do not handle. Service redirection
-can route the documented DLP ports to their HLE endpoints when the per-process UDS state enables
-it. This does not make all `plg:DLP`, `plg:FKCL`, UDS, NDM, or SOC commands Level256-compatible.
+inside the normal `SendSyncRequest` path. The control adapter remains restricted to a verified
+plugin-PC call because it establishes the process redirect state. After that state is active,
+Luma's UDS command-shape, NDM, and SOC hooks apply to requests from the owning process, including
+game code executing outside the plugin mapping. Azahar scopes those routed adapters to the verified
+plugin owner, an active per-process redirect, the corresponding individual capability, and exact
+service/command shapes. Unmatched requests retain ordinary IPC forwarding. Service redirection can
+route the documented DLP ports to their HLE endpoints when the per-process UDS state enables it.
+This does not make all `plg:DLP`, `plg:FKCL`, UDS, NDM, or SOC commands Level256-compatible.
 `QueryProcessMemory`, `OpenProcess`, thread creation, and event observations remain ordinary 3DS
 SVC behavior or bounded diagnostics; they are not turned into generic success responses. See the
 [Luma3DS compatibility matrix](level256-luma3ds-compatibility-matrix.md) for the audited surface.

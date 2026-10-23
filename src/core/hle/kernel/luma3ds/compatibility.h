@@ -184,6 +184,20 @@ constexpr bool CanDispatchLevel256IPC(const CompatibilityContext& context,
     return context.enabled && authorization.Authorizes(process_id, pc, capability);
 }
 
+/// Luma's SendSyncRequest hook applies UDS/NDM/SOC rewrites to the whole process after the
+/// verified plugin initializes the PLGUDS redirect. The originating game PC is not necessarily
+/// in the plugin mapping, so routed calls use the established process redirect as their scope.
+constexpr bool CanDispatchLevel256RoutedIPC(const CompatibilityContext& context,
+                                            const PluginAuthorization& authorization,
+                                            u32 process_id, bool redirect_active,
+                                            Level256Capability capability) {
+    return context.enabled && redirect_active && authorization.plugin_loaded &&
+           authorization.plugin_integrity_verified && authorization.owner_process_id != 0 &&
+           authorization.plugin_code_begin < authorization.plugin_code_end &&
+           authorization.owner_process_id == process_id &&
+           HasCapability(authorization.capabilities, capability);
+}
+
 SvcDispatchOutcome DispatchExtensionSvc(const SvcRequest& request,
                                         const CompatibilityContext& context,
                                         const PluginAuthorization& authorization);

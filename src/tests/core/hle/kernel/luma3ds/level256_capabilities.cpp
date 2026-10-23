@@ -88,6 +88,45 @@ TEST_CASE("Level256 IPC adapters require their own capability and owner code sco
                                          Level256Capability::PluginUdsDataIPC));
 }
 
+TEST_CASE("Level256 process-routed IPC requires an active verified service redirect",
+          "[core][kernel][luma3ds][level256][capability]") {
+    using namespace Kernel::Luma3DS;
+
+    const CompatibilityContext enabled{.enabled = true};
+    const PluginAuthorization auth{
+        .plugin_loaded = true,
+        .plugin_integrity_verified = true,
+        .owner_process_id = 16,
+        .plugin_code_begin = 0x07000100,
+        .plugin_code_end = 0x07100000,
+        .capabilities = CapabilityBit(Level256Capability::PluginUdsDataIPC),
+    };
+
+    REQUIRE(CanDispatchLevel256RoutedIPC(enabled, auth, 16, true,
+                                         Level256Capability::PluginUdsDataIPC));
+    REQUIRE_FALSE(CanDispatchLevel256RoutedIPC(enabled, auth, 16, false,
+                                               Level256Capability::PluginUdsDataIPC));
+    REQUIRE_FALSE(CanDispatchLevel256RoutedIPC(enabled, auth, 17, true,
+                                               Level256Capability::PluginUdsDataIPC));
+    REQUIRE_FALSE(CanDispatchLevel256RoutedIPC(enabled, auth, 16, true,
+                                               Level256Capability::PluginUdsControlIPC));
+    REQUIRE_FALSE(CanDispatchLevel256RoutedIPC({.enabled = false}, auth, 16, true,
+                                               Level256Capability::PluginUdsDataIPC));
+
+    auto invalid_range = auth;
+    invalid_range.plugin_code_end = invalid_range.plugin_code_begin;
+    REQUIRE_FALSE(CanDispatchLevel256RoutedIPC(enabled, invalid_range, 16, true,
+                                               Level256Capability::PluginUdsDataIPC));
+    auto unverified = auth;
+    unverified.plugin_integrity_verified = false;
+    REQUIRE_FALSE(CanDispatchLevel256RoutedIPC(enabled, unverified, 16, true,
+                                               Level256Capability::PluginUdsDataIPC));
+    auto unloaded = auth;
+    unloaded.plugin_loaded = false;
+    REQUIRE_FALSE(CanDispatchLevel256RoutedIPC(enabled, unloaded, 16, true,
+                                               Level256Capability::PluginUdsDataIPC));
+}
+
 TEST_CASE("Level256 extension dispatch checks each supported SVC capability independently",
           "[core][kernel][luma3ds][level256][capability]") {
     using namespace Kernel::Luma3DS;
