@@ -24,6 +24,7 @@
 #pragma once
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <unordered_set>
@@ -93,6 +94,15 @@ public:
         bool level256_bootloader_return_trace_started = false;
         // Transient diagnostics; intentionally omitted from savestates.
         u32 plugin_query_process_memory_failures = 0;
+        // Distinct register patterns only, bounded to eight calls per SVC and plugin load.
+        std::array<Kernel::Level256SvcDiagnosticPattern,
+                   Kernel::LEVEL256_SVC_DIAGNOSTIC_PATTERN_LIMIT>
+            level256_custom_backdoor_patterns{};
+        std::size_t level256_custom_backdoor_pattern_count = 0;
+        std::array<Kernel::Level256SvcDiagnosticPattern,
+                   Kernel::LEVEL256_SVC_DIAGNOSTIC_PATTERN_LIMIT>
+            level256_open_process_patterns{};
+        std::size_t level256_open_process_pattern_count = 0;
         // A one-shot, bounded trace for the verified Level256 worker's OpenProcess path.
         // Transient diagnostic state; intentionally omitted from savestates.
         bool level256_open_process_trace_started = false;

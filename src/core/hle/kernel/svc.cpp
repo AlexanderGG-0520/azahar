@@ -1705,8 +1705,7 @@ Result SVC::CreateThread(Handle* out_handle, u32 entry_point, u32 arg, VAddr sta
               entry_point, name, arg, stack_top, priority, processor_id);
 
     const Result result = current_process->handle_table.Create(out_handle, std::move(thread));
-    if (result.IsSuccess() && entry_point == LEVEL256_WORKER_THREAD_ENTRY &&
-        current_process->codeset) {
+    if (result.IsSuccess() && current_process->codeset) {
         const auto plugin_loader = Service::PLGLDR::GetService(system);
         if (plugin_loader) {
             auto& context = plugin_loader->GetPluginLoaderContext();
@@ -1730,7 +1729,7 @@ Result SVC::CreateThread(Handle* out_handle, u32 entry_point, u32 arg, VAddr sta
                             LEVEL256_OPEN_PROCESS_TRACE_LIMIT, true, true);
                     LOG_INFO(Kernel_SVC,
                              "Level256 OpenProcess ARM trace armed: pid={} thread={} "
-                             "entry=0x{:08X} core={} instruction_limit={}",
+                             "plugin_thread_entry=0x{:08X} core={} instruction_limit={}",
                              current_process->process_id, created_thread->GetThreadId(),
                              entry_point, created_thread->processor_id,
                              LEVEL256_OPEN_PROCESS_TRACE_LIMIT);
@@ -2979,7 +2978,75 @@ void SVC::CallSVC(u32 immediate) {
                                          .arguments = svc_registers};
     const auto luma_dispatch = Luma3DS::DispatchExtensionSvc(
         luma_svc_request, luma_compatibility_context, luma_plugin_authorization);
+    const auto custom_backdoor_status_name = [](Luma3DS::CustomBackdoorStatus status) {
+        switch (status) {
+        case Luma3DS::CustomBackdoorStatus::NotApplicable:
+            return "not_applicable";
+        case Luma3DS::CustomBackdoorStatus::Rejected:
+            return "rejected";
+        case Luma3DS::CustomBackdoorStatus::Unsupported:
+            return "eligible_for_backend";
+        }
+        return "unknown";
+    };
+    const auto log_custom_backdoor_pattern = [&](Luma3DS::CustomBackdoorStatus status,
+                                                 const char* dispatch_status, bool backend_called,
+                                                 bool handled, u32 result) {
+        if (immediate != LEVEL256_CUSTOM_BACKDOOR_SVC_ID || !plugin_loader || !process || !thread ||
+            !process->codeset || !level256_official_plugin_context ||
+            process->codeset->program_id != LEVEL256_BOOTLOADER_DIAGNOSTIC_TITLE_ID) {
+            return false;
+        }
+        auto& context = plugin_loader->GetPluginLoaderContext();
+        const Level256SvcDiagnosticPattern pattern{immediate, in_pc, {in_r0, in_r1, in_r2, in_r3}};
+        if (!Kernel::RecordLevel256SvcDiagnosticPattern(
+                context.level256_custom_backdoor_patterns,
+                context.level256_custom_backdoor_pattern_count, pattern)) {
+            return false;
+        }
+
+        std::array<u32, 4> callback_words{};
+        bool callback_code_readable = false;
+        const u64 callback_end = static_cast<u64>(in_r0) + sizeof(callback_words);
+        const bool callback_in_plugin = in_r0 >= context.plugin_code_begin &&
+                                        callback_end <= context.plugin_code_end &&
+                                        callback_end <= (u64{1} << 32);
+        if (callback_in_plugin) {
+            callback_code_readable = true;
+            for (std::size_t i = 0; i < callback_words.size(); ++i) {
+                const VAddr address = in_r0 + static_cast<VAddr>(i * sizeof(u32));
+                if (!memory.IsValidVirtualAddress(*process, address)) {
+                    callback_code_readable = false;
+                    break;
+                }
+                callback_words[i] = memory.Read32(*process, address);
+            }
+        }
+
+        const bool callback_valid = Luma3DS::IsValidCustomBackdoorCallback(
+            luma_compatibility_context, luma_plugin_authorization, process->process_id, in_r0);
+        LOG_WARNING(Kernel_SVC,
+                    "Level256 CustomBackdoor diagnostic: pid={} thread={} title={:016X} "
+                    "svc_return_pc=0x{:08X} callback=0x{:08X} args=0x{:08X},0x{:08X},0x{:08X} "
+                    "code=0x{:08X}-0x{:08X} identity_verified={} callback_valid={} "
+                    "callback_words_valid={} callback_words=0x{:08X},0x{:08X},0x{:08X},0x{:08X} "
+                    "dispatch={} validation={} backend_called={} handled={} result=0x{:08X} "
+                    "distinct_pattern={}/{}",
+                    process->process_id, thread->GetThreadId(), process->codeset->program_id, in_pc,
+                    in_r0, in_r1, in_r2, in_r3, context.plugin_code_begin, context.plugin_code_end,
+                    context.level256_plugin_identity_verified, callback_valid,
+                    callback_code_readable, callback_words[0], callback_words[1], callback_words[2],
+                    callback_words[3], dispatch_status, custom_backdoor_status_name(status),
+                    backend_called, handled, result, context.level256_custom_backdoor_pattern_count,
+                    Kernel::LEVEL256_SVC_DIAGNOSTIC_PATTERN_LIMIT);
+        return true;
+    };
     if (luma_dispatch.kind == Luma3DS::SvcDispatchKind::Rejected) {
+        if (immediate == LEVEL256_CUSTOM_BACKDOOR_SVC_ID) {
+            const auto status = Luma3DS::ValidateCustomBackdoorRequest(
+                luma_svc_request, luma_compatibility_context, luma_plugin_authorization);
+            log_custom_backdoor_pattern(status, "rejected", false, false, ResultNotImplemented.raw);
+        }
         if (plugin_loader && process && thread &&
             plugin_loader->GetPluginLoaderContext().plugin_loaded &&
             plugin_loader->GetPluginLoaderContext().plugin_process_id == process->process_id) {
@@ -3147,49 +3214,51 @@ void SVC::CallSVC(u32 immediate) {
                      level256_waiters_before.size(), waiters_after.size(), resumed_threads);
         }
 
-        if (level256_plugin_context && immediate == 0x33 && in_pc == 0x070A1320) {
-            // OpenProcess's pointer output occupies r0; the process ID remains in r1 per the
-            // ARM SVC ABI. The returned handle is in r1 after dispatch.
-            const auto target = kernel.GetProcessById(in_r1);
-            const VAddr stack_pointer = GetReg(13);
-            const auto read_stack_word = [&](u32 offset) {
-                const u64 address = static_cast<u64>(stack_pointer) + offset;
-                if (address > 0xFFFFFFFFULL ||
-                    !memory.IsValidVirtualAddress(*process, static_cast<VAddr>(address))) {
-                    return 0xFFFFFFFF;
-                }
-                return memory.Read32(*process, static_cast<VAddr>(address));
-            };
-            // OpenProcess's caller has two paths: r5 == 0 loads its PID from caller [sp+0xC4],
-            // otherwise it loads caller [sp+0xC8]. The wrapper has pushed its output pointer, so
-            // the corresponding SVC-entry offsets are +0xC8 and +0xCC.
-            const u32 stack_c4 = read_stack_word(0xC8);
-            const u32 stack_c8 = read_stack_word(0xCC);
-            LOG_WARNING(Kernel_SVC,
-                        "Level256 OpenProcess: caller_pid={} thread={} pc=0x{:08X} "
-                        "target_pid={} target_present={} target_title={:016X} "
-                        "output_address=0x{:08X} result=0x{:08X} output_handle=0x{:08X} "
-                        "lr=0x{:08X} r5=0x{:08X} sp=0x{:08X} stack_c4=0x{:08X} "
-                        "stack_c8=0x{:08X} selected_stack_pid=0x{:08X}",
-                        process->process_id, thread ? thread->GetThreadId() : 0, in_pc, in_r1,
-                        static_cast<bool>(target),
-                        target && target->codeset ? target->codeset->program_id : 0, in_r0,
-                        GetReg(0), GetReg(1), GetReg(14), GetReg(5), stack_pointer, stack_c4,
-                        stack_c8, GetReg(5) == 0 ? stack_c4 : stack_c8);
+        if (level256_official_plugin_context && immediate == 0x33 && process->codeset &&
+            process->codeset->program_id == LEVEL256_BOOTLOADER_DIAGNOSTIC_TITLE_ID) {
+            auto& context = plugin_loader->GetPluginLoaderContext();
+            const Level256SvcDiagnosticPattern pattern{
+                immediate, in_pc, {in_r0, in_r1, in_r2, in_r3}};
+            if (RecordLevel256SvcDiagnosticPattern(context.level256_open_process_patterns,
+                                                   context.level256_open_process_pattern_count,
+                                                   pattern)) {
+                const auto target = kernel.GetProcessById(in_r1);
+                const Handle returned_handle = GetReg(1);
+                const auto returned_process = process->handle_table.Get<Process>(returned_handle);
+                LOG_WARNING(Kernel_SVC,
+                            "Level256 OpenProcess diagnostic: pid={} thread={} "
+                            "svc_return_pc=0x{:08X} request_r0=0x{:08X} requested_pid={} "
+                            "target_present={} target_title={:016X} result=0x{:08X} "
+                            "returned_handle=0x{:08X} handle_valid={} handle_pid={} "
+                            "distinct_pattern={}/{}",
+                            process->process_id, thread->GetThreadId(), in_pc, in_r0, in_r1,
+                            static_cast<bool>(target),
+                            target && target->codeset ? target->codeset->program_id : 0, GetReg(0),
+                            returned_handle, static_cast<bool>(returned_process),
+                            returned_process ? returned_process->process_id : UINT32_MAX,
+                            context.level256_open_process_pattern_count,
+                            LEVEL256_SVC_DIAGNOSTIC_PATTERN_LIMIT);
+            }
         }
 
-        if (level256_plugin_context && immediate == LEVEL256_QUERY_PROCESS_MEMORY_SVC_ID &&
-            in_pc == LEVEL256_QUERY_PROCESS_MEMORY_SVC_PC &&
+        if (level256_official_plugin_context && immediate == LEVEL256_QUERY_PROCESS_MEMORY_SVC_ID &&
             GetReg(0) == LEVEL256_QUERY_PROCESS_MEMORY_FAILURE &&
             plugin_loader->GetPluginLoaderContext().level256_plugin_identity_verified) {
             auto& plugin_context = plugin_loader->GetPluginLoaderContext();
             auto& failure_count = plugin_context.plugin_query_process_memory_failures;
             if (RecordLevel256QueryProcessMemoryFailure(failure_count)) {
+                const auto queried_process = process->handle_table.Get<Process>(in_r2);
                 LOG_WARNING(Kernel_SVC,
                             "Level256 QueryProcessMemory failure: caller_pid={} thread={} "
-                            "pc=0x{:08X} process_handle=0x{:08X} address=0x{:08X} "
+                            "svc_return_pc=0x{:08X} process_handle=0x{:08X} handle_valid={} "
+                            "target_pid={} target_title={:016X} address=0x{:08X} "
                             "result=0x{:08X} aggregated_failures={}",
-                            process->process_id, thread ? thread->GetThreadId() : 0, in_pc, in_r2,
+                            process->process_id, thread->GetThreadId(), in_pc, in_r2,
+                            static_cast<bool>(queried_process),
+                            queried_process ? queried_process->process_id : UINT32_MAX,
+                            queried_process && queried_process->codeset
+                                ? queried_process->codeset->program_id
+                                : 0,
                             in_r3, GetReg(0), failure_count);
             }
         }
@@ -3269,12 +3338,17 @@ void SVC::CallSVC(u32 immediate) {
                 thread ? thread->thread_id : 0, in_pc, in_r0, in_r1, in_r2, in_r3, out_r0);
         }
     } else {
+        bool custom_backdoor_pattern_recorded = false;
         if (immediate == Kernel::LEVEL256_CUSTOM_BACKDOOR_SVC_ID && process && thread &&
             plugin_loader &&
             luma_dispatch.kind == Luma3DS::SvcDispatchKind::DelegateToRegisteredHandler) {
             const auto common_status = Luma3DS::ValidateCustomBackdoorRequest(
                 luma_svc_request, luma_compatibility_context, luma_plugin_authorization);
+            bool backend_called = false;
+            bool backend_handled = false;
+            u32 backend_result = ResultNotImplemented.raw;
             if (common_status == Luma3DS::CustomBackdoorStatus::Unsupported) {
+                backend_called = true;
                 const auto backdoor = Luma3DS::HandleLevel256CustomBackdoor(
                     system, memory, process, thread, plugin_loader->GetPluginLoaderContext(),
                     plugin_loader->GetProcessViewManager(), luma_compatibility_context,
@@ -3285,6 +3359,13 @@ void SVC::CallSVC(u32 immediate) {
                     return;
                 }
             }
+            custom_backdoor_pattern_recorded = log_custom_backdoor_pattern(
+                common_status, "delegated", backend_called, backend_handled, backend_result);
+        } else if (immediate == Kernel::LEVEL256_CUSTOM_BACKDOOR_SVC_ID) {
+            const auto common_status = Luma3DS::ValidateCustomBackdoorRequest(
+                luma_svc_request, luma_compatibility_context, luma_plugin_authorization);
+            custom_backdoor_pattern_recorded = log_custom_backdoor_pattern(
+                common_status, "not_delegated", false, false, ResultNotImplemented.raw);
         }
 
         if (level256_plugin_context && immediate == 0xA3 && process && thread) {
@@ -3329,12 +3410,15 @@ void SVC::CallSVC(u32 immediate) {
             }
         }
 
-        LOG_ERROR(Kernel_SVC,
-                  "unimplemented SVC id=0x{:02X} name={} pid={} title_id={:016X} thread={} "
-                  "pc=0x{:08X}",
-                  info->id, info->name, process ? process->process_id : 0,
-                  process && process->codeset ? process->codeset->program_id : 0,
-                  thread ? thread->thread_id : 0, in_pc);
+        if (!(immediate == Kernel::LEVEL256_CUSTOM_BACKDOOR_SVC_ID &&
+              level256_official_plugin_context && !custom_backdoor_pattern_recorded)) {
+            LOG_ERROR(Kernel_SVC,
+                      "unimplemented SVC id=0x{:02X} name={} pid={} title_id={:016X} thread={} "
+                      "pc=0x{:08X}",
+                      info->id, info->name, process ? process->process_id : 0,
+                      process && process->codeset ? process->codeset->program_id : 0,
+                      thread ? thread->thread_id : 0, in_pc);
+        }
         if (Luma3DS::IsExtensionSVC(immediate)) {
             // A recognized extension with no safe HLE implementation must fail explicitly;
             // returning the callback pointer or an old guest register value would look successful.

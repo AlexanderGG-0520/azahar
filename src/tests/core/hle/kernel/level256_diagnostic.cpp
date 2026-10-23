@@ -234,7 +234,7 @@ TEST_CASE("Level256 emulator marker applies to supported titles without changing
     REQUIRE(output == 2);
 }
 
-TEST_CASE("Level256 OpenProcess trace arms only for the official worker entry",
+TEST_CASE("Level256 OpenProcess trace uses the active plugin thread entry range",
           "[core][kernel][level256]") {
     using Kernel::LEVEL256_DIAGNOSTIC_CODE_BEGIN;
     using Kernel::LEVEL256_DIAGNOSTIC_CODE_END;
@@ -255,19 +255,23 @@ TEST_CASE("Level256 OpenProcess trace arms only for the official worker entry",
 
     REQUIRE(matches());
     REQUIRE(matches(true, true, 0x000400000016C700ULL));
+    REQUIRE(matches(true, true, 0x000400000016C700ULL, 16, 16, true, 0x07000100, 0x0710A000,
+                    0x07016E00));
     REQUIRE_FALSE(matches(false));
     REQUIRE_FALSE(matches(true, false));
     REQUIRE_FALSE(matches(true, true, LEVEL256_DIAGNOSTIC_TITLE_ID + 1));
     REQUIRE_FALSE(matches(true, true, LEVEL256_DIAGNOSTIC_TITLE_ID, 17));
     REQUIRE_FALSE(matches(true, true, LEVEL256_DIAGNOSTIC_TITLE_ID, 16, 17));
     REQUIRE_FALSE(matches(true, true, LEVEL256_DIAGNOSTIC_TITLE_ID, 16, 16, false));
+    REQUIRE(matches(true, true, LEVEL256_DIAGNOSTIC_TITLE_ID, 16, 16, true,
+                    LEVEL256_DIAGNOSTIC_CODE_BEGIN + 4, LEVEL256_DIAGNOSTIC_CODE_END + 0x1000,
+                    0x07016E00));
     REQUIRE_FALSE(matches(true, true, LEVEL256_DIAGNOSTIC_TITLE_ID, 16, 16, true,
-                          LEVEL256_DIAGNOSTIC_CODE_BEGIN + 4));
-    REQUIRE_FALSE(matches(true, true, LEVEL256_DIAGNOSTIC_TITLE_ID, 16, 16, true,
-                          LEVEL256_DIAGNOSTIC_CODE_BEGIN, LEVEL256_DIAGNOSTIC_CODE_END - 4));
+                          LEVEL256_DIAGNOSTIC_CODE_BEGIN, LEVEL256_WORKER_THREAD_ENTRY,
+                          LEVEL256_WORKER_THREAD_ENTRY));
     REQUIRE_FALSE(matches(true, true, LEVEL256_DIAGNOSTIC_TITLE_ID, 16, 16, true,
                           LEVEL256_DIAGNOSTIC_CODE_BEGIN, LEVEL256_DIAGNOSTIC_CODE_END,
-                          LEVEL256_WORKER_THREAD_ENTRY + 4));
+                          LEVEL256_DIAGNOSTIC_CODE_END));
     REQUIRE_FALSE(matches(true, true, LEVEL256_DIAGNOSTIC_TITLE_ID, 16, 16, true,
                           LEVEL256_DIAGNOSTIC_CODE_BEGIN, LEVEL256_DIAGNOSTIC_CODE_END,
                           LEVEL256_WORKER_THREAD_ENTRY, true));
@@ -480,6 +484,8 @@ TEST_CASE("Level256 duplicate SVC errors are suppressed only for exact QPM failu
     };
     REQUIRE(matches());
     REQUIRE(matches(true, true, 0x000400000016C700ULL));
+    REQUIRE(matches(true, true, 0x000400000016C700ULL, 16, 16, true, 0x07000100, 0x0710A000,
+                    0x0709D244));
     REQUIRE_FALSE(matches(false));
     REQUIRE_FALSE(matches(true, false));
     REQUIRE_FALSE(matches(true, true, LEVEL256_DIAGNOSTIC_TITLE_ID + 1));
@@ -490,9 +496,9 @@ TEST_CASE("Level256 duplicate SVC errors are suppressed only for exact QPM failu
                     LEVEL256_DIAGNOSTIC_CODE_BEGIN + 4, LEVEL256_DIAGNOSTIC_CODE_END + 0x1000));
     REQUIRE_FALSE(matches(true, true, LEVEL256_DIAGNOSTIC_TITLE_ID, 16, 16, true,
                           LEVEL256_DIAGNOSTIC_CODE_BEGIN, LEVEL256_QUERY_PROCESS_MEMORY_SVC_PC));
-    REQUIRE_FALSE(matches(true, true, LEVEL256_DIAGNOSTIC_TITLE_ID, 16, 16, true,
-                          LEVEL256_DIAGNOSTIC_CODE_BEGIN, LEVEL256_DIAGNOSTIC_CODE_END,
-                          LEVEL256_QUERY_PROCESS_MEMORY_SVC_PC - 4));
+    REQUIRE(matches(true, true, LEVEL256_DIAGNOSTIC_TITLE_ID, 16, 16, true,
+                    LEVEL256_DIAGNOSTIC_CODE_BEGIN, LEVEL256_DIAGNOSTIC_CODE_END,
+                    LEVEL256_QUERY_PROCESS_MEMORY_SVC_PC - 4));
     REQUIRE_FALSE(matches(true, true, LEVEL256_DIAGNOSTIC_TITLE_ID, 16, 16, true,
                           LEVEL256_DIAGNOSTIC_CODE_BEGIN, LEVEL256_DIAGNOSTIC_CODE_END,
                           LEVEL256_QUERY_PROCESS_MEMORY_SVC_PC, 0x33));
@@ -500,6 +506,43 @@ TEST_CASE("Level256 duplicate SVC errors are suppressed only for exact QPM failu
                           LEVEL256_DIAGNOSTIC_CODE_BEGIN, LEVEL256_DIAGNOSTIC_CODE_END,
                           LEVEL256_QUERY_PROCESS_MEMORY_SVC_PC,
                           LEVEL256_QUERY_PROCESS_MEMORY_SVC_ID, 0xD8E007F6));
+}
+
+TEST_CASE("Level256 SVC diagnostics record distinct argument patterns at dynamic PCs",
+          "[core][kernel][level256]") {
+    std::array<Kernel::Level256SvcDiagnosticPattern, Kernel::LEVEL256_SVC_DIAGNOSTIC_PATTERN_LIMIT>
+        patterns{};
+    std::size_t count = 0;
+    const Kernel::Level256SvcDiagnosticPattern first{0x80, 0x0709D240, {0x070519B4, 1, 2, 3}};
+
+    REQUIRE(Kernel::RecordLevel256SvcDiagnosticPattern(patterns, count, first));
+    REQUIRE(count == 1);
+    REQUIRE_FALSE(Kernel::RecordLevel256SvcDiagnosticPattern(patterns, count, first));
+    REQUIRE(Kernel::RecordLevel256SvcDiagnosticPattern(patterns, count,
+                                                       {0x80, 0x0709D244, {0x0706263C, 4, 5, 6}}));
+    REQUIRE(count == 2);
+    for (u32 i = 2; i < Kernel::LEVEL256_SVC_DIAGNOSTIC_PATTERN_LIMIT; ++i) {
+        REQUIRE(Kernel::RecordLevel256SvcDiagnosticPattern(
+            patterns, count, {0x80, 0x0709D240 + i * 4, {0x07050000 + i, i, i, i}}));
+    }
+    REQUIRE(count == Kernel::LEVEL256_SVC_DIAGNOSTIC_PATTERN_LIMIT);
+    REQUIRE_FALSE(Kernel::RecordLevel256SvcDiagnosticPattern(
+        patterns, count, {0x80, 0x0709D300, {0x07053000, 7, 8, 9}}));
+    REQUIRE_FALSE(Kernel::RecordLevel256SvcDiagnosticPattern(patterns, count, first));
+    REQUIRE(count == Kernel::LEVEL256_SVC_DIAGNOSTIC_PATTERN_LIMIT);
+}
+
+TEST_CASE("CTRPF diagnostics are opt-in, identity-gated and scoped to the target title owner",
+          "[core][kernel][level256]") {
+    using namespace Kernel;
+    constexpr u64 title = LEVEL256_BOOTLOADER_DIAGNOSTIC_TITLE_ID;
+    REQUIRE(ShouldScanLevel256CtrpfOSD(true, true, title));
+    REQUIRE_FALSE(ShouldScanLevel256CtrpfOSD(false, true, title));
+    REQUIRE_FALSE(ShouldScanLevel256CtrpfOSD(true, false, title));
+    REQUIRE_FALSE(ShouldScanLevel256CtrpfOSD(true, true, LEVEL256_DIAGNOSTIC_TITLE_ID));
+    REQUIRE(ShouldCaptureLevel256CtrpfStartupDiagnostic(true, true, title, 16, 16, true));
+    REQUIRE_FALSE(ShouldCaptureLevel256CtrpfStartupDiagnostic(true, true, title, 16, 17, true));
+    REQUIRE_FALSE(ShouldCaptureLevel256CtrpfStartupDiagnostic(true, true, title, 16, 16, false));
 }
 
 TEST_CASE("Level256 field update callback mirrors verified ARM bit operations",

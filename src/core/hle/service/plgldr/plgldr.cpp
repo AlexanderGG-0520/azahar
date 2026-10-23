@@ -153,6 +153,10 @@ PLG_LDR::PLG_LDR(Core::System& system_) : ServiceFramework{"plg:ldr", 1}, system
     plgldr_context.plugin_instruction_trace_started = false;
     plgldr_context.plugin_service_trace_count = 0;
     plgldr_context.plugin_query_process_memory_failures = 0;
+    plgldr_context.level256_custom_backdoor_patterns = {};
+    plgldr_context.level256_custom_backdoor_pattern_count = 0;
+    plgldr_context.level256_open_process_patterns = {};
+    plgldr_context.level256_open_process_pattern_count = 0;
     plgldr_context.ResetTransientLevel256Authorization();
     plgldr_context.level256_open_process_trace_started = false;
     plgldr_context.level256_thread_create_log_count = 0;
@@ -208,6 +212,10 @@ void PLG_LDR::PluginLoaderContext::serialize(Archive& ar, const unsigned int) {
         // does not inherit a raw Process pointer or plugin trust across savestate loading.
         level256_open_process_trace_started = false;
         level256_thread_create_log_count = 0;
+        level256_custom_backdoor_patterns = {};
+        level256_custom_backdoor_pattern_count = 0;
+        level256_open_process_patterns = {};
+        level256_open_process_pattern_count = 0;
         ctrpf_hook_execution_trace_armed = false;
         ctrpf_hook_trace_process_id = UINT32_MAX;
         ctrpf_hook_target_instruction_executed = false;
@@ -531,11 +539,11 @@ void PLG_LDR::TraceLevel256BootloaderSnapshot(const Kernel::Process& process, co
 void PLG_LDR::TraceCtrpfStartupMemoryAccess(const Kernel::Process& process,
                                             const Kernel::Thread& thread, VAddr address, u32 size,
                                             bool is_write, u64 value, u32 pc, u32 lr) {
-    if (!Settings::values.level256_compatibility_enabled.GetValue() ||
-        !plgldr_context.ctrpf_startup_watchpoints_armed || !plgldr_context.plugin_loaded ||
-        !plgldr_context.level256_plugin_identity_verified ||
-        process.process_id != plgldr_context.plugin_process_id || !process.codeset ||
-        process.codeset->program_id != Kernel::LEVEL256_DIAGNOSTIC_TITLE_ID) {
+    if (!plgldr_context.ctrpf_startup_watchpoints_armed || !process.codeset ||
+        !Kernel::ShouldCaptureLevel256CtrpfStartupDiagnostic(
+            Settings::values.level256_compatibility_enabled.GetValue(),
+            plgldr_context.level256_plugin_identity_verified, process.codeset->program_id,
+            process.process_id, plgldr_context.plugin_process_id, plgldr_context.plugin_loaded)) {
         return;
     }
 
@@ -659,6 +667,10 @@ void PLG_LDR::OnProcessRun(Kernel::Process& process, Kernel::KernelSystem& kerne
     plgldr_context.plugin_instruction_trace_started = false;
     plgldr_context.plugin_service_trace_count = 0;
     plgldr_context.plugin_query_process_memory_failures = 0;
+    plgldr_context.level256_custom_backdoor_patterns = {};
+    plgldr_context.level256_custom_backdoor_pattern_count = 0;
+    plgldr_context.level256_open_process_patterns = {};
+    plgldr_context.level256_open_process_pattern_count = 0;
     plgldr_context.level256_lfcs_request_count = 0;
     if (!process_view_manager.ResetForNewPlugin(process)) {
         LOG_ERROR(Service_PLGLDR,

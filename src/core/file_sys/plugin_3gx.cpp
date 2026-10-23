@@ -256,11 +256,12 @@ Loader::ResultStatus FileSys::Plugin3GXLoader::Load(
         return Loader::ResultStatus::Error;
     }
 
-    // Read-only CTRPF OSD signature scan for the exact official Level256 binary and title. This
-    // records candidate locations before plugin execution; a match alone does not prove that the
-    // plugin's InstallOSD path reached or successfully enabled a hook.
-    if (plg_context.level256_official_plugin_hash_matches &&
-        process.codeset->program_id == Kernel::LEVEL256_DIAGNOSTIC_TITLE_ID) {
+    // Read-only CTRPF OSD signature scan for the explicitly enabled, verified Level256 identity
+    // and the target title. A signature scan match alone does not prove that InstallOSD enabled
+    // a hook.
+    if (Kernel::ShouldScanLevel256CtrpfOSD(
+            Settings::values.level256_compatibility_enabled.GetValue(),
+            plg_context.level256_plugin_identity_verified, process.codeset->program_id)) {
         const auto& code_segment = process.codeset->CodeSegment();
         plg_context.ctrpf_osd_scan = {};
         plg_context.ctrpf_osd_candidate_initial_words = {};
@@ -493,14 +494,18 @@ Loader::ResultStatus FileSys::Plugin3GXLoader::Map(
     plg_context.ctrpf_osd_candidate_execution_seen = false;
     const bool level256_diagnostic_enabled =
         Settings::values.level256_compatibility_enabled.GetValue();
-    const bool level256_diagnostic_title_matches =
-        process.codeset && process.codeset->program_id == Kernel::LEVEL256_DIAGNOSTIC_TITLE_ID;
-    if (plg_context.level256_official_plugin_hash_matches && level256_diagnostic_title_matches) {
+    const bool level256_diagnostic_context =
+        process.codeset &&
+        Kernel::ShouldCaptureLevel256CtrpfStartupDiagnostic(
+            level256_diagnostic_enabled, plg_context.level256_plugin_identity_verified,
+            process.codeset->program_id, process.process_id, plg_context.plugin_process_id,
+            plg_context.plugin_loaded);
+    if (level256_diagnostic_context) {
         u32 text_watch_count = 0;
         bool candidate_watch_armed = false;
         const bool owner_matches = plg_context.plugin_process_id == process.process_id;
         const VAddr candidate = plg_context.ctrpf_osd_scan.selected_candidate;
-        if (level256_diagnostic_enabled && owner_matches) {
+        if (owner_matches) {
             for (const VAddr address : Kernel::LEVEL256_CTRPF_STARTUP_TEXT_ADDRESSES) {
                 if (kernel.memory.IsValidVirtualAddress(process, address)) {
                     kernel.memory.RegisterWatchpoint(process, address, 1);

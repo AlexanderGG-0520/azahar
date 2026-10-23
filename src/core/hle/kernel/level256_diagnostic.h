@@ -171,6 +171,48 @@ constexpr u32 LEVEL256_CTRPF_OSD_CANDIDATE_SIZE = sizeof(u32);
 constexpr std::size_t LEVEL256_CTRPF_STARTUP_WATCH_TARGET_COUNT =
     LEVEL256_CTRPF_STARTUP_TEXT_ADDRESSES.size() + 1;
 constexpr u32 LEVEL256_CTRPF_STARTUP_WATCH_LOG_LIMIT_PER_TARGET = 16;
+constexpr std::size_t LEVEL256_SVC_DIAGNOSTIC_PATTERN_LIMIT = 8;
+
+struct Level256SvcDiagnosticPattern {
+    u32 svc_id{};
+    u32 pc{};
+    std::array<u32, 4> arguments{};
+
+    constexpr bool operator==(const Level256SvcDiagnosticPattern&) const = default;
+};
+
+/// Record a previously unseen SVC register pattern, bounded to the first eight per operation.
+constexpr bool RecordLevel256SvcDiagnosticPattern(
+    std::array<Level256SvcDiagnosticPattern, LEVEL256_SVC_DIAGNOSTIC_PATTERN_LIMIT>& patterns,
+    std::size_t& count, const Level256SvcDiagnosticPattern& pattern) {
+    if (count > patterns.size()) {
+        return false;
+    }
+    for (std::size_t i = 0; i < count; ++i) {
+        if (patterns[i] == pattern) {
+            return false;
+        }
+    }
+    if (count == patterns.size()) {
+        return false;
+    }
+    patterns[count++] = pattern;
+    return true;
+}
+
+constexpr bool ShouldScanLevel256CtrpfOSD(bool diagnostics_enabled, bool identity_verified,
+                                          u64 title_id) {
+    return diagnostics_enabled && identity_verified &&
+           title_id == LEVEL256_BOOTLOADER_DIAGNOSTIC_TITLE_ID;
+}
+
+constexpr bool ShouldCaptureLevel256CtrpfStartupDiagnostic(bool diagnostics_enabled,
+                                                           bool identity_verified, u64 title_id,
+                                                           u32 process_id, u32 owner_process_id,
+                                                           bool plugin_loaded) {
+    return ShouldScanLevel256CtrpfOSD(diagnostics_enabled, identity_verified, title_id) &&
+           process_id != 0 && process_id == owner_process_id && plugin_loaded;
+}
 
 /// Authenticates a call from the official Level256 plugin code in one of its supported titles.
 constexpr bool IsVerifiedLevel256PluginContext(bool compatibility_enabled, bool supported_title,
@@ -462,13 +504,14 @@ constexpr bool ApplyLevel256BackdoorPatch(bool matched, u32& instruction, u32& c
     return true;
 }
 
-constexpr bool ShouldSuppressDuplicateLevel256SVCError(
-    bool enabled, bool official_plugin_hash_matches, u64 title_id, u32 pid, u32 plugin_pid,
-    bool plugin_loaded, u32 code_begin, u32 code_end, u32 svc_pc, u32 svc_id, u32 raw_result) {
-    return enabled && official_plugin_hash_matches && IsLevel256SupportedTitleId(title_id) &&
+constexpr bool ShouldSuppressDuplicateLevel256SVCError(bool enabled, bool plugin_identity_verified,
+                                                       u64 title_id, u32 pid, u32 plugin_pid,
+                                                       bool plugin_loaded, u32 code_begin,
+                                                       u32 code_end, u32 svc_pc, u32 svc_id,
+                                                       u32 raw_result) {
+    return enabled && plugin_identity_verified && IsLevel256SupportedTitleId(title_id) &&
            pid == plugin_pid && plugin_loaded &&
            IsLevel256PluginCodeAddress(code_begin, code_end, svc_pc) &&
-           svc_pc == LEVEL256_QUERY_PROCESS_MEMORY_SVC_PC &&
            svc_id == LEVEL256_QUERY_PROCESS_MEMORY_SVC_ID &&
            raw_result == LEVEL256_QUERY_PROCESS_MEMORY_FAILURE;
 }
@@ -728,15 +771,14 @@ constexpr bool ApplyLevel256VerificationResponse(bool matched, u32& result, u64&
     return true;
 }
 
-/// Arms one transient ARM trace only for the verified Level256 worker entry.
-constexpr bool ShouldStartLevel256OpenProcessTrace(bool enabled, bool official_plugin_hash_matches,
+/// Arms one transient ARM trace for a plugin-created thread whose entry lies in the active mapping.
+constexpr bool ShouldStartLevel256OpenProcessTrace(bool enabled, bool plugin_identity_verified,
                                                    u64 title_id, u32 pid, u32 plugin_pid,
                                                    bool plugin_loaded, u32 code_begin, u32 code_end,
                                                    u32 entry_point, bool already_started) {
-    return enabled && official_plugin_hash_matches && IsLevel256SupportedTitleId(title_id) &&
-           pid == plugin_pid && plugin_loaded && code_begin == LEVEL256_DIAGNOSTIC_CODE_BEGIN &&
-           code_end == LEVEL256_DIAGNOSTIC_CODE_END &&
-           entry_point == LEVEL256_WORKER_THREAD_ENTRY && !already_started;
+    return enabled && plugin_identity_verified && IsLevel256SupportedTitleId(title_id) &&
+           pid == plugin_pid && plugin_loaded &&
+           IsLevel256PluginCodeAddress(code_begin, code_end, entry_point) && !already_started;
 }
 
 struct Level256SnapshotReadLocation {
