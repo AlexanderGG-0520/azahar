@@ -128,11 +128,15 @@ constexpr u32 LEVEL256_BACKDOOR_COPY_CALLBACK = 0x070464DC;
 constexpr u32 LEVEL256_BACKDOOR_VIEW_FLAG_OFFSET = 0xB0;
 constexpr u32 LEVEL256_BACKDOOR_VIEW_FLAG_BIT = 0x2000;
 constexpr u32 LEVEL256_CONTROL_MEMORY_UNSAFE_SVC_ID = 0xA3;
-constexpr u32 LEVEL256_CONTROL_MEMORY_UNSAFE_SVC_PC = 0x07099240;
 constexpr u32 LEVEL256_CONTROL_MEMORY_UNSAFE_TARGET = 0x07500000;
 constexpr u32 LEVEL256_CONTROL_MEMORY_UNSAFE_SIZE = 0x10000;
 constexpr u32 LEVEL256_CONTROL_MEMORY_UNSAFE_OPERATION = 0x203;
 constexpr u32 LEVEL256_CONTROL_MEMORY_UNSAFE_PERMISSIONS = 0x3;
+
+/// Checks a caller against the code range actually mapped for the authenticated plugin.
+constexpr bool IsLevel256PluginCodeAddress(u32 code_begin, u32 code_end, u32 pc) {
+    return code_begin < code_end && pc >= code_begin && pc < code_end;
+}
 constexpr u32 LEVEL256_WORKER_THREAD_ENTRY = 0x07015CF8;
 constexpr u32 LEVEL256_THREAD_CREATE_LOG_LIMIT = 8;
 constexpr u32 LEVEL256_OPEN_PROCESS_TRACE_LIMIT = 262144;
@@ -171,11 +175,11 @@ constexpr u32 LEVEL256_CTRPF_STARTUP_WATCH_LOG_LIMIT_PER_TARGET = 16;
 /// Authenticates a call from the official Level256 plugin code in one of its supported titles.
 constexpr bool IsVerifiedLevel256PluginContext(bool compatibility_enabled, bool supported_title,
                                                bool official_plugin_hash_matches, u32 pid,
-                                               u32 plugin_pid, bool plugin_loaded,
-                                               u32 code_begin, u32 code_end, u32 pc) {
+                                               u32 plugin_pid, bool plugin_loaded, u32 code_begin,
+                                               u32 code_end, u32 pc) {
     return compatibility_enabled && supported_title && official_plugin_hash_matches &&
-           pid == plugin_pid && plugin_loaded && code_begin == LEVEL256_DIAGNOSTIC_CODE_BEGIN &&
-           code_end == LEVEL256_DIAGNOSTIC_CODE_END && pc >= code_begin && pc < code_end;
+           pid == plugin_pid && plugin_loaded &&
+           IsLevel256PluginCodeAddress(code_begin, code_end, pc);
 }
 
 /// Returns the matching watched target. Text targets are read-only observations; the OSD
@@ -441,8 +445,8 @@ constexpr bool ShouldApplyLevel256BackdoorPatch(bool enabled, bool official_plug
                                                 u32 svc_pc, u32 svc_id, u32 callback, u32 arg0,
                                                 u32 arg1, u32 arg2, u32 current_instruction) {
     return enabled && official_plugin_hash_matches && IsLevel256SupportedTitleId(title_id) &&
-           pid == plugin_pid && plugin_loaded && code_begin == LEVEL256_DIAGNOSTIC_CODE_BEGIN &&
-           code_end == LEVEL256_DIAGNOSTIC_CODE_END && svc_pc == LEVEL256_CUSTOM_BACKDOOR_SVC_PC &&
+           pid == plugin_pid && plugin_loaded &&
+           IsLevel256PluginCodeAddress(code_begin, code_end, svc_pc) &&
            svc_id == LEVEL256_CUSTOM_BACKDOOR_SVC_ID &&
            callback == LEVEL256_CUSTOM_BACKDOOR_CALLBACK &&
            arg0 == LEVEL256_CUSTOM_BACKDOOR_CALLBACK_ARGUMENT && arg1 == 0 && arg2 == 1 &&
@@ -462,8 +466,8 @@ constexpr bool ShouldSuppressDuplicateLevel256SVCError(
     bool enabled, bool official_plugin_hash_matches, u64 title_id, u32 pid, u32 plugin_pid,
     bool plugin_loaded, u32 code_begin, u32 code_end, u32 svc_pc, u32 svc_id, u32 raw_result) {
     return enabled && official_plugin_hash_matches && IsLevel256SupportedTitleId(title_id) &&
-           pid == plugin_pid && plugin_loaded && code_begin == LEVEL256_DIAGNOSTIC_CODE_BEGIN &&
-           code_end == LEVEL256_DIAGNOSTIC_CODE_END &&
+           pid == plugin_pid && plugin_loaded &&
+           IsLevel256PluginCodeAddress(code_begin, code_end, svc_pc) &&
            svc_pc == LEVEL256_QUERY_PROCESS_MEMORY_SVC_PC &&
            svc_id == LEVEL256_QUERY_PROCESS_MEMORY_SVC_ID &&
            raw_result == LEVEL256_QUERY_PROCESS_MEMORY_FAILURE;
@@ -616,8 +620,8 @@ constexpr bool ShouldHandleLevel256CurrentProcessCallback(
     bool plugin_loaded, u32 code_begin, u32 code_end, u32 svc_pc, u32 svc_id, u32 callback,
     u32 arg0, u32 arg1, u32 arg2) {
     return enabled && official_plugin_hash_matches && IsLevel256SupportedTitleId(title_id) &&
-           pid == plugin_pid && plugin_loaded && code_begin == LEVEL256_DIAGNOSTIC_CODE_BEGIN &&
-           code_end == LEVEL256_DIAGNOSTIC_CODE_END && svc_pc == LEVEL256_CUSTOM_BACKDOOR_SVC_PC &&
+           pid == plugin_pid && plugin_loaded &&
+           IsLevel256PluginCodeAddress(code_begin, code_end, svc_pc) &&
            svc_id == LEVEL256_CUSTOM_BACKDOOR_SVC_ID &&
            callback == LEVEL256_BACKDOOR_CURRENT_PROCESS_CALLBACK && arg0 == 0 && arg1 == 0 &&
            arg2 == 0;
@@ -629,20 +633,18 @@ constexpr bool ShouldHandleLevel256ResourceLimitCallback(
     u32 view_address, u32 arg0, u32 arg1, u32 arg2,
     u32 expected_resource_limit_offset = LEVEL256_PROCESS_VIEW_N3DS_RESOURCE_LIMIT_OFFSET) {
     return enabled && official_plugin_hash_matches && IsLevel256SupportedTitleId(title_id) &&
-           pid == plugin_pid && plugin_loaded && code_begin == LEVEL256_DIAGNOSTIC_CODE_BEGIN &&
-           code_end == LEVEL256_DIAGNOSTIC_CODE_END && svc_pc == LEVEL256_CUSTOM_BACKDOOR_SVC_PC &&
+           pid == plugin_pid && plugin_loaded &&
+           IsLevel256PluginCodeAddress(code_begin, code_end, svc_pc) &&
            svc_id == LEVEL256_CUSTOM_BACKDOOR_SVC_ID &&
            callback == LEVEL256_BACKDOOR_RESOURCE_LIMIT_CALLBACK && arg0 == view_address &&
            arg1 == expected_resource_limit_offset && arg2 == 1;
 }
 
-constexpr bool ShouldApplyLevel256PriorityLimitCallback(bool callback_code_matches,
-                                                        bool view_valid, u32 guest_limit,
-                                                        u32 actual_limit, u32 requested_limit,
-                                                        u32 arg2,
+constexpr bool ShouldApplyLevel256PriorityLimitCallback(bool callback_code_matches, bool view_valid,
+                                                        u32 guest_limit, u32 actual_limit,
+                                                        u32 requested_limit, u32 arg2,
                                                         u32 expected_resource_limit_offset,
-                                                        u32& updated_limit,
-                                                        u32& callback_return) {
+                                                        u32& updated_limit, u32& callback_return) {
     if (!callback_code_matches || !view_valid || arg2 != expected_resource_limit_offset ||
         guest_limit != actual_limit) {
         return false;
@@ -671,8 +673,8 @@ constexpr bool ShouldHandleLevel256ProcessSnapshotCopy(
     bool plugin_loaded, u32 code_begin, u32 code_end, u32 svc_pc, u32 svc_id, u32 callback,
     u32 destination, u32 source, u32 view_address, u32 size) {
     return enabled && official_plugin_hash_matches && IsLevel256SupportedTitleId(title_id) &&
-           pid == plugin_pid && plugin_loaded && code_begin == LEVEL256_DIAGNOSTIC_CODE_BEGIN &&
-           code_end == LEVEL256_DIAGNOSTIC_CODE_END && svc_pc == LEVEL256_CUSTOM_BACKDOOR_SVC_PC &&
+           pid == plugin_pid && plugin_loaded &&
+           IsLevel256PluginCodeAddress(code_begin, code_end, svc_pc) &&
            svc_id == LEVEL256_CUSTOM_BACKDOOR_SVC_ID &&
            callback == LEVEL256_BACKDOOR_COPY_CALLBACK &&
            ((destination == LEVEL256_PROCESS_VIEW_COPY_DESTINATION && source == view_address &&
@@ -687,13 +689,12 @@ constexpr bool ShouldHandleLevel256ProcessSnapshotCopy(
 constexpr bool ShouldOverrideLevel256GetSystemInfo(bool enabled, bool supported_title,
                                                    bool official_plugin_hash_matches, u32 pid,
                                                    u32 plugin_pid, bool plugin_loaded,
-                                                   u32 code_begin, u32 code_end, u32 pc,
-                                                   u32 svc_id, u32 type, s32 param) {
+                                                   u32 code_begin, u32 code_end, u32 pc, u32 svc_id,
+                                                   u32 type, s32 param) {
     return enabled && supported_title && official_plugin_hash_matches && pid == plugin_pid &&
-           plugin_loaded && code_begin == LEVEL256_DIAGNOSTIC_CODE_BEGIN &&
-           code_end == LEVEL256_DIAGNOSTIC_CODE_END && pc >= code_begin && pc < code_end &&
-           pc == LEVEL256_DIAGNOSTIC_SVC_PC && svc_id == LEVEL256_DIAGNOSTIC_SVC_ID &&
-           type == LEVEL256_DIAGNOSTIC_TYPE && param == LEVEL256_DIAGNOSTIC_PARAM;
+           plugin_loaded && IsLevel256PluginCodeAddress(code_begin, code_end, pc) &&
+           svc_id == LEVEL256_DIAGNOSTIC_SVC_ID && type == LEVEL256_DIAGNOSTIC_TYPE &&
+           param == LEVEL256_DIAGNOSTIC_PARAM;
 }
 
 constexpr bool ApplyLevel256GetSystemInfoResult(bool matched, u32& result, u64& output) {
@@ -707,16 +708,12 @@ constexpr bool ApplyLevel256GetSystemInfoResult(bool matched, u32& result, u64& 
 
 /// Matches Luma3DS-Level256's type 0x30000 verification extension only for the hash-verified
 /// plugin in its owning title process and mapped plugin code.
-constexpr bool ShouldProvideLevel256VerificationResponse(bool enabled,
-                                                         bool official_plugin_hash_matches,
-                                                         u64 title_id, u32 pid, u32 plugin_pid,
-                                                         bool plugin_loaded, u32 code_begin,
-                                                         u32 code_end, u32 pc, u32 svc_id,
-                                                         u32 type, s32 param) {
+constexpr bool ShouldProvideLevel256VerificationResponse(
+    bool enabled, bool official_plugin_hash_matches, u64 title_id, u32 pid, u32 plugin_pid,
+    bool plugin_loaded, u32 code_begin, u32 code_end, u32 pc, u32 svc_id, u32 type, s32 param) {
     return enabled && official_plugin_hash_matches && IsLevel256SupportedTitleId(title_id) &&
            pid == plugin_pid && plugin_loaded &&
-           code_begin == LEVEL256_DIAGNOSTIC_CODE_BEGIN &&
-           code_end == LEVEL256_DIAGNOSTIC_CODE_END && pc >= code_begin && pc < code_end &&
+           IsLevel256PluginCodeAddress(code_begin, code_end, pc) &&
            svc_id == LEVEL256_DIAGNOSTIC_SVC_ID && type == LEVEL256_VERIFICATION_TYPE &&
            param == LEVEL256_VERIFICATION_PARAM;
 }

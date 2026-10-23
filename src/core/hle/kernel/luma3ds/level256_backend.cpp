@@ -54,9 +54,8 @@ Level256BackdoorResult HandleLevel256CustomBackdoor(
             return compatibility_enabled && trusted_plugin && process->codeset &&
                    Service::PLGLDR::IsLevel256SupportedTitle(process->codeset->program_id) &&
                    process->process_id == lctx.plugin_process_id && lctx.plugin_loaded &&
-                   lctx.plugin_code_begin == LEVEL256_DIAGNOSTIC_CODE_BEGIN &&
-                   lctx.plugin_code_end == LEVEL256_DIAGNOSTIC_CODE_END &&
-                   in_pc == LEVEL256_CUSTOM_BACKDOOR_SVC_PC &&
+                   IsLevel256PluginCodeAddress(lctx.plugin_code_begin, lctx.plugin_code_end,
+                                               in_pc) &&
                    immediate == LEVEL256_CUSTOM_BACKDOOR_SVC_ID && callback == target_callback;
         };
         const auto get_plugin_model = [&]() -> std::optional<bool> {

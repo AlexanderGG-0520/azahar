@@ -38,23 +38,26 @@ TEST_CASE("Level256 supported-title set includes Red Cat Corps and excludes near
     constexpr auto end = Kernel::LEVEL256_DIAGNOSTIC_CODE_END;
     constexpr auto pc = Kernel::LEVEL256_WORKER_THREAD_ENTRY;
     REQUIRE(Kernel::IsVerifiedLevel256PluginContext(
+        true, Kernel::IsLevel256SupportedTitleId(0x000400000016C700ULL), true, 16, 16, true, begin,
+        end, pc));
+    REQUIRE(Kernel::IsVerifiedLevel256PluginContext(
         true, Kernel::IsLevel256SupportedTitleId(0x000400000016C700ULL), true, 16, 16, true,
-        begin, end, pc));
+        0x07000100, 0x0710A000, 0x0709D290));
     REQUIRE_FALSE(Kernel::IsVerifiedLevel256PluginContext(
-        false, Kernel::IsLevel256SupportedTitleId(0x000400000016C700ULL), true, 16, 16, true,
-        begin, end, pc));
+        false, Kernel::IsLevel256SupportedTitleId(0x000400000016C700ULL), true, 16, 16, true, begin,
+        end, pc));
     REQUIRE_FALSE(Kernel::IsVerifiedLevel256PluginContext(
-        true, Kernel::IsLevel256SupportedTitleId(0x000400000016C701ULL), true, 16, 16, true,
-        begin, end, pc));
+        true, Kernel::IsLevel256SupportedTitleId(0x000400000016C701ULL), true, 16, 16, true, begin,
+        end, pc));
     REQUIRE_FALSE(Kernel::IsVerifiedLevel256PluginContext(
-        true, Kernel::IsLevel256SupportedTitleId(0x000400000016C700ULL), false, 16, 16, true,
-        begin, end, pc));
+        true, Kernel::IsLevel256SupportedTitleId(0x000400000016C700ULL), false, 16, 16, true, begin,
+        end, pc));
     REQUIRE_FALSE(Kernel::IsVerifiedLevel256PluginContext(
-        true, Kernel::IsLevel256SupportedTitleId(0x000400000016C700ULL), true, 16, 17, true,
-        begin, end, pc));
+        true, Kernel::IsLevel256SupportedTitleId(0x000400000016C700ULL), true, 16, 17, true, begin,
+        end, pc));
     REQUIRE_FALSE(Kernel::IsVerifiedLevel256PluginContext(
         true, Kernel::IsLevel256SupportedTitleId(0x000400000016C700ULL), true, 16, 16, true,
-        begin, end, end));
+        0x07000100, 0x0710A000, 0x0710A000));
 }
 
 TEST_CASE("Level256 bootloader diagnostics require explicit opt-in and exact owner scope",
@@ -143,16 +146,15 @@ TEST_CASE("Level256 verification response mirrors Luma only for the verified plu
     REQUIRE_FALSE(Matches(false));
     REQUIRE_FALSE(Matches(true, Kernel::LEVEL256_DIAGNOSTIC_TITLE_ID, 16, 16, true,
                           Kernel::LEVEL256_DIAGNOSTIC_CODE_BEGIN,
-                          Kernel::LEVEL256_DIAGNOSTIC_CODE_END,
-                          Kernel::LEVEL256_DIAGNOSTIC_SVC_PC, Kernel::LEVEL256_DIAGNOSTIC_SVC_ID,
-                          Kernel::LEVEL256_VERIFICATION_TYPE,
+                          Kernel::LEVEL256_DIAGNOSTIC_CODE_END, Kernel::LEVEL256_DIAGNOSTIC_SVC_PC,
+                          Kernel::LEVEL256_DIAGNOSTIC_SVC_ID, Kernel::LEVEL256_VERIFICATION_TYPE,
                           Kernel::LEVEL256_VERIFICATION_PARAM, false));
     REQUIRE_FALSE(Matches(true, 0x0004000000155101ULL));
     REQUIRE_FALSE(Matches(true, Kernel::LEVEL256_DIAGNOSTIC_TITLE_ID, 17));
     REQUIRE_FALSE(Matches(true, Kernel::LEVEL256_DIAGNOSTIC_TITLE_ID, 16, 16, false));
-    REQUIRE_FALSE(Matches(true, Kernel::LEVEL256_DIAGNOSTIC_TITLE_ID, 16, 16, true, 0x07000104));
-    REQUIRE_FALSE(Matches(true, Kernel::LEVEL256_DIAGNOSTIC_TITLE_ID, 16, 16, true,
-                          Kernel::LEVEL256_DIAGNOSTIC_CODE_BEGIN, 0x07103004));
+    REQUIRE(Matches(true, Kernel::LEVEL256_DIAGNOSTIC_TITLE_ID, 16, 16, true, 0x07000104));
+    REQUIRE(Matches(true, Kernel::LEVEL256_DIAGNOSTIC_TITLE_ID, 16, 16, true,
+                    Kernel::LEVEL256_DIAGNOSTIC_CODE_BEGIN, 0x07104000));
     REQUIRE_FALSE(Matches(true, Kernel::LEVEL256_DIAGNOSTIC_TITLE_ID, 16, 16, true,
                           Kernel::LEVEL256_DIAGNOSTIC_CODE_BEGIN,
                           Kernel::LEVEL256_DIAGNOSTIC_CODE_END, 0x06FFFFFF));
@@ -198,15 +200,18 @@ TEST_CASE("Level256 emulator marker applies to supported titles without changing
     REQUIRE_FALSE(Service::PLGLDR::IsLevel256SupportedTitle(unsupported_title_id));
 
     const auto matches = [](bool enabled, bool supported_title, u32 pid, u32 plugin_pid,
-                            bool plugin_loaded, bool hash_matches, u32 pc, u32 type, s32 param) {
+                            bool plugin_loaded, bool hash_matches, u32 pc, u32 type, s32 param,
+                            u32 code_begin = LEVEL256_DIAGNOSTIC_CODE_BEGIN,
+                            u32 code_end = LEVEL256_DIAGNOSTIC_CODE_END) {
         return Kernel::ShouldOverrideLevel256GetSystemInfo(
-            enabled, supported_title, hash_matches, pid, plugin_pid, plugin_loaded,
-            LEVEL256_DIAGNOSTIC_CODE_BEGIN, LEVEL256_DIAGNOSTIC_CODE_END, pc,
-            LEVEL256_DIAGNOSTIC_SVC_ID, type, param);
+            enabled, supported_title, hash_matches, pid, plugin_pid, plugin_loaded, code_begin,
+            code_end, pc, LEVEL256_DIAGNOSTIC_SVC_ID, type, param);
     };
 
     REQUIRE(matches(true, true, 16, 16, true, true, LEVEL256_DIAGNOSTIC_SVC_PC,
                     LEVEL256_DIAGNOSTIC_TYPE, 0));
+    REQUIRE(matches(true, true, 16, 16, true, true, 0x0709D290, LEVEL256_DIAGNOSTIC_TYPE, 0,
+                    0x07000100, 0x0710A000));
     REQUIRE_FALSE(matches(true, false, 16, 16, true, true, LEVEL256_DIAGNOSTIC_SVC_PC,
                           LEVEL256_DIAGNOSTIC_TYPE, 0));
     REQUIRE_FALSE(matches(false, true, 16, 16, true, true, LEVEL256_DIAGNOSTIC_SVC_PC,
@@ -481,10 +486,10 @@ TEST_CASE("Level256 duplicate SVC errors are suppressed only for exact QPM failu
     REQUIRE_FALSE(matches(true, true, LEVEL256_DIAGNOSTIC_TITLE_ID, 17));
     REQUIRE_FALSE(matches(true, true, LEVEL256_DIAGNOSTIC_TITLE_ID, 16, 17));
     REQUIRE_FALSE(matches(true, true, LEVEL256_DIAGNOSTIC_TITLE_ID, 16, 16, false));
+    REQUIRE(matches(true, true, LEVEL256_DIAGNOSTIC_TITLE_ID, 16, 16, true,
+                    LEVEL256_DIAGNOSTIC_CODE_BEGIN + 4, LEVEL256_DIAGNOSTIC_CODE_END + 0x1000));
     REQUIRE_FALSE(matches(true, true, LEVEL256_DIAGNOSTIC_TITLE_ID, 16, 16, true,
-                          LEVEL256_DIAGNOSTIC_CODE_BEGIN + 4));
-    REQUIRE_FALSE(matches(true, true, LEVEL256_DIAGNOSTIC_TITLE_ID, 16, 16, true,
-                          LEVEL256_DIAGNOSTIC_CODE_BEGIN, LEVEL256_DIAGNOSTIC_CODE_END - 4));
+                          LEVEL256_DIAGNOSTIC_CODE_BEGIN, LEVEL256_QUERY_PROCESS_MEMORY_SVC_PC));
     REQUIRE_FALSE(matches(true, true, LEVEL256_DIAGNOSTIC_TITLE_ID, 16, 16, true,
                           LEVEL256_DIAGNOSTIC_CODE_BEGIN, LEVEL256_DIAGNOSTIC_CODE_END,
                           LEVEL256_QUERY_PROCESS_MEMORY_SVC_PC - 4));
@@ -708,11 +713,14 @@ TEST_CASE("Level256 CustomBackdoor process-view callbacks require the exact sign
     REQUIRE_FALSE(ShouldHandleLevel256CurrentProcessCallback(
         on, trusted, title, pid, pid + 1, true, begin, end, pc, svc,
         LEVEL256_BACKDOOR_CURRENT_PROCESS_CALLBACK, 0, 0, 0));
-    REQUIRE_FALSE(ShouldHandleLevel256CurrentProcessCallback(
+    REQUIRE(ShouldHandleLevel256CurrentProcessCallback(
         on, trusted, title, pid, pid, true, begin + 4, end, pc, svc,
         LEVEL256_BACKDOOR_CURRENT_PROCESS_CALLBACK, 0, 0, 0));
-    REQUIRE_FALSE(ShouldHandleLevel256CurrentProcessCallback(
+    REQUIRE(ShouldHandleLevel256CurrentProcessCallback(
         on, trusted, title, pid, pid, true, begin, end, pc + 4, svc,
+        LEVEL256_BACKDOOR_CURRENT_PROCESS_CALLBACK, 0, 0, 0));
+    REQUIRE(ShouldHandleLevel256CurrentProcessCallback(
+        on, trusted, title, pid, pid, true, begin, 0x0710A000, 0x0709D290, svc,
         LEVEL256_BACKDOOR_CURRENT_PROCESS_CALLBACK, 0, 0, 0));
     REQUIRE_FALSE(ShouldHandleLevel256CurrentProcessCallback(
         on, trusted, title, pid, pid, true, begin, end, pc, svc,
@@ -833,55 +841,6 @@ TEST_CASE("Level256 process-view offset 0x08 mirrors maxPriority, not Event curr
     REQUIRE_FALSE(CanCreateThreadWithPriority(priority_limit, 0, false));
     REQUIRE(CanCreateThreadWithPriority(updated_limit, 0, false));
     REQUIRE(CanCreateThreadWithPriority(priority_limit, 0, true));
-
-}
-
-TEST_CASE("Level256 ControlMemoryUnsafe matches only the observed SYSTEM COMMIT request",
-          "[core][kernel][level256]") {
-    using namespace Kernel;
-    const auto matches =
-        [](bool enabled = true, bool hash = true, u64 title = LEVEL256_DIAGNOSTIC_TITLE_ID,
-           u32 pid = 16, u32 owner = 16, bool loaded = true,
-           u32 begin = LEVEL256_DIAGNOSTIC_CODE_BEGIN, u32 end = LEVEL256_DIAGNOSTIC_CODE_END,
-           u32 pc = LEVEL256_CONTROL_MEMORY_UNSAFE_SVC_PC,
-           u32 svc = LEVEL256_CONTROL_MEMORY_UNSAFE_SVC_ID, u32 output = 0x070F5664,
-           u32 address = LEVEL256_CONTROL_MEMORY_UNSAFE_TARGET,
-           u32 size = LEVEL256_CONTROL_MEMORY_UNSAFE_SIZE,
-           u32 operation = LEVEL256_CONTROL_MEMORY_UNSAFE_OPERATION,
-           u32 permissions = LEVEL256_CONTROL_MEMORY_UNSAFE_PERMISSIONS) {
-            return Luma3DS::ShouldHandleLevel256ControlMemoryUnsafe(
-                enabled, hash, title, pid, owner, loaded, begin, end, pc, svc, output, address,
-                size, operation, permissions);
-        };
-    REQUIRE(matches());
-    REQUIRE(matches(true, true, 0x000400000016C700ULL));
-    REQUIRE_FALSE(matches(false));
-    REQUIRE_FALSE(matches(true, false));
-    REQUIRE_FALSE(matches(true, true, LEVEL256_DIAGNOSTIC_TITLE_ID + 1));
-    REQUIRE_FALSE(matches(true, true, LEVEL256_DIAGNOSTIC_TITLE_ID, 16, 17));
-    REQUIRE_FALSE(matches(true, true, LEVEL256_DIAGNOSTIC_TITLE_ID, 16, 16, false));
-    REQUIRE_FALSE(matches(true, true, LEVEL256_DIAGNOSTIC_TITLE_ID, 16, 16, true,
-                          LEVEL256_DIAGNOSTIC_CODE_BEGIN, LEVEL256_DIAGNOSTIC_CODE_END,
-                          LEVEL256_CONTROL_MEMORY_UNSAFE_SVC_PC + 4));
-    REQUIRE_FALSE(matches(true, true, LEVEL256_DIAGNOSTIC_TITLE_ID, 16, 16, true,
-                          LEVEL256_DIAGNOSTIC_CODE_BEGIN, LEVEL256_DIAGNOSTIC_CODE_END,
-                          LEVEL256_CONTROL_MEMORY_UNSAFE_SVC_PC,
-                          LEVEL256_CONTROL_MEMORY_UNSAFE_SVC_ID, 0));
-    REQUIRE_FALSE(matches(true, true, LEVEL256_DIAGNOSTIC_TITLE_ID, 16, 16, true,
-                          LEVEL256_DIAGNOSTIC_CODE_BEGIN, LEVEL256_DIAGNOSTIC_CODE_END,
-                          LEVEL256_CONTROL_MEMORY_UNSAFE_SVC_PC,
-                          LEVEL256_CONTROL_MEMORY_UNSAFE_SVC_ID, 0x070F5664,
-                          LEVEL256_CONTROL_MEMORY_UNSAFE_TARGET + 0x1000));
-    REQUIRE_FALSE(matches(
-        true, true, LEVEL256_DIAGNOSTIC_TITLE_ID, 16, 16, true, LEVEL256_DIAGNOSTIC_CODE_BEGIN,
-        LEVEL256_DIAGNOSTIC_CODE_END, LEVEL256_CONTROL_MEMORY_UNSAFE_SVC_PC,
-        LEVEL256_CONTROL_MEMORY_UNSAFE_SVC_ID, 0x070F5664, LEVEL256_CONTROL_MEMORY_UNSAFE_TARGET,
-        LEVEL256_CONTROL_MEMORY_UNSAFE_SIZE, 0x10203));
-    REQUIRE_FALSE(matches(
-        true, true, LEVEL256_DIAGNOSTIC_TITLE_ID, 16, 16, true, LEVEL256_DIAGNOSTIC_CODE_BEGIN,
-        LEVEL256_DIAGNOSTIC_CODE_END, LEVEL256_CONTROL_MEMORY_UNSAFE_SVC_PC,
-        LEVEL256_CONTROL_MEMORY_UNSAFE_SVC_ID, 0x070F5664, LEVEL256_CONTROL_MEMORY_UNSAFE_TARGET,
-        LEVEL256_CONTROL_MEMORY_UNSAFE_SIZE, LEVEL256_CONTROL_MEMORY_UNSAFE_OPERATION, 0x7));
 }
 
 TEST_CASE("Level256 CustomBackdoor patch requires exact plugin and call context",
@@ -908,11 +867,12 @@ TEST_CASE("Level256 CustomBackdoor patch requires exact plugin and call context"
     REQUIRE_FALSE(matches(true, true, 0x0004000000155101ULL));
     REQUIRE_FALSE(matches(true, true, Kernel::LEVEL256_DIAGNOSTIC_TITLE_ID, 17));
     REQUIRE_FALSE(matches(true, true, Kernel::LEVEL256_DIAGNOSTIC_TITLE_ID, 16, 16, false));
-    REQUIRE_FALSE(
-        matches(true, true, Kernel::LEVEL256_DIAGNOSTIC_TITLE_ID, 16, 16, true, 0x07000104));
-    REQUIRE_FALSE(matches(true, true, Kernel::LEVEL256_DIAGNOSTIC_TITLE_ID, 16, 16, true,
-                          Kernel::LEVEL256_DIAGNOSTIC_CODE_BEGIN,
-                          Kernel::LEVEL256_DIAGNOSTIC_CODE_END, 0x070991EC));
+    REQUIRE(matches(true, true, Kernel::LEVEL256_DIAGNOSTIC_TITLE_ID, 16, 16, true, 0x07000104));
+    REQUIRE(matches(true, true, Kernel::LEVEL256_DIAGNOSTIC_TITLE_ID, 16, 16, true,
+                    Kernel::LEVEL256_DIAGNOSTIC_CODE_BEGIN, Kernel::LEVEL256_DIAGNOSTIC_CODE_END,
+                    0x070991EC));
+    REQUIRE(matches(true, true, Kernel::LEVEL256_DIAGNOSTIC_TITLE_ID, 16, 16, true, 0x07000100,
+                    0x0710A000, 0x0709D290));
     REQUIRE_FALSE(matches(true, true, Kernel::LEVEL256_DIAGNOSTIC_TITLE_ID, 16, 16, true,
                           Kernel::LEVEL256_DIAGNOSTIC_CODE_BEGIN,
                           Kernel::LEVEL256_DIAGNOSTIC_CODE_END,

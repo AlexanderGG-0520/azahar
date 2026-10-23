@@ -28,7 +28,7 @@ blanket permission: each operation retains its existing handler-level checks.
 |---|---|---|
 | `SystemInfo` | `svcGetSystemInfo` (`0x2A`) | Exact type/parameter pairs, explicit mode, supported title, verified identity, loaded plugin, owning PID and plugin PC range. |
 | `CustomBackdoor` | Luma SVC `0x80` | Owning process and plugin/bootloader PC; aligned callback inside plugin code; only individually recognized callback adapters and exact argument/state checks are handled. Other callbacks fail as unimplemented. |
-| `ControlMemoryUnsafe` | Luma SVC `0xA3` | Exact observed SVC PC, title, plugin code range, address, size, operation, permissions, output pointer, VMAs and overlap checks. |
+| `ControlMemoryUnsafe` | Luma SVC `0xA3` | Opt-in, verified identity, supported title, owner PID, and the SVC PC inside the actual loaded plugin image; the observed SYSTEM COMMIT address/size/operation/permissions, writable output pointer, free VMAs and protected-range overlaps are checked independently. |
 | `ConvertVaToPa` | Luma SVC `0x90` | Only the existing conversion implementation is dispatched for an authorized plugin call. |
 | `DataCacheMaintenance` | Luma SVCs `0x91`/`0x92` | Existing cache-operation handlers; they do not grant memory-write access. |
 | `InstructionCacheMaintenance` | Luma SVCs `0x93`/`0x94` | Existing cache invalidation handlers; they do not grant memory-write access. |

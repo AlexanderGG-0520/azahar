@@ -10,6 +10,33 @@
 #include "core/hle/kernel/vm_manager.h"
 #include "core/memory.h"
 
+TEST_CASE("Level256 SYSTEM COMMIT creates private read-write non-executable backing",
+          "[kernel][memory][luma3ds][level256]") {
+    using namespace Kernel;
+    constexpr VAddr target = 0x07500000;
+    constexpr u32 size = 0x10000;
+    Core::Timing timing(1, 100);
+    Core::System system;
+    Memory::MemorySystem memory{system};
+    KernelSystem kernel(memory, timing, [] {}, MemoryMode::NewProd, 1);
+    Process process(kernel);
+    auto backing = std::make_shared<BufferMem>(size);
+
+    const auto result =
+        process.vm_manager.MapBackingMemory(target, MemoryRef{backing}, size, MemoryState::Private);
+    REQUIRE(result.Succeeded());
+    const auto vma = process.vm_manager.FindVMA(target);
+    REQUIRE(vma != process.vm_manager.vma_map.end());
+    CHECK(vma->second.meminfo_state == MemoryState::Private);
+    CHECK(vma->second.permissions == VMAPermission::ReadWrite);
+    CHECK((static_cast<u8>(vma->second.permissions) & static_cast<u8>(VMAPermission::Execute)) ==
+          0);
+
+    memory.Write32(process, target, 0xA3C0203U);
+    CHECK(memory.Read32(process, target) == 0xA3C0203U);
+    CHECK(process.vm_manager.UnmapRange(target, size) == ResultSuccess);
+}
+
 TEST_CASE("Memory Basics", "[kernel][memory]") {
     auto mem = std::make_shared<BufferMem>(Memory::CITRA_PAGE_SIZE);
     MemoryRef block{mem};
