@@ -472,6 +472,45 @@ TEST_CASE("SRV redirects one guest process through registered guest services",
             Service::SM::ResultServiceNotRegistered);
 }
 
+TEST_CASE("ServiceManager resolves SRV from its production named port",
+          "[core][service][sm][integration][level256]") {
+    TestEnvironment env;
+    auto srv = std::make_shared<Service::SM::SRV>(env.system, env.manager);
+    srv->InstallAsNamedPort(env.kernel);
+
+    // Production installs srv: as a kernel NamedPort, not in registered_services.
+    REQUIRE_FALSE(env.manager.GetService<Service::SM::SRV>("srv:"));
+    REQUIRE(env.manager.GetSRV() == srv);
+
+    auto process = env.MakeProcess();
+    const auto initialized =
+        srv->ProcessPlgUdsControl(process->process_id, 100, 2, 0, process->process_id, 0);
+    REQUIRE(initialized.handled);
+    REQUIRE(initialized.forward_to_server);
+    REQUIRE(srv->ResolveProcessService(process->process_id, "nwm::UDS") == "plg:UDS");
+    REQUIRE_FALSE(srv->ResolveProcessService(process->process_id + 1, "nwm::UDS"));
+
+    std::shared_ptr<Kernel::ServerPort> uds_server_port;
+    REQUIRE(env.manager.RegisterService(&uds_server_port, "plg:UDS", 4) == ResultSuccess);
+    std::shared_ptr<Kernel::ClientPort> resolved_port;
+    REQUIRE(env.manager.GetServicePort(
+                &resolved_port, *srv->ResolveProcessService(process->process_id, "nwm::UDS")) ==
+            ResultSuccess);
+    REQUIRE(resolved_port->GetName() == "plg:UDS_Client");
+
+    // Reacquire from the current kernel NamedPort table so restored handler objects are used.
+    auto restored_srv = std::make_shared<Service::SM::SRV>(env.system, env.manager);
+    auto [restored_server_port, restored_client_port] = env.kernel.CreatePortPair(64, "srv:");
+    restored_server_port->SetHleHandler(restored_srv);
+    env.kernel.named_ports.insert_or_assign("srv:", restored_client_port);
+    REQUIRE(env.manager.GetSRV() == restored_srv);
+
+    auto [wrong_server_port, wrong_client_port] = env.kernel.CreatePortPair(4, "srv:");
+    wrong_server_port->SetHleHandler(std::make_shared<MockNwmUds>());
+    env.kernel.named_ports.insert_or_assign("srv:", wrong_client_port);
+    REQUIRE_FALSE(env.manager.GetSRV());
+}
+
 TEST_CASE("SRV wakes every process-scoped delayed lookup when guest service registers",
           "[core][service][sm][integration]") {
     TestEnvironment env;

@@ -32,8 +32,7 @@ void ServiceManager::InstallInterfaces(Core::System& system) {
 }
 
 Result ServiceManager::RegisterService(std::shared_ptr<Kernel::ServerPort>* out_server_port,
-                                       std::string name, u32 max_sessions,
-                                       u32 owner_process_id) {
+                                       std::string name, u32 max_sessions, u32 owner_process_id) {
     R_TRY(ValidateServiceName(name));
     R_UNLESS(registered_services.find(name) == registered_services.end(), ResultAlreadyRegistered);
 
@@ -95,6 +94,20 @@ Result ServiceManager::ConnectToService(std::shared_ptr<Kernel::ClientSession>* 
     std::shared_ptr<Kernel::ClientPort> client_port;
     R_TRY(GetServicePort(std::addressof(client_port), name));
     return client_port->Connect(out_client_session);
+}
+
+std::shared_ptr<SRV> ServiceManager::GetSRV() const {
+    const auto it = kernel.named_ports.find("srv:");
+    if (it == kernel.named_ports.end() || !it->second) {
+        return nullptr;
+    }
+
+    const auto server_port = it->second->GetServerPort();
+    if (!server_port) {
+        return nullptr;
+    }
+
+    return std::dynamic_pointer_cast<SRV>(server_port->hle_handler);
 }
 
 std::string ServiceManager::GetServiceNameByPortId(u32 port) const {

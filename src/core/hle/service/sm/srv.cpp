@@ -108,7 +108,7 @@ public:
                 Kernel::ThreadWakeupReason reason) {
         LOG_ERROR(Service_SRV, "called service={} wakeup", name);
         const auto process = thread ? thread->owner_process.lock() : nullptr;
-        const auto srv = service_manager.GetService<SRV>("srv:");
+        const auto srv = service_manager.GetSRV();
         const auto redirected =
             process && srv ? srv->ResolveProcessService(process->process_id, name) : std::nullopt;
         const auto& resolved_name = redirected ? *redirected : name;

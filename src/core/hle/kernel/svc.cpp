@@ -773,7 +773,7 @@ Result SVC::SendSyncRequest(Handle handle) {
                 plugin_loader->GetLumaExtensionAuthorization(process->codeset->program_id);
             const auto& context = plugin_loader->GetLumaCompatibilityContext(
                 Settings::values.level256_compatibility_enabled.GetValue());
-            srv = system.ServiceManager().GetService<Service::SM::SRV>("srv:");
+            srv = system.ServiceManager().GetSRV();
             const bool process_redirect_active =
                 srv && srv->IsLevel256Connected(process->process_id);
             level256_uds_control =
