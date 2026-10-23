@@ -4,6 +4,7 @@ add_executable(tests
     common/param_package.cpp
     core/core_timing.cpp
     core/file_sys/path_parser.cpp
+    core/file_sys/ywb_save_date.cpp
     core/file_sys/plugin_3gx.cpp
     core/file_sys/level256_signature.cpp
     core/file_sys/yw2_save_date.cpp

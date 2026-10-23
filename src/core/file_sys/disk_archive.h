@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cstddef>
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -23,8 +24,11 @@ namespace FileSys {
 class DiskFile : public FileBackend {
 public:
     DiskFile(FileUtil::IOFile&& file_, const Mode& mode_,
-             std::unique_ptr<DelayGenerator> delay_generator_, std::string yw2_save_path_ = {})
-        : file(new FileUtil::IOFile(std::move(file_))), yw2_save_path(std::move(yw2_save_path_)) {
+             std::unique_ptr<DelayGenerator> delay_generator_, std::string yw2_save_path_ = {},
+             std::string ywb_save_path_ = {},
+             std::function<void(const std::string&)> ywb_commit_hook_ = {})
+        : file(new FileUtil::IOFile(std::move(file_))), yw2_save_path(std::move(yw2_save_path_)),
+          ywb_save_path(std::move(ywb_save_path_)), ywb_commit_hook(std::move(ywb_commit_hook_)) {
         delay_generator = std::move(delay_generator_);
         mode.hex = mode_.hex;
     }
@@ -45,6 +49,11 @@ protected:
     std::unique_ptr<FileUtil::IOFile> file;
     // Transient; not serialized to preserve existing savestate compatibility.
     std::string yw2_save_path;
+    std::string ywb_save_path;
+    std::function<void(const std::string&)> ywb_commit_hook;
+    bool ywb_has_write{};
+    bool ywb_write_succeeded{};
+    bool ywb_write_failed{};
 
     DiskFile() = default;
 
