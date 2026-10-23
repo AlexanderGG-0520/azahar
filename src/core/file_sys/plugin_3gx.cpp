@@ -23,9 +23,14 @@
 
 #include <array>
 #include <limits>
+#include <span>
+
+#include <cryptopp/blake2.h>
 #include <cryptopp/sha.h>
+
 #include "common/settings.h"
 #include "core/file_sys/file_backend.h"
+#include "core/file_sys/level256_signature.h"
 #include "core/file_sys/plugin_3gx.h"
 #include "core/file_sys/plugin_3gx_bootloader.h"
 #include "core/hle/kernel/config_mem.h"
@@ -33,42 +38,28 @@
 #include "core/hle/kernel/vm_manager.h"
 #include "core/loader/loader.h"
 
-static std::string ReadTextInfo(FileUtil::IOFile& file, std::size_t offset, std::size_t max_size) {
+static std::string ReadTextInfo(std::span<const u8> file_data, std::size_t offset,
+                                std::size_t max_size) {
     if (offset == 0 || max_size == 0 || max_size > 0x400 ||
-        !FileSys::IsValid3GXFileRange(file.GetSize(), offset, max_size)) {
+        !FileSys::IsValid3GXFileRange(file_data.size(), offset, max_size)) {
         // Limit strings to 0x400 bytes.
         return "";
     }
     std::vector<char> char_data(max_size);
-
-    const u64 prev_offset = file.Tell();
-    if (!file.Seek(offset, SEEK_SET)) {
-        return "";
-    }
-    if (file.ReadBytes(char_data.data(), max_size) != max_size) {
-        file.Seek(prev_offset, SEEK_SET);
-        return "";
-    }
+    std::memcpy(char_data.data(), file_data.data() + offset, max_size);
     char_data[max_size - 1] = '\0';
     return std::string(char_data.data());
 }
 
-static bool ReadSection(std::vector<u8>& data_out, FileUtil::IOFile& file, std::size_t offset,
-                        std::size_t size) {
-    if (size > 0x5000000 || !FileSys::IsValid3GXFileRange(file.GetSize(), offset, size)) {
+static bool ReadSection(std::vector<u8>& data_out, std::span<const u8> file_data,
+                        std::size_t offset, std::size_t size) {
+    if (size > 0x5000000 || !FileSys::IsValid3GXFileRange(file_data.size(), offset, size)) {
         // Limit read section size to 5MiB and reject ranges outside the file.
         return false;
     }
     data_out.resize(size);
-
-    const u64 prev_offset = file.Tell();
-
-    if (!file.Seek(offset, SEEK_SET)) {
-        return false;
-    }
-    if (file.ReadBytes(data_out.data(), size) != size) {
-        file.Seek(prev_offset, SEEK_SET);
-        return false;
+    if (size != 0) {
+        std::memcpy(data_out.data(), file_data.data() + offset, size);
     }
     return true;
 }
@@ -77,6 +68,9 @@ Loader::ResultStatus FileSys::Plugin3GXLoader::Load(
     Service::PLGLDR::PLG_LDR::PluginLoaderContext& plg_context, Kernel::Process& process,
     Kernel::KernelSystem& kernel, Service::PLGLDR::PLG_LDR& plg_ldr) {
     plg_context.level256_official_plugin_hash_matches = false;
+    plg_context.level256_official_plugin_signature_verified = false;
+    plg_context.level256_hle_compatibility_verified = false;
+    plg_context.level256_signed_plugin_artifact_version = 0;
     FileUtil::IOFile file(plg_context.plugin_path, "rb");
     if (!file.IsOpen()) {
         LOG_ERROR(Service_PLGLDR, "Failed to load 3GX plugin. Not found: {}",
@@ -84,44 +78,73 @@ Loader::ResultStatus FileSys::Plugin3GXLoader::Load(
         return Loader::ResultStatus::Error;
     }
 
-    // Calculate identity from the same opened file used by the loader. Hashing is only a
-    // compatibility gate; it does not alter or bypass the 3GX loader's own checks.
-    if (file.GetSize() != 0 && file.Tell() == 0) {
-        CryptoPP::SHA256 hash;
-        std::array<u8, 0x10000> buffer{};
-        u64 remaining = file.GetSize();
-        bool read_ok = true;
-        while (remaining != 0) {
-            const std::size_t chunk =
-                static_cast<std::size_t>(std::min<u64>(remaining, static_cast<u64>(buffer.size())));
-            if (file.ReadBytes(buffer.data(), chunk) != chunk) {
-                read_ok = false;
-                break;
+    // Snapshot the file once so signature verification and all bytes later parsed/mapped have the
+    // same immutable source. This also binds the legacy SHA compatibility path to the loaded bytes.
+    // Keep the snapshot bounded: each of the three executable sections is independently capped at
+    // 80 MiB below, with room for metadata and the manifest.
+    constexpr u64 MAX_3GX_FILE_SIZE = 3 * 0x5000000ULL + 0x1000000ULL;
+    const u64 file_size = file.GetSize();
+    if (file_size == 0 || file_size > MAX_3GX_FILE_SIZE ||
+        file_size > std::numeric_limits<std::size_t>::max()) {
+        LOG_ERROR(Service_PLGLDR, "3GX size is invalid or exceeds the loader limit: {} ({} bytes)",
+                  plg_context.plugin_path, file_size);
+        return Loader::ResultStatus::Error;
+    }
+    std::vector<u8> plugin_data(static_cast<std::size_t>(file_size));
+    if (file.ReadBytes(plugin_data.data(), plugin_data.size()) != plugin_data.size()) {
+        LOG_ERROR(Service_PLGLDR, "Failed to read 3GX snapshot: {}", plg_context.plugin_path);
+        return Loader::ResultStatus::Error;
+    }
+    const std::span<const u8> plugin_bytes{plugin_data};
+
+    {
+        CryptoPP::SHA256 sha256;
+        CryptoPP::BLAKE2b blake2b{false, 32};
+        const u64 payload_size =
+            file_size > Level256::MANIFEST_SIZE ? file_size - Level256::MANIFEST_SIZE : 0;
+        sha256.Update(plugin_bytes.data(), plugin_bytes.size());
+        std::array<u8, CryptoPP::SHA256::DIGESTSIZE> sha256_digest{};
+        sha256.Final(sha256_digest.data());
+        plg_context.level256_official_plugin_hash_matches =
+            sha256_digest == Kernel::LEVEL256_PLUGIN_SHA256;
+
+        if (payload_size != 0) {
+            blake2b.Update(plugin_bytes.data(), static_cast<std::size_t>(payload_size));
+            std::array<u8, 32> payload_digest{};
+            blake2b.TruncatedFinal(payload_digest.data(), payload_digest.size());
+            const auto manifest = plugin_bytes.subspan(static_cast<std::size_t>(payload_size));
+            Level256::PluginManifest parsed_manifest;
+            if (Level256::VerifyPluginManifest(manifest, payload_size, payload_digest,
+                                               Level256::TrustedReleasePublicKey().data(),
+                                               &parsed_manifest)) {
+                plg_context.level256_official_plugin_signature_verified = true;
+                plg_context.level256_signed_plugin_artifact_version =
+                    parsed_manifest.artifact_version;
             }
-            hash.Update(buffer.data(), chunk);
-            remaining -= chunk;
         }
-        if (read_ok && remaining == 0) {
-            std::array<u8, CryptoPP::SHA256::DIGESTSIZE> digest{};
-            hash.Final(digest.data());
-            plg_context.level256_official_plugin_hash_matches =
-                digest == Kernel::LEVEL256_PLUGIN_SHA256;
-        }
-        if (!file.Seek(0, SEEK_SET)) {
-            plg_context.level256_official_plugin_hash_matches = false;
-            LOG_ERROR(Service_PLGLDR, "Failed to rewind 3GX after hashing: {}",
-                      plg_context.plugin_path);
-            return Loader::ResultStatus::Error;
+        plg_context.level256_hle_compatibility_verified = Level256::IsHleCompatibilityVerified(
+            plg_context.level256_official_plugin_hash_matches,
+            plg_context.level256_official_plugin_signature_verified,
+            plg_context.level256_signed_plugin_artifact_version);
+
+        if (plg_context.level256_official_plugin_signature_verified) {
+            LOG_INFO(Service_PLGLDR,
+                     "Level256 signed plugin verified pid={} title_id={:016X} "
+                     "artifact_version={} hle_compatible={}",
+                     process.process_id, process.codeset ? process.codeset->program_id : 0,
+                     plg_context.level256_signed_plugin_artifact_version,
+                     plg_context.level256_hle_compatibility_verified);
         }
     }
 
     // Load CIA Header
     std::vector<u8> header_data(sizeof(_3gx_Header));
-    if (file.ReadBytes(header_data.data(), sizeof(_3gx_Header)) != sizeof(_3gx_Header)) {
+    if (plugin_bytes.size() < sizeof(_3gx_Header)) {
         LOG_ERROR(Service_PLGLDR, "Failed to load 3GX plugin. File corrupted: {}",
                   plg_context.plugin_path);
         return Loader::ResultStatus::Error;
     }
+    std::memcpy(header_data.data(), plugin_bytes.data(), sizeof(_3gx_Header));
 
     std::memcpy(&header, header_data.data(), sizeof(_3gx_Header));
 
@@ -139,11 +162,11 @@ Loader::ResultStatus FileSys::Plugin3GXLoader::Load(
     }
 
     // Load strings
-    author = ReadTextInfo(file, header.infos.author_msg_offset, header.infos.author_len);
-    title = ReadTextInfo(file, header.infos.title_msg_offset, header.infos.title_len);
-    description =
-        ReadTextInfo(file, header.infos.description_msg_offset, header.infos.description_len);
-    summary = ReadTextInfo(file, header.infos.summary_msg_offset, header.infos.summary_len);
+    author = ReadTextInfo(plugin_bytes, header.infos.author_msg_offset, header.infos.author_len);
+    title = ReadTextInfo(plugin_bytes, header.infos.title_msg_offset, header.infos.title_len);
+    description = ReadTextInfo(plugin_bytes, header.infos.description_msg_offset,
+                               header.infos.description_len);
+    summary = ReadTextInfo(plugin_bytes, header.infos.summary_msg_offset, header.infos.summary_len);
 
     LOG_INFO(Service_PLGLDR, "Trying to load plugin - Title: {} - Author: {}", title, author);
     LOG_INFO(Service_PLGLDR,
@@ -163,7 +186,7 @@ Loader::ResultStatus FileSys::Plugin3GXLoader::Load(
         std::vector<u8> raw_TID_data;
         const u64 targets_size = static_cast<u64>(header.targets.count) * sizeof(u32);
         if (targets_size > std::numeric_limits<std::size_t>::max() ||
-            !ReadSection(raw_TID_data, file, header.targets.title_offsets,
+            !ReadSection(raw_TID_data, plugin_bytes, header.targets.title_offsets,
                          static_cast<std::size_t>(targets_size))) {
             LOG_ERROR(Service_PLGLDR,
                       "3GX load failed stage=title-list pid={} title_id={:016X} path={}",
@@ -195,7 +218,7 @@ Loader::ResultStatus FileSys::Plugin3GXLoader::Load(
             const u64 instruction_offset =
                 static_cast<u64>(header.executable.exe_load_func_offset) + i * sizeof(u32);
             if (instruction_offset > std::numeric_limits<std::size_t>::max() ||
-                !ReadSection(out, file, static_cast<std::size_t>(instruction_offset),
+                !ReadSection(out, plugin_bytes, static_cast<std::size_t>(instruction_offset),
                              sizeof(u32))) {
                 LOG_ERROR(Service_PLGLDR,
                           "3GX load failed stage=embedded-loader-function pid={} "
@@ -215,21 +238,21 @@ Loader::ResultStatus FileSys::Plugin3GXLoader::Load(
     }
 
     // Load code sections
-    if (!ReadSection(text_section, file, header.executable.code_offset,
+    if (!ReadSection(text_section, plugin_bytes, header.executable.code_offset,
                      header.executable.code_size)) {
         LOG_ERROR(Service_PLGLDR,
                   "3GX load failed stage=text-section pid={} title_id={:016X} path={}",
                   process.process_id, process.codeset->program_id, plg_context.plugin_path);
         return Loader::ResultStatus::Error;
     }
-    if (!ReadSection(rodata_section, file, header.executable.rodata_offset,
+    if (!ReadSection(rodata_section, plugin_bytes, header.executable.rodata_offset,
                      header.executable.rodata_size)) {
         LOG_ERROR(Service_PLGLDR,
                   "3GX load failed stage=rodata-section pid={} title_id={:016X} path={}",
                   process.process_id, process.codeset->program_id, plg_context.plugin_path);
         return Loader::ResultStatus::Error;
     }
-    if (!ReadSection(data_section, file, header.executable.data_offset,
+    if (!ReadSection(data_section, plugin_bytes, header.executable.data_offset,
                      header.executable.data_size)) {
         LOG_ERROR(Service_PLGLDR,
                   "3GX load failed stage=data-section pid={} title_id={:016X} path={}",
@@ -281,8 +304,7 @@ Loader::ResultStatus FileSys::Plugin3GXLoader::Load(
                      "SearchStmfd1={} SearchStmfd2={} SearchStmfd3={} selected={} "
                      "candidate_words={:08X},{:08X},{:08X}",
                      process.process_id, process.codeset->program_id, code_segment.addr,
-                     code_segment.size,
-                     log_offset(plg_context.ctrpf_osd_scan.pattern0_offset),
+                     code_segment.size, log_offset(plg_context.ctrpf_osd_scan.pattern0_offset),
                      log_offset(plg_context.ctrpf_osd_scan.pattern0_fallback_offset),
                      log_offset(plg_context.ctrpf_osd_scan.pattern3_offset),
                      log_offset(plg_context.ctrpf_osd_scan.pattern4_offset),
@@ -444,8 +466,7 @@ Loader::ResultStatus FileSys::Plugin3GXLoader::Map(
     ASSERT(vma_heap.Succeeded());
     process.vm_manager.Reprotect(vma_heap.Unwrap(), Kernel::VMAPermission::ReadWriteExecute);
 
-    kernel.memory.SetPlugin3GXFramebufferAddress(Memory::FCRAM_PADDR + fcram_offset +
-                                                 heap_offset);
+    kernel.memory.SetPlugin3GXFramebufferAddress(Memory::FCRAM_PADDR + fcram_offset + heap_offset);
     plg_context.plugin_loaded = true;
     plg_context.plugin_process_id = process.process_id;
     plg_context.plugin_code_reached = false;
@@ -468,10 +489,8 @@ Loader::ResultStatus FileSys::Plugin3GXLoader::Map(
     const bool level256_diagnostic_enabled =
         Settings::values.level256_compatibility_enabled.GetValue();
     const bool level256_diagnostic_title_matches =
-        process.codeset &&
-        process.codeset->program_id == Kernel::LEVEL256_DIAGNOSTIC_TITLE_ID;
-    if (plg_context.level256_official_plugin_hash_matches &&
-        level256_diagnostic_title_matches) {
+        process.codeset && process.codeset->program_id == Kernel::LEVEL256_DIAGNOSTIC_TITLE_ID;
+    if (plg_context.level256_official_plugin_hash_matches && level256_diagnostic_title_matches) {
         u32 text_watch_count = 0;
         bool candidate_watch_armed = false;
         const bool owner_matches = plg_context.plugin_process_id == process.process_id;

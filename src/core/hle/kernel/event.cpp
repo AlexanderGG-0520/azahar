@@ -6,12 +6,12 @@
 #include <boost/serialization/string.hpp>
 #include "common/archives.h"
 #include "common/assert.h"
+#include "core/core.h"
 #include "core/hle/kernel/event.h"
 #include "core/hle/kernel/kernel.h"
 #include "core/hle/kernel/level256_diagnostic.h"
 #include "core/hle/kernel/resource_limit.h"
 #include "core/hle/kernel/thread.h"
-#include "core/core.h"
 #include "core/hle/service/plgldr/plgldr.h"
 #include "core/hle/service/plgldr/plugin_path.h"
 
@@ -56,14 +56,14 @@ void Event::Signal() {
             auto& system = Core::Global<Core::System>();
             if (auto plugin_loader = Service::PLGLDR::GetService(system)) {
                 const auto& context = plugin_loader->GetPluginLoaderContext();
-                if (!context.plugin_loaded || !context.level256_official_plugin_hash_matches ||
+                if (!context.plugin_loaded || !context.level256_hle_compatibility_verified ||
                     context.plugin_process_id != process->process_id || !process->codeset ||
                     !Service::PLGLDR::IsLevel256SupportedTitle(process->codeset->program_id)) {
                     continue;
                 }
-                plugin_loader->TraceLevel256GuestWait(
-                    *process, thread->GetThreadId(), thread->context.GetProgramCounter(), "notify",
-                    GetTypeName(), GetObjectId(), GetName(), 0);
+                plugin_loader->TraceLevel256GuestWait(*process, thread->GetThreadId(),
+                                                      thread->context.GetProgramCounter(), "notify",
+                                                      GetTypeName(), GetObjectId(), GetName(), 0);
                 break;
             }
         }

@@ -37,7 +37,7 @@ Level256MemoryOperationResult ControlMemoryUnsafe(
         const u32 permissions = in_r4;
         const bool exact_request = ShouldHandleLevel256ControlMemoryUnsafe(
             Settings::values.level256_compatibility_enabled.GetValue(),
-            context.level256_official_plugin_hash_matches, process.codeset->program_id,
+            context.level256_hle_compatibility_verified, process.codeset->program_id,
             process.process_id, context.plugin_process_id, context.plugin_loaded,
             context.plugin_code_begin, context.plugin_code_end, in_pc, immediate, output_address,
             address, in_r2, operation, permissions);

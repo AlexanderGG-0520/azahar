@@ -21,8 +21,8 @@
 // DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-#include <boost/serialization/weak_ptr.hpp>
 #include <cstring>
+#include <boost/serialization/weak_ptr.hpp>
 #include <fmt/format.h>
 #include "common/archives.h"
 #include "common/file_util.h"
@@ -38,8 +38,8 @@
 #include "core/hle/kernel/process.h"
 #include "core/hle/kernel/thread.h"
 #include "core/hle/service/hid/hid.h"
-#include "core/hle/service/plgldr/plgldr.h"
 #include "core/hle/service/plgldr/level256_lfcs.h"
+#include "core/hle/service/plgldr/plgldr.h"
 #include "core/hle/service/plgldr/plugin_path.h"
 #include "core/hw/aes/key.h"
 #include "core/hw/unique_data.h"
@@ -86,10 +86,9 @@ bool IsLevel256SupportedTitle(u64 title_id) {
     return IsLevel256PolicyTitle(title_id);
 }
 
-Kernel::Luma3DS::PluginAuthorization PLG_LDR::GetLumaExtensionAuthorization(
-    u64 title_id) const {
-    const bool verified_level256_plugin = IsLevel256SupportedTitle(title_id) &&
-                                          plgldr_context.level256_official_plugin_hash_matches;
+Kernel::Luma3DS::PluginAuthorization PLG_LDR::GetLumaExtensionAuthorization(u64 title_id) const {
+    const bool verified_level256_plugin =
+        IsLevel256SupportedTitle(title_id) && plgldr_context.level256_hle_compatibility_verified;
     return {
         .plugin_loaded = plgldr_context.plugin_loaded,
         .plugin_integrity_verified = verified_level256_plugin,
@@ -106,7 +105,7 @@ Kernel::Luma3DS::Level256VerificationPolicy PLG_LDR::GetLevel256VerificationPoli
     return {
         .enabled = enabled,
         .supported_title = IsLevel256SupportedTitle(title_id),
-        .official_plugin_verified = plgldr_context.level256_official_plugin_hash_matches,
+        .official_plugin_verified = plgldr_context.level256_hle_compatibility_verified,
         .plugin_loaded = plgldr_context.plugin_loaded,
         .owner_process_id = plgldr_context.plugin_process_id,
         .plugin_code_begin = plgldr_context.plugin_code_begin,
@@ -150,6 +149,9 @@ PLG_LDR::PLG_LDR(Core::System& system_) : ServiceFramework{"plg:ldr", 1}, system
     plgldr_context.plugin_service_trace_count = 0;
     plgldr_context.plugin_query_process_memory_failures = 0;
     plgldr_context.level256_official_plugin_hash_matches = false;
+    plgldr_context.level256_official_plugin_signature_verified = false;
+    plgldr_context.level256_hle_compatibility_verified = false;
+    plgldr_context.level256_signed_plugin_artifact_version = 0;
     plgldr_context.level256_lfcs_request_count = 0;
     plgldr_context.level256_open_process_trace_started = false;
     plgldr_context.level256_thread_create_log_count = 0;
@@ -201,6 +203,9 @@ void PLG_LDR::PluginLoaderContext::serialize(Archive& ar, const unsigned int) {
         // A savestate does not preserve trust in the loaded plugin bytes. The compatibility gate
         // is re-established only after a fresh file hash during plugin loading.
         level256_official_plugin_hash_matches = false;
+        level256_official_plugin_signature_verified = false;
+        level256_hle_compatibility_verified = false;
+        level256_signed_plugin_artifact_version = 0;
         level256_lfcs_request_count = 0;
         // A restored process owns any restored VM mapping. The transient manager deliberately
         // does not inherit a raw Process pointer or plugin trust across savestate loading.
@@ -328,11 +333,11 @@ void PLG_LDR::TracePluginSVCResult(const Kernel::Process& process, const Kernel:
 }
 
 void PLG_LDR::TraceCtrpfStartupMemoryAccess(const Kernel::Process& process,
-                                           const Kernel::Thread& thread, VAddr address, u32 size,
-                                           bool is_write, u64 value, u32 pc, u32 lr) {
+                                            const Kernel::Thread& thread, VAddr address, u32 size,
+                                            bool is_write, u64 value, u32 pc, u32 lr) {
     if (!Settings::values.level256_compatibility_enabled.GetValue() ||
         !plgldr_context.ctrpf_startup_watchpoints_armed || !plgldr_context.plugin_loaded ||
-        !plgldr_context.level256_official_plugin_hash_matches ||
+        !plgldr_context.level256_hle_compatibility_verified ||
         process.process_id != plgldr_context.plugin_process_id || !process.codeset ||
         process.codeset->program_id != Kernel::LEVEL256_DIAGNOSTIC_TITLE_ID) {
         return;
@@ -351,8 +356,8 @@ void PLG_LDR::TraceCtrpfStartupMemoryAccess(const Kernel::Process& process,
     const VAddr candidate = plgldr_context.ctrpf_osd_scan.selected_candidate;
     const bool candidate_write =
         target == Kernel::LEVEL256_CTRPF_STARTUP_TEXT_ADDRESSES.size() && is_write &&
-        address == Kernel::LEVEL256_CTRPF_OSD_CANDIDATE_ADDRESS &&
-        size == sizeof(u32) && static_cast<u32>(value) == Kernel::LEVEL256_CTRPF_OSD_HOOK_BRANCH &&
+        address == Kernel::LEVEL256_CTRPF_OSD_CANDIDATE_ADDRESS && size == sizeof(u32) &&
+        static_cast<u32>(value) == Kernel::LEVEL256_CTRPF_OSD_HOOK_BRANCH &&
         system.Memory().IsValidVirtualAddress(process, candidate) &&
         system.Memory().Read32(process, candidate) == Kernel::LEVEL256_CTRPF_OSD_HOOK_BRANCH;
     if (candidate_write) {
@@ -378,8 +383,8 @@ void PLG_LDR::TraceCtrpfStartupMemoryAccess(const Kernel::Process& process,
     }
 
     constexpr std::array<const char*, Kernel::LEVEL256_CTRPF_STARTUP_WATCH_TARGET_COUNT> names = {
-        "game_title_text", "create_backup_text", "creating_backup_text", "backup_created_text",
-        "plugin_ready_text", "title_config_path", "start_as_a_path", "osd_candidate_write"};
+        "game_title_text",   "create_backup_text", "creating_backup_text", "backup_created_text",
+        "plugin_ready_text", "title_config_path",  "start_as_a_path",      "osd_candidate_write"};
     auto& cpu = system.GetRunningCore();
     const u32 current_word = target == Kernel::LEVEL256_CTRPF_STARTUP_TEXT_ADDRESSES.size() &&
                                      system.Memory().IsValidVirtualAddress(process, candidate)
@@ -392,17 +397,16 @@ void PLG_LDR::TraceCtrpfStartupMemoryAccess(const Kernel::Process& process,
              "r0=0x{:08X} r1=0x{:08X} r2=0x{:08X} r3=0x{:08X} sp=0x{:08X} "
              "occurrence={}",
              process.process_id, process.codeset->program_id, thread.GetThreadId(), target,
-             names[target], pc, lr, address, size, value, current_word, cpu.GetCPSR(), cpu.GetReg(0),
-             cpu.GetReg(1), cpu.GetReg(2), cpu.GetReg(3), cpu.GetReg(13), count);
+             names[target], pc, lr, address, size, value, current_word, cpu.GetCPSR(),
+             cpu.GetReg(0), cpu.GetReg(1), cpu.GetReg(2), cpu.GetReg(3), cpu.GetReg(13), count);
 }
 
 void PLG_LDR::TraceLevel256GuestWait(const Kernel::Process& process, u32 thread_id, u32 pc,
-                                    const std::string& phase,
-                                    const std::string& object_type, u32 object_id,
-                                    const std::string& object_name, u32 resume_pc) {
+                                     const std::string& phase, const std::string& object_type,
+                                     u32 object_id, const std::string& object_name, u32 resume_pc) {
     auto& context = plgldr_context;
     if (!Settings::values.level256_compatibility_enabled.GetValue() || !context.plugin_loaded ||
-        !context.level256_official_plugin_hash_matches ||
+        !context.level256_hle_compatibility_verified ||
         process.process_id != context.plugin_process_id || !process.codeset ||
         !IsLevel256SupportedTitle(process.codeset->program_id)) {
         return;
@@ -464,8 +468,7 @@ void PLG_LDR::OnProcessRun(Kernel::Process& process, Kernel::KernelSystem& kerne
         LOG_ERROR(Service_PLGLDR,
                   "Cannot start plugin while previous Level256 process view is still mapped: "
                   "owner_pid={} address=0x{:08X} pending={}",
-                  process_view_manager.GetOwnerProcessId(),
-                  process_view_manager.GetOwnedAddress(),
+                  process_view_manager.GetOwnerProcessId(), process_view_manager.GetOwnedAddress(),
                   process_view_manager.IsReleasePending(process));
         return;
     }
@@ -564,9 +567,9 @@ void PLG_LDR::OnProcessRun(Kernel::Process& process, Kernel::KernelSystem& kerne
         const std::string default_path = plugin_root + "default.3gx";
         const auto hid = Service::HID::GetModule(system);
         const bool select_pressed = hid && hid->GetState().select;
-        const auto path_source = ChoosePluginPathSource(
-            title_id, FileUtil::Exists(level256_path), select_pressed, !title_plugins.empty(),
-            FileUtil::Exists(default_path));
+        const auto path_source =
+            ChoosePluginPathSource(title_id, FileUtil::Exists(level256_path), select_pressed,
+                                   !title_plugins.empty(), FileUtil::Exists(default_path));
 
         if (path_source == PluginPathSource::Level256 &&
             attempt_load(level256_path, false) == Loader::ResultStatus::Success) {
@@ -595,32 +598,30 @@ void PLG_LDR::OnProcessRun(Kernel::Process& process, Kernel::KernelSystem& kerne
 
 void PLG_LDR::OnProcessExit(Kernel::Process& process, Kernel::KernelSystem& kernel) {
     if (plgldr_context.plugin_loaded && process.process_id == plgldr_context.plugin_process_id) {
-        if (plgldr_context.level256_official_plugin_hash_matches && process.codeset &&
+        if (plgldr_context.level256_hle_compatibility_verified && process.codeset &&
             IsLevel256SupportedTitle(process.codeset->program_id)) {
-            LOG_INFO(Service_PLGLDR,
-                     "Level256 CTRPF frame diagnostic summary title={:016X} pid={} "
-                     "callback=0x{:08X} "
-                     "top_r0_zero={} bottom_r0_one={} top_render_entry=0x{:08X} "
-                     "top_render_path={} hook_invocations={} sample_cap=32 "
-                     "guest_waits={} event_notifications_with_waiter={} guest_wakeups={} "
-                     "arbiter_waits={} arbiter_signals={} arbiter_wakeups={}",
-                     process.codeset->program_id, process.process_id,
-                     Kernel::LEVEL256_CTRPF_MAIN_CALLBACK_ADDRESS,
-                     plgldr_context.ctrpf_top_callback_count,
-                     plgldr_context.ctrpf_bottom_callback_count,
-                     Kernel::LEVEL256_CTRPF_OSD_RENDER_ENTRY_ADDRESS,
-                     plgldr_context.ctrpf_top_render_path_count,
-                     plgldr_context.ctrpf_hook_invocation_count,
-                     plgldr_context.ctrpf_guest_wait_count,
-                     plgldr_context.ctrpf_guest_event_notification_count,
-                     plgldr_context.ctrpf_guest_wakeup_count,
-                     plgldr_context.ctrpf_guest_arbiter_wait_count,
-                     plgldr_context.ctrpf_guest_arbiter_signal_count,
-                     plgldr_context.ctrpf_guest_arbiter_wakeup_count);
+            LOG_INFO(
+                Service_PLGLDR,
+                "Level256 CTRPF frame diagnostic summary title={:016X} pid={} "
+                "callback=0x{:08X} "
+                "top_r0_zero={} bottom_r0_one={} top_render_entry=0x{:08X} "
+                "top_render_path={} hook_invocations={} sample_cap=32 "
+                "guest_waits={} event_notifications_with_waiter={} guest_wakeups={} "
+                "arbiter_waits={} arbiter_signals={} arbiter_wakeups={}",
+                process.codeset->program_id, process.process_id,
+                Kernel::LEVEL256_CTRPF_MAIN_CALLBACK_ADDRESS,
+                plgldr_context.ctrpf_top_callback_count, plgldr_context.ctrpf_bottom_callback_count,
+                Kernel::LEVEL256_CTRPF_OSD_RENDER_ENTRY_ADDRESS,
+                plgldr_context.ctrpf_top_render_path_count,
+                plgldr_context.ctrpf_hook_invocation_count, plgldr_context.ctrpf_guest_wait_count,
+                plgldr_context.ctrpf_guest_event_notification_count,
+                plgldr_context.ctrpf_guest_wakeup_count,
+                plgldr_context.ctrpf_guest_arbiter_wait_count,
+                plgldr_context.ctrpf_guest_arbiter_signal_count,
+                plgldr_context.ctrpf_guest_arbiter_wakeup_count);
         }
         if (plgldr_context.ctrpf_startup_watchpoints_armed) {
-            for (std::size_t i = 0; i < Kernel::LEVEL256_CTRPF_STARTUP_TEXT_ADDRESSES.size();
-                 ++i) {
+            for (std::size_t i = 0; i < Kernel::LEVEL256_CTRPF_STARTUP_TEXT_ADDRESSES.size(); ++i) {
                 const VAddr address = Kernel::LEVEL256_CTRPF_STARTUP_TEXT_ADDRESSES[i];
                 if (kernel.memory.IsValidVirtualAddress(process, address)) {
                     kernel.memory.UnregisterWatchpoint(process, address, 1);
@@ -628,11 +629,11 @@ void PLG_LDR::OnProcessExit(Kernel::Process& process, Kernel::KernelSystem& kern
             }
             if (plgldr_context.ctrpf_osd_scan.selected_candidate ==
                     Kernel::LEVEL256_CTRPF_OSD_CANDIDATE_ADDRESS &&
-                kernel.memory.IsValidVirtualAddress(
-                    process, Kernel::LEVEL256_CTRPF_OSD_CANDIDATE_ADDRESS)) {
-                kernel.memory.UnregisterWatchpoint(
-                    process, Kernel::LEVEL256_CTRPF_OSD_CANDIDATE_ADDRESS,
-                    Kernel::LEVEL256_CTRPF_OSD_CANDIDATE_SIZE);
+                kernel.memory.IsValidVirtualAddress(process,
+                                                    Kernel::LEVEL256_CTRPF_OSD_CANDIDATE_ADDRESS)) {
+                kernel.memory.UnregisterWatchpoint(process,
+                                                   Kernel::LEVEL256_CTRPF_OSD_CANDIDATE_ADDRESS,
+                                                   Kernel::LEVEL256_CTRPF_OSD_CANDIDATE_SIZE);
             }
             LOG_INFO(Service_PLGLDR,
                      "Level256 CTRPF startup memory watch summary pid={} accesses="
@@ -647,8 +648,8 @@ void PLG_LDR::OnProcessExit(Kernel::Process& process, Kernel::KernelSystem& kern
                      plgldr_context.ctrpf_startup_watch_counts[5],
                      plgldr_context.ctrpf_startup_watch_counts[6],
                      plgldr_context.ctrpf_startup_watch_counts[7]);
-        plgldr_context.ctrpf_startup_watchpoints_armed = false;
-        plgldr_context.ctrpf_osd_candidate_execution_seen = false;
+            plgldr_context.ctrpf_startup_watchpoints_armed = false;
+            plgldr_context.ctrpf_osd_candidate_execution_seen = false;
         }
         u32 status = kernel.memory.Read32(FileSys::Plugin3GXLoader::_3GX_exe_load_addr - 0xC);
         LOG_INFO(Service_PLGLDR, "3GX process exit pid={} title={:016X} bootloader_status=0x{:08X}",
@@ -684,6 +685,9 @@ void PLG_LDR::OnProcessExit(Kernel::Process& process, Kernel::KernelSystem& kern
         plgldr_context.plugin_loaded = false;
         plgldr_context.plugin_process_id = UINT32_MAX;
         plgldr_context.level256_official_plugin_hash_matches = false;
+        plgldr_context.level256_official_plugin_signature_verified = false;
+        plgldr_context.level256_hle_compatibility_verified = false;
+        plgldr_context.level256_signed_plugin_artifact_version = 0;
         plgldr_context.level256_lfcs_request_count = 0;
         plgldr_context.ctrpf_osd_scan = {};
         plgldr_context.ctrpf_osd_candidate_initial_words = {};
@@ -853,8 +857,8 @@ void PLG_LDR::GetPluginPath(Kernel::HLERequestContext& ctx) {
 namespace {
 
 std::optional<Level256LFCS::LfcsPayload> LoadVerifiedLocalFriendCodeSeedA() {
-    const std::string path = FileUtil::GetUserPath(FileUtil::UserPath::NANDDir) +
-                             "rw/sys/LocalFriendCodeSeed_A";
+    const std::string path =
+        FileUtil::GetUserPath(FileUtil::UserPath::NANDDir) + "rw/sys/LocalFriendCodeSeed_A";
     if (!FileUtil::Exists(path)) {
         return std::nullopt;
     }
@@ -918,7 +922,7 @@ void PLG_LDR::GetLevel256LFCS(Kernel::HLERequestContext& ctx) {
     const bool authorized = Level256LFCS::IsAuthorized(
         Settings::values.level256_compatibility_enabled.GetValue() && plgldr_context.is_enabled,
         IsLevel256SupportedTitle(caller_title_id), plgldr_context.plugin_loaded,
-        plgldr_context.level256_official_plugin_hash_matches, caller_process_id,
+        plgldr_context.level256_hle_compatibility_verified, caller_process_id,
         plgldr_context.plugin_process_id, descriptor_process_id);
 
     Result result = ResultSuccess;

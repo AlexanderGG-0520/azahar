@@ -259,9 +259,8 @@ private:
         if (!plugin_loader) {
             return;
         }
-        plugin_loader->TraceCtrpfStartupMemoryAccess(
-            *process, *thread, address, size, is_write, value, parent.GetReg(15),
-            parent.GetReg(14));
+        plugin_loader->TraceCtrpfStartupMemoryAccess(*process, *thread, address, size, is_write,
+                                                     value, parent.GetReg(15), parent.GetReg(14));
     }
 
     ARM_Dynarmic& parent;
@@ -332,13 +331,13 @@ void ARM_Dynarmic::Run() {
                 auto& context = plugin_loader->GetPluginLoaderContext();
                 if (context.ctrpf_hook_execution_trace_armed &&
                     context.ctrpf_hook_trace_process_id == process->process_id &&
-                    context.plugin_loaded && context.level256_official_plugin_hash_matches &&
+                    context.plugin_loaded && context.level256_hle_compatibility_verified &&
                     context.plugin_process_id == process->process_id &&
                     memory.IsValidVirtualAddress(*process, osd_candidate_pc)) {
                     const u32 instruction = memory.Read32(*process, osd_candidate_pc);
                     const u32 cpsr_before = GetCPSR();
-                    const std::array<u32, 6> regs_before = {GetReg(0), GetReg(1), GetReg(2),
-                                                           GetReg(3), GetReg(13), GetReg(14)};
+                    const std::array<u32, 6> regs_before = {GetReg(0), GetReg(1),  GetReg(2),
+                                                            GetReg(3), GetReg(13), GetReg(14)};
                     context.ctrpf_hook_execution_trace_armed = false;
                     jit->Step();
                     const u32 pc_after = thread->status == Kernel::ThreadStatus::Running
@@ -372,7 +371,7 @@ void ARM_Dynarmic::Run() {
                     }
                     return;
                 }
-                if (context.plugin_loaded && context.level256_official_plugin_hash_matches &&
+                if (context.plugin_loaded && context.level256_hle_compatibility_verified &&
                     context.plugin_process_id == process->process_id &&
                     context.ctrpf_osd_candidate_execution_seen &&
                     context.ctrpf_hook_callback_target ==
@@ -403,7 +402,7 @@ void ARM_Dynarmic::Run() {
                 auto& context = plugin_loader->GetPluginLoaderContext();
                 const u32 candidate = context.ctrpf_osd_scan.selected_candidate;
                 const u32 pc_before = osd_candidate_pc;
-                if (context.plugin_loaded && context.level256_official_plugin_hash_matches &&
+                if (context.plugin_loaded && context.level256_hle_compatibility_verified &&
                     context.plugin_process_id == process->process_id &&
                     candidate == Kernel::LEVEL256_CTRPF_OSD_CANDIDATE_ADDRESS &&
                     context.ctrpf_osd_candidate_initial_words[0] == 0xE92D5FF0 &&
@@ -533,7 +532,7 @@ void ARM_Dynarmic::Run() {
             if (const auto plugin_loader = Service::PLGLDR::GetService(system)) {
                 auto& context = plugin_loader->GetPluginLoaderContext();
                 if (context.ctrpf_hook_trace_started && context.plugin_loaded &&
-                    context.level256_official_plugin_hash_matches &&
+                    context.level256_hle_compatibility_verified &&
                     context.plugin_process_id == process->process_id &&
                     context.ctrpf_hook_trace_thread_id == thread->GetThreadId() &&
                     context.ctrpf_hook_trace_runs < Kernel::LEVEL256_CTRPF_HOOK_TRACE_RUN_LIMIT) {
@@ -568,8 +567,8 @@ void ARM_Dynarmic::Run() {
                                  "Level256 CTRPF generated callback target entered pid={} "
                                  "thread={} target_pc=0x{:08X} instruction=0x{:08X} "
                                  "r0=0x{:08X} is_bottom={}",
-                                 process->process_id, thread->GetThreadId(), pc_before,
-                                 instruction, regs_before[0], regs_before[0] != 0);
+                                 process->process_id, thread->GetThreadId(), pc_before, instruction,
+                                 regs_before[0], regs_before[0] != 0);
                     }
                     if (context.ctrpf_hook_callback_target ==
                             Kernel::LEVEL256_CTRPF_MAIN_CALLBACK_ADDRESS &&
@@ -629,10 +628,10 @@ void ARM_Dynarmic::Run() {
                                  "r0_after=0x{:08X} r1_after=0x{:08X} lr_after=0x{:08X} "
                                  "thread_status_after={}",
                                  process->process_id, thread->GetThreadId(),
-                                 context.ctrpf_hook_trace_runs, pc_before, instruction,
-                                 cpsr_before, regs_before[0], regs_before[1], regs_before[2],
-                                 regs_before[3], regs_before[4], regs_before[5], regs_before[6],
-                                 pc_after, reg_after(0), reg_after(1), reg_after(14),
+                                 context.ctrpf_hook_trace_runs, pc_before, instruction, cpsr_before,
+                                 regs_before[0], regs_before[1], regs_before[2], regs_before[3],
+                                 regs_before[4], regs_before[5], regs_before[6], pc_after,
+                                 reg_after(0), reg_after(1), reg_after(14),
                                  PluginTraceThreadStatusName(status_after));
                     }
                     // The official MITM hook dispatches through `LDR pc, [pc, #-4]`
@@ -647,8 +646,7 @@ void ARM_Dynarmic::Run() {
                                  "asm_pc=0x{:08X} instruction=0x{:08X} dispatch={} "
                                  "target_pc=0x{:08X} target_in_plugin_code={}",
                                  process->process_id, thread->GetThreadId(), pc_before, instruction,
-                                 is_blx_lr ? "BLX_LR" : "LDR_PC_LITERAL",
-                                 pc_after,
+                                 is_blx_lr ? "BLX_LR" : "LDR_PC_LITERAL", pc_after,
                                  pc_after >= context.plugin_code_begin &&
                                      pc_after < context.plugin_code_end);
                     }
@@ -701,8 +699,8 @@ void ARM_Dynarmic::Run() {
                      "pc=0x{:08X} r6=0x{:08X} wait_runs={}",
                      reason, plugin_trace_process_id, plugin_trace_thread_id,
                      plugin_trace_instruction_index, plugin_trace_log_count,
-                     plugin_trace_critical_log_count, plugin_trace_context_log_count, pc,
-                     GetReg(6), plugin_trace_wait_count);
+                     plugin_trace_critical_log_count, plugin_trace_context_log_count, pc, GetReg(6),
+                     plugin_trace_wait_count);
             plugin_trace_instruction_limit = 0;
             plugin_trace_wait_for_target = false;
         };
@@ -758,13 +756,11 @@ void ARM_Dynarmic::Run() {
             plugin_trace_wait_count = 0;
             plugin_trace_waiting_reported = false;
             const u32 pc = GetReg(15);
-            if (pc == 0x07023EE8 || pc == 0x07023DA0 || pc == 0x07023DA8 ||
-                pc == 0x07023DB8 || pc == 0x07023E10 || pc == 0x07023E2C ||
-                pc == 0x07023E78 || pc == 0x07023DE8 || pc == 0x07023DF4 ||
-                pc == 0x07023EB0 || pc == 0x0701C4A8 || pc == 0x0701C508 ||
-                pc == 0x0701C568 || pc == 0x0701C574 || pc == 0x0701C5D8 ||
-                pc == 0x0701C5F4 || pc == 0x0701C88C || pc == 0x07046774 ||
-                pc == 0x070467D0) {
+            if (pc == 0x07023EE8 || pc == 0x07023DA0 || pc == 0x07023DA8 || pc == 0x07023DB8 ||
+                pc == 0x07023E10 || pc == 0x07023E2C || pc == 0x07023E78 || pc == 0x07023DE8 ||
+                pc == 0x07023DF4 || pc == 0x07023EB0 || pc == 0x0701C4A8 || pc == 0x0701C508 ||
+                pc == 0x0701C568 || pc == 0x0701C574 || pc == 0x0701C5D8 || pc == 0x0701C5F4 ||
+                pc == 0x0701C88C || pc == 0x07046774 || pc == 0x070467D0) {
                 const u32 hook_object = memory.Read32(*process, 0x070F41E4);
                 const bool has_shinuchi_osd_candidate =
                     process->codeset->program_id == Kernel::LEVEL256_DIAGNOSTIC_TITLE_ID;
@@ -778,8 +774,7 @@ void ARM_Dynarmic::Run() {
                          "text_pages={} hook_object=0x{:08X} hook_state=0x{:08X} "
                          "candidate_word=0x{:08X} trace_index={}",
                          process->process_id, thread->GetThreadId(), pc, GetReg(0), GetReg(1),
-                         GetReg(2), GetReg(14), memory.Read32(*process, 0x070F56A8),
-                         hook_object,
+                         GetReg(2), GetReg(14), memory.Read32(*process, 0x070F56A8), hook_object,
                          memory.IsValidVirtualAddress(*process, hook_object)
                              ? memory.Read32(*process, hook_object + 4)
                              : 0xFFFFFFFF,
@@ -843,12 +838,11 @@ void ARM_Dynarmic::Run() {
                                   decoded.rn, decoded.rd);
                     } else {
                         const s64 effective = decoded.effective_address;
-                        const bool address_valid = memory.IsValidVirtualAddress(
-                            *process, static_cast<VAddr>(effective));
-                        const u32 value = address_valid
-                                              ? memory.Read32(*process,
-                                                              static_cast<VAddr>(effective))
-                                              : 0;
+                        const bool address_valid =
+                            memory.IsValidVirtualAddress(*process, static_cast<VAddr>(effective));
+                        const u32 value =
+                            address_valid ? memory.Read32(*process, static_cast<VAddr>(effective))
+                                          : 0;
                         const u64 snapshot_base = static_cast<u64>(before[13]) + 0x10;
                         ++plugin_trace_log_count;
                         ++plugin_trace_critical_log_count;
@@ -867,8 +861,7 @@ void ARM_Dynarmic::Run() {
                                 ? fmt::format("0x{:08X}", static_cast<u32>(snapshot_base))
                                 : "overflow",
                             effective >= static_cast<s64>(snapshot_base)
-                                ? fmt::format("0x{:X}",
-                                              effective - static_cast<s64>(snapshot_base))
+                                ? fmt::format("0x{:X}", effective - static_cast<s64>(snapshot_base))
                                 : "before_snapshot");
                     }
                 }

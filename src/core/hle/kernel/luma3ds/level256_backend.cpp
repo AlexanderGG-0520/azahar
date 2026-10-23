@@ -41,7 +41,7 @@ Level256BackdoorResult HandleLevel256CustomBackdoor(
         IsValidCustomBackdoorCallback(luma_context, authorization, process->process_id, in_r0)) {
         const bool compatibility_enabled =
             Settings::values.level256_compatibility_enabled.GetValue();
-        const bool trusted_plugin = context.level256_official_plugin_hash_matches;
+        const bool trusted_plugin = context.level256_hle_compatibility_verified;
         const u32 callback = in_r0;
         const u32 arg0 = in_r1;
         const u32 arg1 = in_r2;
@@ -434,7 +434,7 @@ Level256BackdoorResult HandleLevel256CustomBackdoor(
             Kernel::ApplyLevel256BackdoorPatch(
                 Kernel::ShouldApplyLevel256BackdoorPatch(
                     Settings::values.level256_compatibility_enabled.GetValue(),
-                    context.level256_official_plugin_hash_matches, process->codeset->program_id,
+                    context.level256_hle_compatibility_verified, process->codeset->program_id,
                     process->process_id, context.plugin_process_id, context.plugin_loaded,
                     context.plugin_code_begin, context.plugin_code_end, in_pc, immediate, in_r0,
                     in_r1, in_r2, in_r3, current_instruction),

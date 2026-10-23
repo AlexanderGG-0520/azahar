@@ -141,9 +141,13 @@ public:
         u32 ctrpf_guest_arbiter_wait_count = 0;
         u32 ctrpf_guest_arbiter_signal_count = 0;
         u32 ctrpf_guest_arbiter_wakeup_count = 0;
-        // True only when the loaded bytes match the known official Level256.3gx digest.
-        // Transient so restored savestates cannot inherit compatibility trust blindly.
+        // Exact legacy file identity, retained for the previously reviewed plugin.
         bool level256_official_plugin_hash_matches = false;
+        // Publisher identity from the appended Ed25519 manifest, transient across savestates.
+        bool level256_official_plugin_signature_verified = false;
+        // Privileged HLE profile authorization; stricter than publisher identity.
+        bool level256_hle_compatibility_verified = false;
+        u32 level256_signed_plugin_artifact_version = 0;
         // Count of 0x2560 requests for the current plugin load; deliberately transient.
         u32 level256_lfcs_request_count = 0;
         bool is_default_path = false;
@@ -181,9 +185,9 @@ public:
     void TracePluginSVCResult(const Kernel::Process& process, const Kernel::Thread& thread,
                               u32 svc_id, const char* svc_name, u32 svc_pc, u32 post_hle_pc,
                               u32 type, s32 param, u32 result, u64 value);
-    void TraceCtrpfStartupMemoryAccess(const Kernel::Process& process,
-                                       const Kernel::Thread& thread, VAddr address, u32 size,
-                                       bool is_write, u64 value, u32 pc, u32 lr);
+    void TraceCtrpfStartupMemoryAccess(const Kernel::Process& process, const Kernel::Thread& thread,
+                                       VAddr address, u32 size, bool is_write, u64 value, u32 pc,
+                                       u32 lr);
     void TraceLevel256GuestWait(const Kernel::Process& process, u32 thread_id, u32 pc,
                                 const std::string& phase, const std::string& object_type,
                                 u32 object_id, const std::string& object_name, u32 resume_pc);
@@ -197,8 +201,8 @@ public:
         return {.enabled = enabled};
     }
     Kernel::Luma3DS::PluginAuthorization GetLumaExtensionAuthorization(u64 title_id) const;
-    Kernel::Luma3DS::Level256VerificationPolicy GetLevel256VerificationPolicy(
-        bool enabled, u64 title_id) const;
+    Kernel::Luma3DS::Level256VerificationPolicy GetLevel256VerificationPolicy(bool enabled,
+                                                                              u64 title_id) const;
     Kernel::Luma3DS::Level256ProcessViewManager& GetProcessViewManager() {
         return process_view_manager;
     }
