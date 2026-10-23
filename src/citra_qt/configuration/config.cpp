@@ -785,6 +785,7 @@ void QtConfig::ReadSystemValues() {
         ReadBasicSetting(Settings::values.plugin_loader_enabled);
         ReadBasicSetting(Settings::values.allow_plugin_loader);
         ReadBasicSetting(Settings::values.level256_compatibility_enabled);
+        ReadBasicSetting(Settings::values.level256_bootloader_diagnostics_enabled);
         ReadBasicSetting(Settings::values.apply_region_free_patch);
     }
 
@@ -1338,6 +1339,7 @@ void QtConfig::SaveSystemValues() {
         WriteBasicSetting(Settings::values.plugin_loader_enabled);
         WriteBasicSetting(Settings::values.allow_plugin_loader);
         WriteBasicSetting(Settings::values.level256_compatibility_enabled);
+        WriteBasicSetting(Settings::values.level256_bootloader_diagnostics_enabled);
         WriteBasicSetting(Settings::values.apply_region_free_patch);
     }
 

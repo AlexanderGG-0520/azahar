@@ -57,6 +57,72 @@ TEST_CASE("Level256 supported-title set includes Red Cat Corps and excludes near
         begin, end, end));
 }
 
+TEST_CASE("Level256 bootloader diagnostics require explicit opt-in and exact owner scope",
+          "[core][kernel][level256]") {
+    using Kernel::LEVEL256_BOOTLOADER_DIAGNOSTIC_TITLE_ID;
+    using Kernel::LEVEL256_BOOTLOADER_TRACE_ADD_LR_PC;
+    using Kernel::ShouldCaptureLevel256BootloaderDiagnostic;
+    using Kernel::ShouldCaptureLevel256BootloaderExceptionDiagnostic;
+    using Kernel::ShouldCaptureLevel256BootloaderMapDiagnostic;
+
+    REQUIRE(ShouldCaptureLevel256BootloaderMapDiagnostic(
+        true, true, true, LEVEL256_BOOTLOADER_DIAGNOSTIC_TITLE_ID, 16, 38, true));
+    REQUIRE_FALSE(ShouldCaptureLevel256BootloaderMapDiagnostic(
+        false, true, true, LEVEL256_BOOTLOADER_DIAGNOSTIC_TITLE_ID, 16, 38, true));
+    REQUIRE_FALSE(ShouldCaptureLevel256BootloaderMapDiagnostic(
+        true, false, true, LEVEL256_BOOTLOADER_DIAGNOSTIC_TITLE_ID, 16, 38, true));
+    REQUIRE_FALSE(ShouldCaptureLevel256BootloaderMapDiagnostic(
+        true, true, false, LEVEL256_BOOTLOADER_DIAGNOSTIC_TITLE_ID, 16, 38, true));
+    REQUIRE_FALSE(ShouldCaptureLevel256BootloaderMapDiagnostic(
+        true, true, true, LEVEL256_BOOTLOADER_DIAGNOSTIC_TITLE_ID, 16, 38, false));
+
+    constexpr u32 code_begin = 0x07000100;
+    constexpr u32 code_end = 0x0710A000;
+    constexpr u32 bootloader_begin = 0x06FFF000;
+    constexpr u32 bootloader_end = 0x07000000;
+    const auto runtime_capture =
+        [&](u64 title_id = LEVEL256_BOOTLOADER_DIAGNOSTIC_TITLE_ID, u32 pid = 16,
+            u32 plugin_pid = 16, bool loaded = true, u32 tid = 38, u32 plugin_tid = 38,
+            u32 pc = LEVEL256_BOOTLOADER_TRACE_ADD_LR_PC, bool enabled = true,
+            bool diagnostics = true, bool identity = true) {
+            return ShouldCaptureLevel256BootloaderDiagnostic(
+                enabled, diagnostics, identity, title_id, pid, plugin_pid, loaded, tid, plugin_tid,
+                pc, code_begin, code_end, bootloader_begin, bootloader_end);
+        };
+    REQUIRE(runtime_capture());
+    REQUIRE_FALSE(runtime_capture(Kernel::LEVEL256_DIAGNOSTIC_TITLE_ID));
+    REQUIRE_FALSE(runtime_capture(LEVEL256_BOOTLOADER_DIAGNOSTIC_TITLE_ID, 16, 17));
+    REQUIRE_FALSE(runtime_capture(LEVEL256_BOOTLOADER_DIAGNOSTIC_TITLE_ID, 16, 16, false));
+    REQUIRE_FALSE(runtime_capture(LEVEL256_BOOTLOADER_DIAGNOSTIC_TITLE_ID, 16, 16, true, 37));
+    REQUIRE_FALSE(
+        runtime_capture(LEVEL256_BOOTLOADER_DIAGNOSTIC_TITLE_ID, 16, 16, true, 38, 38, 0xEB000FB0));
+    REQUIRE_FALSE(runtime_capture(LEVEL256_BOOTLOADER_DIAGNOSTIC_TITLE_ID, 16, 16, true, 38, 38,
+                                  LEVEL256_BOOTLOADER_TRACE_ADD_LR_PC, false));
+    REQUIRE_FALSE(runtime_capture(LEVEL256_BOOTLOADER_DIAGNOSTIC_TITLE_ID, 16, 16, true, 38, 38,
+                                  LEVEL256_BOOTLOADER_TRACE_ADD_LR_PC, true, true, false));
+
+    REQUIRE(ShouldCaptureLevel256BootloaderExceptionDiagnostic(
+        true, true, true, LEVEL256_BOOTLOADER_DIAGNOSTIC_TITLE_ID, 16, 16, true, 38, 38));
+    REQUIRE_FALSE(ShouldCaptureLevel256BootloaderExceptionDiagnostic(
+        false, true, true, LEVEL256_BOOTLOADER_DIAGNOSTIC_TITLE_ID, 16, 16, true, 38, 38));
+    REQUIRE_FALSE(ShouldCaptureLevel256BootloaderExceptionDiagnostic(
+        true, true, true, LEVEL256_BOOTLOADER_DIAGNOSTIC_TITLE_ID, 16, 16, true, 39, 38));
+    REQUIRE_FALSE(ShouldCaptureLevel256BootloaderExceptionDiagnostic(
+        true, true, false, LEVEL256_BOOTLOADER_DIAGNOSTIC_TITLE_ID, 16, 16, true, 38, 38));
+}
+
+TEST_CASE("Level256 D4 LDR decode identifies the saved game entry pointer",
+          "[core][kernel][level256]") {
+    std::array<u32, 16> registers{};
+    registers[14] = 0x06FFF0F0;
+    const auto decoded = Kernel::DecodeLevel256ArmLdrAddress(
+        0xE59EF000, Kernel::LEVEL256_BOOTLOADER_TRACE_LOAD_PC, registers);
+    REQUIRE(decoded.valid);
+    REQUIRE(decoded.rn == 14);
+    REQUIRE(decoded.rd == 15);
+    REQUIRE(decoded.effective_address == 0x06FFF0F0);
+}
+
 TEST_CASE("Level256 CreateThread diagnostics are bounded and require an authenticated title",
           "[core][kernel][level256]") {
     u32 count = 0;

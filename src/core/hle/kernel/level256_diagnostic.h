@@ -13,6 +13,53 @@
 namespace Kernel {
 
 constexpr u64 LEVEL256_DIAGNOSTIC_TITLE_ID = 0x0004000000155100ULL;
+constexpr u64 LEVEL256_BOOTLOADER_DIAGNOSTIC_TITLE_ID = 0x000400000016C700ULL;
+constexpr std::array<u32, 3> LEVEL256_BOOTLOADER_SNAPSHOT_ADDRESSES = {
+    0x06FFF0E8, // saved game instruction 0
+    0x06FFF0EC, // saved game instruction 1
+    0x06FFF0F0, // saved game entry point
+};
+constexpr std::array<u32, 2> LEVEL256_GAME_ENTRY_SNAPSHOT_ADDRESSES = {
+    0x00100000, // original game entry instruction
+    0x00100004, // following game instruction
+};
+constexpr u32 LEVEL256_BOOTLOADER_TRACE_ADD_LR_PC = 0x06FFF0D0;
+constexpr u32 LEVEL256_BOOTLOADER_TRACE_LOAD_PC = 0x06FFF0D4;
+constexpr u32 LEVEL256_BOOTLOADER_EXPECTED_RETURN_TARGET = 0x00100000;
+constexpr u32 LEVEL256_BOOTLOADER_TRACE_INSTRUCTION_LIMIT = 4096;
+constexpr std::size_t LEVEL256_BOOTLOADER_TRACE_RING_SIZE = 16;
+constexpr u32 LEVEL256_BOOTLOADER_POINTER_CHANGE_LOG_LIMIT = 8;
+
+constexpr bool ShouldCaptureLevel256BootloaderDiagnostic(
+    bool compatibility_enabled, bool diagnostics_enabled, bool identity_verified, u64 title_id,
+    u32 process_id, u32 plugin_process_id, bool plugin_loaded, u32 thread_id, u32 plugin_thread_id,
+    u32 pc, u32 code_begin, u32 code_end, u32 bootloader_begin, u32 bootloader_end) {
+    return compatibility_enabled && diagnostics_enabled && identity_verified &&
+           title_id == LEVEL256_BOOTLOADER_DIAGNOSTIC_TITLE_ID && process_id != 0 &&
+           process_id == plugin_process_id && plugin_loaded && thread_id != UINT32_MAX &&
+           thread_id == plugin_thread_id &&
+           ((code_begin <= pc && pc < code_end) || (bootloader_begin <= pc && pc < bootloader_end));
+}
+
+constexpr bool ShouldCaptureLevel256BootloaderMapDiagnostic(bool compatibility_enabled,
+                                                            bool diagnostics_enabled,
+                                                            bool identity_verified, u64 title_id,
+                                                            u32 process_id, u32 thread_id,
+                                                            bool thread_owns_process) {
+    return compatibility_enabled && diagnostics_enabled && identity_verified &&
+           title_id == LEVEL256_BOOTLOADER_DIAGNOSTIC_TITLE_ID && process_id != 0 &&
+           thread_id != UINT32_MAX && thread_owns_process;
+}
+
+constexpr bool ShouldCaptureLevel256BootloaderExceptionDiagnostic(
+    bool compatibility_enabled, bool diagnostics_enabled, bool identity_verified, u64 title_id,
+    u32 process_id, u32 plugin_process_id, bool plugin_loaded, u32 thread_id,
+    u32 plugin_thread_id) {
+    return compatibility_enabled && diagnostics_enabled && identity_verified &&
+           title_id == LEVEL256_BOOTLOADER_DIAGNOSTIC_TITLE_ID && process_id != 0 &&
+           process_id == plugin_process_id && plugin_loaded && thread_id != UINT32_MAX &&
+           thread_id == plugin_thread_id;
+}
 /// Title IDs included by the official Level256 online-support list.
 constexpr bool IsLevel256SupportedTitleId(u64 title_id) {
     return Service::PLGLDR::IsLevel256PolicyTitle(title_id);

@@ -44,6 +44,7 @@
 #include "core/hw/aes/key.h"
 #include "core/hw/unique_data.h"
 #include "core/loader/loader.h"
+#include "core/memory.h"
 #include "video_core/gpu.h"
 
 SERIALIZE_EXPORT_IMPL(Service::PLGLDR::PLG_LDR)
@@ -243,7 +244,8 @@ static const char* ThreadStatusName(Kernel::ThreadStatus status) {
 }
 
 bool PLG_LDR::TracePluginSVC(const Kernel::Process& process, const Kernel::Thread& thread, u32 pc,
-                             u32 svc_id, const char* svc_name, const char* service_name) {
+                             u32 svc_id, const char* svc_name, const char* service_name, u32 type,
+                             s32 param, const std::array<u32, 8>& registers) {
     const bool in_plugin_code =
         pc >= plgldr_context.plugin_code_begin && pc < plgldr_context.plugin_code_end;
     const bool in_bootloader =
@@ -278,6 +280,81 @@ bool PLG_LDR::TracePluginSVC(const Kernel::Process& process, const Kernel::Threa
                  ThreadStatusName(thread.status));
     }
 
+    if (svc_id == 0xA0 && process.codeset &&
+        process.codeset->program_id == Kernel::LEVEL256_BOOTLOADER_DIAGNOSTIC_TITLE_ID &&
+        Settings::values.level256_compatibility_enabled.GetValue() &&
+        Settings::values.level256_bootloader_diagnostics_enabled.GetValue() &&
+        plgldr_context.level256_plugin_identity_verified &&
+        plgldr_context.level256_map_process_memory_ex_trace_count < 8) {
+        ++plgldr_context.level256_map_process_memory_ex_trace_count;
+        const auto request = Kernel::Luma3DS::DecodeMapProcessMemoryExRequest(registers);
+        const auto destination_process = process.handle_table.Get<Kernel::Process>(
+            static_cast<Kernel::Handle>(request.destination_process_handle));
+        const auto source_process = process.handle_table.Get<Kernel::Process>(
+            static_cast<Kernel::Handle>(request.source_process_handle));
+        const auto describe_vma = [](const std::shared_ptr<Kernel::Process>& target_process,
+                                     u32 address) {
+            if (!target_process || address >= Kernel::VMManager::MAX_ADDRESS) {
+                return std::string{"unresolved"};
+            }
+            const auto vma = target_process->vm_manager.FindVMA(address);
+            if (vma == target_process->vm_manager.vma_map.end()) {
+                return std::string{"unmapped"};
+            }
+            return fmt::format("base=0x{:08X} size=0x{:X} type={} state={} permissions=0x{:X}",
+                               vma->second.base, vma->second.size,
+                               static_cast<u32>(vma->second.type),
+                               static_cast<u32>(vma->second.meminfo_state),
+                               static_cast<u32>(vma->second.permissions));
+        };
+        const u32 page_size = ~Memory::CITRA_PAGE_MASK + 1;
+        const u32 rounded_size = request.size & ~Memory::CITRA_PAGE_MASK;
+        const u64 destination_end = static_cast<u64>(request.destination_address) + rounded_size;
+        const u64 source_end = static_cast<u64>(request.source_address) + rounded_size;
+        const u32 destination_last =
+            destination_end != 0 && destination_end <= Kernel::VMManager::MAX_ADDRESS
+                ? static_cast<u32>(destination_end - 1)
+                : request.destination_address;
+        const u32 source_last = source_end != 0 && source_end <= Kernel::VMManager::MAX_ADDRESS
+                                    ? static_cast<u32>(source_end - 1)
+                                    : request.source_address;
+        LOG_INFO(Service_PLGLDR,
+                 "Level256 MapProcessMemoryEx request pid={} thread={} pc=0x{:08X} "
+                 "abi={} r0=0x{:08X} r1=0x{:08X} r2=0x{:08X} r3=0x{:08X} "
+                 "r4=0x{:08X} r5=0x{:08X} r6=0x{:08X} r7=0x{:08X} "
+                 "dst_handle=0x{:08X} dst_pid={} dst=0x{:08X} src_handle=0x{:08X} "
+                 "src_pid={} src=0x{:08X} size=0x{:X} mapped_size=0x{:X} flags=0x{:X} "
+                 "page_size=0x{:X} dst_vma_first=[{}] dst_vma_last=[{}] "
+                 "src_vma_first=[{}] src_vma_last=[{}] request_index={}",
+                 process.process_id, thread.GetThreadId(), pc, request.abi_v2 ? "v2" : "legacy",
+                 registers[0], registers[1], registers[2], registers[3], registers[4], registers[5],
+                 registers[6], registers[7], request.destination_process_handle,
+                 destination_process ? destination_process->process_id : UINT32_MAX,
+                 request.destination_address, request.source_process_handle,
+                 source_process ? source_process->process_id : UINT32_MAX, request.source_address,
+                 request.size, rounded_size, request.flags, page_size,
+                 describe_vma(destination_process, request.destination_address),
+                 describe_vma(destination_process, destination_last),
+                 describe_vma(source_process, request.source_address),
+                 describe_vma(source_process, source_last),
+                 plgldr_context.level256_map_process_memory_ex_trace_count);
+    }
+
+    if (svc_id == 0x2A && type == Kernel::LEVEL256_DIAGNOSTIC_TYPE &&
+        param == Kernel::LEVEL256_DIAGNOSTIC_PARAM && process.codeset &&
+        Kernel::ShouldCaptureLevel256BootloaderDiagnostic(
+            Settings::values.level256_compatibility_enabled.GetValue(),
+            Settings::values.level256_bootloader_diagnostics_enabled.GetValue(),
+            plgldr_context.level256_plugin_identity_verified, process.codeset->program_id,
+            process.process_id, plgldr_context.plugin_process_id, plgldr_context.plugin_loaded,
+            thread.GetThreadId(), thread.GetThreadId(), pc, plgldr_context.plugin_code_begin,
+            plgldr_context.plugin_code_end, plgldr_context.plugin_bootloader_begin,
+            plgldr_context.plugin_bootloader_end)) {
+        plgldr_context.plugin_trace_thread_id = thread.GetThreadId();
+        plgldr_context.plugin_last_return_pc = pc;
+        TraceLevel256BootloaderSnapshot(process, "before_get_system_info", thread.GetThreadId());
+    }
+
     // Keep this diagnostic bounded and avoid logging SVC arguments or IPC contents.
     constexpr u32 max_plugin_svc_traces = 32;
     if (plgldr_context.plugin_trace_count >= max_plugin_svc_traces) {
@@ -299,6 +376,21 @@ void PLG_LDR::TracePluginSVCResult(const Kernel::Process& process, const Kernel:
         svc_pc >= plgldr_context.plugin_code_begin && svc_pc < plgldr_context.plugin_code_end;
     const bool in_bootloader = svc_pc >= plgldr_context.plugin_bootloader_begin &&
                                svc_pc < plgldr_context.plugin_bootloader_end;
+    if (svc_id == 0xA0 && in_plugin_code && process.codeset &&
+        process.codeset->program_id == Kernel::LEVEL256_BOOTLOADER_DIAGNOSTIC_TITLE_ID &&
+        plgldr_context.plugin_loaded && plgldr_context.plugin_process_id == process.process_id &&
+        Settings::values.level256_compatibility_enabled.GetValue() &&
+        Settings::values.level256_bootloader_diagnostics_enabled.GetValue() &&
+        plgldr_context.level256_plugin_identity_verified &&
+        plgldr_context.level256_map_process_memory_ex_result_trace_count <
+            plgldr_context.level256_map_process_memory_ex_trace_count) {
+        ++plgldr_context.level256_map_process_memory_ex_result_trace_count;
+        LOG_INFO(Service_PLGLDR,
+                 "Level256 MapProcessMemoryEx result pid={} thread={} svc_pc=0x{:08X} "
+                 "post_hle_pc=0x{:08X} result=0x{:08X} value=0x{:016X} status_after={}",
+                 process.process_id, thread.GetThreadId(), svc_pc, post_hle_pc, result, value,
+                 ThreadStatusName(thread.status));
+    }
     if (!plgldr_context.plugin_loaded || plgldr_context.plugin_process_id != process.process_id ||
         (!in_plugin_code && !in_bootloader) || !plgldr_context.plugin_get_system_info_seen ||
         plgldr_context.plugin_trace_thread_id != thread.GetThreadId()) {
@@ -313,6 +405,28 @@ void PLG_LDR::TracePluginSVCResult(const Kernel::Process& process, const Kernel:
                  process.process_id, process.codeset->program_id, thread.GetThreadId(), svc_pc,
                  post_hle_pc, type, param, result, value, ThreadStatusName(thread.status));
         plgldr_context.plugin_last_return_pc = post_hle_pc;
+        if (type == Kernel::LEVEL256_DIAGNOSTIC_TYPE &&
+            param == Kernel::LEVEL256_DIAGNOSTIC_PARAM) {
+            TraceLevel256BootloaderSnapshot(process, "after_get_system_info", thread.GetThreadId());
+        }
+        if (type == Kernel::LEVEL256_DIAGNOSTIC_TYPE &&
+            param == Kernel::LEVEL256_DIAGNOSTIC_PARAM && process.codeset &&
+            !plgldr_context.level256_bootloader_return_trace_started &&
+            Kernel::ShouldCaptureLevel256BootloaderDiagnostic(
+                Settings::values.level256_compatibility_enabled.GetValue(),
+                Settings::values.level256_bootloader_diagnostics_enabled.GetValue(),
+                plgldr_context.level256_plugin_identity_verified, process.codeset->program_id,
+                process.process_id, plgldr_context.plugin_process_id, plgldr_context.plugin_loaded,
+                thread.GetThreadId(), plgldr_context.plugin_trace_thread_id, svc_pc,
+                plgldr_context.plugin_code_begin, plgldr_context.plugin_code_end,
+                plgldr_context.plugin_bootloader_begin, plgldr_context.plugin_bootloader_end)) {
+            plgldr_context.level256_bootloader_return_trace_started = true;
+            system.GetRunningCore().StartPluginInstructionTrace(
+                process.process_id, thread.GetThreadId(), plgldr_context.plugin_code_begin,
+                plgldr_context.plugin_code_end, plgldr_context.plugin_bootloader_begin,
+                plgldr_context.plugin_bootloader_end,
+                Kernel::LEVEL256_BOOTLOADER_TRACE_INSTRUCTION_LIMIT, false, false, true);
+        }
         return;
     }
 
@@ -326,6 +440,92 @@ void PLG_LDR::TracePluginSVCResult(const Kernel::Process& process, const Kernel:
         plgldr_context.plugin_last_return_pc = post_hle_pc;
         ++plgldr_context.plugin_followup_trace_count;
     }
+}
+
+void PLG_LDR::TraceLevel256BootloaderSnapshot(const Kernel::Process& process, const char* phase,
+                                              u32 thread_id) {
+    if (!process.codeset || !Settings::values.level256_compatibility_enabled.GetValue() ||
+        !Settings::values.level256_bootloader_diagnostics_enabled.GetValue() ||
+        !plgldr_context.level256_plugin_identity_verified ||
+        process.codeset->program_id != Kernel::LEVEL256_BOOTLOADER_DIAGNOSTIC_TITLE_ID) {
+        return;
+    }
+
+    const auto* current_thread = system.Kernel().GetCurrentThreadManager().GetCurrentThread();
+    if (!current_thread || current_thread->GetThreadId() != thread_id ||
+        current_thread->owner_process.lock().get() != &process) {
+        return;
+    }
+
+    bool* logged = nullptr;
+    if (std::strcmp(phase, "after_map_bootloader") == 0) {
+        if (!Kernel::ShouldCaptureLevel256BootloaderMapDiagnostic(
+                Settings::values.level256_compatibility_enabled.GetValue(),
+                Settings::values.level256_bootloader_diagnostics_enabled.GetValue(),
+                plgldr_context.level256_plugin_identity_verified, process.codeset->program_id,
+                process.process_id, thread_id, true)) {
+            return;
+        }
+        logged = &plgldr_context.level256_bootloader_map_snapshot_logged;
+    } else if ((std::strcmp(phase, "before_get_system_info") == 0 ||
+                std::strcmp(phase, "after_get_system_info") == 0) &&
+               Kernel::ShouldCaptureLevel256BootloaderDiagnostic(
+                   Settings::values.level256_compatibility_enabled.GetValue(),
+                   Settings::values.level256_bootloader_diagnostics_enabled.GetValue(),
+                   plgldr_context.level256_plugin_identity_verified, process.codeset->program_id,
+                   process.process_id, plgldr_context.plugin_process_id,
+                   plgldr_context.plugin_loaded, thread_id, plgldr_context.plugin_trace_thread_id,
+                   plgldr_context.plugin_last_return_pc, plgldr_context.plugin_code_begin,
+                   plgldr_context.plugin_code_end, plgldr_context.plugin_bootloader_begin,
+                   plgldr_context.plugin_bootloader_end)) {
+        if (std::strcmp(phase, "before_get_system_info") == 0) {
+            logged = &plgldr_context.level256_bootloader_pre_svc_snapshot_logged;
+        } else {
+            logged = &plgldr_context.level256_bootloader_return_snapshot_logged;
+        }
+    }
+    if (!logged || *logged) {
+        return;
+    }
+    *logged = true;
+
+    std::array<u32, Kernel::LEVEL256_BOOTLOADER_SNAPSHOT_ADDRESSES.size()> words{};
+    std::array<bool, Kernel::LEVEL256_BOOTLOADER_SNAPSHOT_ADDRESSES.size()> valid{};
+    for (std::size_t i = 0; i < words.size(); ++i) {
+        const VAddr address = Kernel::LEVEL256_BOOTLOADER_SNAPSHOT_ADDRESSES[i];
+        valid[i] = system.Memory().IsValidVirtualAddress(process, address);
+        if (valid[i]) {
+            words[i] = system.Memory().Read32(process, address);
+        }
+    }
+    std::array<u32, Kernel::LEVEL256_GAME_ENTRY_SNAPSHOT_ADDRESSES.size()> game_entry_words{};
+    std::array<bool, Kernel::LEVEL256_GAME_ENTRY_SNAPSHOT_ADDRESSES.size()> game_entry_valid{};
+    for (std::size_t i = 0; i < game_entry_words.size(); ++i) {
+        const VAddr address = Kernel::LEVEL256_GAME_ENTRY_SNAPSHOT_ADDRESSES[i];
+        game_entry_valid[i] = system.Memory().IsValidVirtualAddress(process, address);
+        if (game_entry_valid[i]) {
+            game_entry_words[i] = system.Memory().Read32(process, address);
+        }
+    }
+    const bool guest_execution_state = std::strcmp(phase, "after_map_bootloader") != 0;
+    const auto& core = system.GetRunningCore();
+    const u32 pc = guest_execution_state ? core.GetReg(15) : 0;
+    const u32 cpsr = guest_execution_state ? core.GetCPSR() : 0;
+    const u32 sp = guest_execution_state ? core.GetReg(13) : 0;
+    const u32 lr = guest_execution_state ? core.GetReg(14) : 0;
+    LOG_INFO(Service_PLGLDR,
+             "Level256 bootloader snapshot phase={} pid={} title_id={:016X} thread={} "
+             "pc=0x{:08X} cpsr=0x{:08X} thumb={} sp=0x{:08X} lr=0x{:08X} "
+             "0x00100000={} 0x00100004={} 0x06FFF0E8={} 0x06FFF0EC={} 0x06FFF0F0={} "
+             "expected_return=0x{:08X}",
+             phase, process.process_id, process.codeset->program_id, thread_id, pc, cpsr,
+             guest_execution_state && (cpsr & (1U << 5)) != 0, sp, lr,
+             game_entry_valid[0] ? fmt::format("0x{:08X}", game_entry_words[0]) : "invalid",
+             game_entry_valid[1] ? fmt::format("0x{:08X}", game_entry_words[1]) : "invalid",
+             valid[0] ? fmt::format("0x{:08X}", words[0]) : "invalid",
+             valid[1] ? fmt::format("0x{:08X}", words[1]) : "invalid",
+             valid[2] ? fmt::format("0x{:08X}", words[2]) : "invalid",
+             Kernel::LEVEL256_BOOTLOADER_EXPECTED_RETURN_TARGET);
 }
 
 void PLG_LDR::TraceCtrpfStartupMemoryAccess(const Kernel::Process& process,

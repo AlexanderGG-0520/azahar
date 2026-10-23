@@ -46,7 +46,7 @@ TEST_CASE("Verified Level256 identity advertises only reviewed ABI capabilities"
     REQUIRE(HasCapability(capabilities, Level256Capability::CustomBackdoor));
     REQUIRE(HasCapability(capabilities, Level256Capability::ControlMemoryUnsafe));
     REQUIRE(HasCapability(capabilities, Level256Capability::Level256LFCS));
-    REQUIRE_FALSE(HasCapability(capabilities, Level256Capability::MapProcessMemoryEx));
+    REQUIRE(HasCapability(capabilities, Level256Capability::MapProcessMemoryEx));
     REQUIRE_FALSE(HasCapability(capabilities, Level256Capability::UnmapProcessMemoryEx));
     REQUIRE_FALSE(HasCapability(capabilities, static_cast<Level256Capability>(0xFF)));
     REQUIRE(HasCapability(capabilities, Level256Capability::PluginUdsControlIPC));
@@ -59,8 +59,8 @@ TEST_CASE("Verified Level256 identity advertises only reviewed ABI capabilities"
     const auto legacy_capabilities = CapabilitiesForLevel256Plugin(true, true);
     REQUIRE(HasCapability(legacy_capabilities, Level256Capability::MapProcessMemoryEx));
     REQUIRE(HasCapability(legacy_capabilities, Level256Capability::UnmapProcessMemoryEx));
-    REQUIRE_FALSE(HasCapability(CapabilitiesForLevel256Plugin(true, false),
-                                Level256Capability::MapProcessMemoryEx));
+    REQUIRE(HasCapability(CapabilitiesForLevel256Plugin(true, false),
+                          Level256Capability::MapProcessMemoryEx));
 }
 
 TEST_CASE("Level256 IPC adapters require their own capability and owner code scope",
@@ -101,12 +101,12 @@ TEST_CASE("Level256 extension dispatch checks each supported SVC capability inde
         .plugin_code_end = 0x07100000,
         .capabilities = CapabilitiesForLevel256Plugin(true, false),
     };
-    for (const u32 svc_id : std::array<u32, 6>{0x90, 0x91, 0x92, 0x93, 0x94, 0xA3}) {
+    for (const u32 svc_id : std::array<u32, 7>{0x90, 0x91, 0x92, 0x93, 0x94, 0xA0, 0xA3}) {
         REQUIRE(DispatchExtensionSvc({.svc_id = svc_id, .process_id = 16, .entry_pc = 0x07001000},
                                      enabled, signed_plugin)
                     .kind == SvcDispatchKind::DelegateToRegisteredHandler);
     }
-    for (const u32 svc_id : std::array<u32, 3>{0xA0, 0xA1, 0xA2}) {
+    for (const u32 svc_id : std::array<u32, 2>{0xA1, 0xA2}) {
         REQUIRE(DispatchExtensionSvc({.svc_id = svc_id, .process_id = 16, .entry_pc = 0x07001000},
                                      enabled, signed_plugin)
                     .kind == SvcDispatchKind::Rejected);
@@ -120,4 +120,32 @@ TEST_CASE("Level256 extension dispatch checks each supported SVC capability inde
     REQUIRE(DispatchExtensionSvc({.svc_id = 0xA1, .process_id = 16, .entry_pc = 0x07001000},
                                  enabled, legacy_plugin)
                 .kind == SvcDispatchKind::DelegateToRegisteredHandler);
+}
+
+TEST_CASE("MapProcessMemoryEx decodes both official wrapper ABIs and validates flags",
+          "[core][kernel][luma3ds][level256][capability]") {
+    using namespace Kernel::Luma3DS;
+
+    const auto legacy = DecodeMapProcessMemoryExRequest(
+        {0xFFFF8001, 0x08000000, 0x00000041, 0x00100000, 0x2000, 1, 0x1234, 0x5678});
+    REQUIRE_FALSE(legacy.abi_v2);
+    CHECK(legacy.destination_process_handle == 0xFFFF8001);
+    CHECK(legacy.destination_address == 0x08000000);
+    CHECK(legacy.source_process_handle == 0x41);
+    CHECK(legacy.source_address == 0x00100000);
+    CHECK(legacy.size == 0x2000);
+    CHECK(legacy.flags == 0); // Legacy wrapper deliberately clears r5.
+
+    const auto current =
+        DecodeMapProcessMemoryExRequest({MAP_PROCESS_MEMORY_EX_ABI_V2_MAGIC, 0x08000000, 0x00000041,
+                                         0x00100000, 0x2000, 1, 0xFFFF8001, 0});
+    REQUIRE(current.abi_v2);
+    CHECK(current.destination_process_handle == 0xFFFF8001);
+    CHECK(current.destination_address == 0x08000000);
+    CHECK(current.source_process_handle == 0x41);
+    CHECK(current.source_address == 0x00100000);
+    CHECK(current.size == 0x2000);
+    CHECK(current.flags == MAP_PROCESS_MEMORY_EX_FLAG_PRIVATE);
+    CHECK(IsValidMapProcessMemoryExFlags(current.flags));
+    CHECK_FALSE(IsValidMapProcessMemoryExFlags(2));
 }

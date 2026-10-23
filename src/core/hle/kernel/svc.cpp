@@ -2566,72 +2566,65 @@ u32 SVC::ConvertVaToPa(u32 addr) {
 Result SVC::MapProcessMemoryEx(Handle dst_process_handle, u32 dst_address,
                                Handle src_process_handle, u32 src_address, u32 size,
                                MapMemoryExFlag flags, Handle dst_process_handle_backup) {
-
-    // Determine if this is the second version of the svc by checking the value at R0.
-    constexpr u32 SVC_VERSION2_MAGIC = 0xFFFFFFF2;
-    if (static_cast<u32>(dst_process_handle) == SVC_VERSION2_MAGIC) {
-        // Version 2, actual handle is provided in 6th argument
-        dst_process_handle = dst_process_handle_backup;
-    } else {
-        // Version 1, the flags argument is not used
-        flags = static_cast<MapMemoryExFlag>(0);
-    }
-
-    const bool map_as_private =
-        (static_cast<u32>(flags) & static_cast<u32>(MapMemoryExFlag::MAPEXFLAGS_PRIVATE)) != 0;
-
-    std::shared_ptr<Process> dst_process =
-        kernel.GetCurrentProcess()->handle_table.Get<Process>(dst_process_handle);
-    std::shared_ptr<Process> src_process =
-        kernel.GetCurrentProcess()->handle_table.Get<Process>(src_process_handle);
-
-    R_UNLESS(dst_process && src_process, ResultInvalidHandle);
-
-    if (size & 0xFFF) {
-        size = (size & ~0xFFF) + Memory::CITRA_PAGE_SIZE;
-    }
-
-    // TODO(PabloMK7) Fix-up this svc.
-
-    // Only linear memory supported
-    auto vma = src_process->vm_manager.FindVMA(src_address);
-    R_UNLESS(vma != src_process->vm_manager.vma_map.end() &&
-                 vma->second.type == VMAType::BackingMemory,
+    const auto request = Luma3DS::DecodeMapProcessMemoryExRequest(
+        {static_cast<u32>(dst_process_handle), dst_address, static_cast<u32>(src_process_handle),
+         src_address, size, static_cast<u32>(flags), static_cast<u32>(dst_process_handle_backup),
+         0});
+    R_UNLESS(Luma3DS::IsValidMapProcessMemoryExFlags(request.flags), ResultInvalidEnumValue);
+    R_UNLESS((request.destination_address & Memory::CITRA_PAGE_MASK) == 0 &&
+                 (request.source_address & Memory::CITRA_PAGE_MASK) == 0,
              ResultInvalidAddress);
 
-    const u32 offset = src_address - vma->second.base;
-    R_UNLESS(offset + size <= vma->second.size, ResultInvalidAddress);
+    // Luma's ABI truncates the byte count to complete pages. Refuse a request that contains no
+    // complete page rather than creating a zero-sized VMA or rounding into adjacent memory.
+    const u32 mapped_size = request.size & ~Memory::CITRA_PAGE_MASK;
+    R_UNLESS(mapped_size != 0, ResultInvalidAddress);
 
-    auto vma_res = dst_process->vm_manager.MapBackingMemory(
-        dst_address,
-        memory.GetFCRAMRef(vma->second.backing_memory.GetPtr() + offset -
-                           kernel.memory.GetFCRAMPointer(0)),
-        size, map_as_private ? MemoryState::Private : MemoryState::Shared);
+    const u64 destination_end = static_cast<u64>(request.destination_address) + mapped_size;
+    const u64 source_end = static_cast<u64>(request.source_address) + mapped_size;
+    R_UNLESS(destination_end <= VMManager::MAX_ADDRESS && source_end <= VMManager::MAX_ADDRESS,
+             ResultInvalidAddress);
 
-    if (!vma_res.Succeeded()) {
-        return ResultInvalidAddressState;
+    const auto current_process = kernel.GetCurrentProcess();
+    R_UNLESS(current_process, ResultInvalidHandle);
+    const auto dst_process = current_process->handle_table.Get<Process>(
+        static_cast<Handle>(request.destination_process_handle));
+    const auto src_process = current_process->handle_table.Get<Process>(
+        static_cast<Handle>(request.source_process_handle));
+    R_UNLESS(dst_process && src_process, ResultInvalidHandle);
+
+    const auto memory_state = (request.flags & Luma3DS::MAP_PROCESS_MEMORY_EX_FLAG_PRIVATE) != 0
+                                  ? MemoryState::Private
+                                  : MemoryState::Shared;
+    const Result map_result = dst_process->vm_manager.MapBackingMemoryRange(
+        request.destination_address, src_process->vm_manager, request.source_address, mapped_size,
+        memory_state);
+    R_UNLESS(!map_result.IsError(), map_result);
+
+    // Guest data memory is coherent in Azahar. Match Luma's instruction-cache invalidation so a
+    // newly aliased mapping cannot reuse translated code from a previous mapping at that VA.
+    for (std::size_t core = 0; core < system.GetNumCores(); ++core) {
+        system.GetCore(core).ClearInstructionCache();
     }
-
-    dst_process->vm_manager.Reprotect(vma_res.Unwrap(), Kernel::VMAPermission::ReadWriteExecute);
     return ResultSuccess;
 }
 
 Result SVC::UnmapProcessMemoryEx(Handle process, u32 dst_address, u32 size) {
-    std::shared_ptr<Process> dst_process =
-        kernel.GetCurrentProcess()->handle_table.Get<Process>(process);
+    const auto current_process = kernel.GetCurrentProcess();
+    R_UNLESS(current_process, ResultInvalidHandle);
+    std::shared_ptr<Process> dst_process = current_process->handle_table.Get<Process>(process);
     R_UNLESS(dst_process, ResultInvalidHandle);
 
-    if (size & 0xFFF) {
-        size = (size & ~0xFFF) + Memory::CITRA_PAGE_SIZE;
-    }
-
-    // Only linear memory supported
-    auto vma = dst_process->vm_manager.FindVMA(dst_address);
-    R_UNLESS(vma != dst_process->vm_manager.vma_map.end() &&
-                 vma->second.type == VMAType::BackingMemory,
+    R_UNLESS((dst_address & Memory::CITRA_PAGE_MASK) == 0, ResultInvalidAddress);
+    size &= ~Memory::CITRA_PAGE_MASK;
+    R_UNLESS(size != 0 && static_cast<u64>(dst_address) + size <= VMManager::MAX_ADDRESS,
              ResultInvalidAddress);
 
-    dst_process->vm_manager.UnmapRange(dst_address, size);
+    const Result unmap_result = dst_process->vm_manager.UnmapRange(dst_address, size);
+    R_UNLESS(!unmap_result.IsError(), unmap_result);
+    for (std::size_t core = 0; core < system.GetNumCores(); ++core) {
+        system.GetCore(core).ClearInstructionCache();
+    }
     return ResultSuccess;
 }
 
@@ -2933,6 +2926,8 @@ void SVC::CallSVC(u32 immediate) {
     const u32 in_r2 = GetReg(2);
     const u32 in_r3 = GetReg(3);
     const u32 in_pc = GetReg(15);
+    const std::array<u32, 8> svc_registers{GetReg(0), GetReg(1), GetReg(2), GetReg(3),
+                                           GetReg(4), GetReg(5), GetReg(6), GetReg(7)};
 
     const auto thread = kernel.GetCurrentThreadManager().GetCurrentThread();
     std::shared_ptr<Service::PLGLDR::PLG_LDR> plugin_loader;
@@ -2968,9 +2963,10 @@ void SVC::CallSVC(u32 immediate) {
                 true, supported_title, plugin_context.level256_plugin_identity_verified,
                 process->process_id, plugin_context.plugin_process_id, plugin_context.plugin_loaded,
                 plugin_context.plugin_code_begin, plugin_context.plugin_code_end, in_pc);
-            plugin_svc = plugin_loader->TracePluginSVC(
-                *process, *thread, in_pc, immediate, info->name,
-                service_name.empty() ? nullptr : service_name.c_str());
+            plugin_svc =
+                plugin_loader->TracePluginSVC(*process, *thread, in_pc, immediate, info->name,
+                                              service_name.empty() ? nullptr : service_name.c_str(),
+                                              in_r1, static_cast<s32>(in_r2), svc_registers);
         }
     }
 
@@ -2980,8 +2976,7 @@ void SVC::CallSVC(u32 immediate) {
     Luma3DS::SvcRequest luma_svc_request{.svc_id = immediate,
                                          .process_id = process ? process->process_id : 0,
                                          .entry_pc = in_pc,
-                                         .arguments = {GetReg(0), GetReg(1), GetReg(2), GetReg(3),
-                                                       GetReg(4), GetReg(5), GetReg(6), GetReg(7)}};
+                                         .arguments = svc_registers};
     const auto luma_dispatch = Luma3DS::DispatchExtensionSvc(
         luma_svc_request, luma_compatibility_context, luma_plugin_authorization);
     if (luma_dispatch.kind == Luma3DS::SvcDispatchKind::Rejected) {
@@ -2993,9 +2988,10 @@ void SVC::CallSVC(u32 immediate) {
                 ++plugin_context.level256_capability_rejection_log_count;
                 LOG_WARNING(Kernel_SVC,
                             "Level256 capability rejected pid={} thread={} pc=0x{:08X} "
-                            "svc=0x{:02X} reason={} rejection={}",
+                            "svc=0x{:02X} reason={} result=0x{:08X} rejection={}",
                             process->process_id, thread->GetThreadId(), in_pc, immediate,
                             Luma3DS::SvcDispatchRejectReasonName(luma_dispatch.reject_reason),
+                            ResultNotImplemented.raw,
                             plugin_context.level256_capability_rejection_log_count);
             }
         }

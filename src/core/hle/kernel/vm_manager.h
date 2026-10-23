@@ -145,6 +145,11 @@ public:
     ResultVal<VMAHandle> MapBackingMemory(VAddr target, MemoryRef memory, u32 size,
                                           MemoryState state);
 
+    /// Maps existing process backing into this address space without copying it. The whole
+    /// destination range must be free; source VMA boundaries are preserved as backing segments.
+    Result MapBackingMemoryRange(VAddr target, const VMManager& source_manager,
+                                 VAddr source_address, u32 size, MemoryState state);
+
     /**
      * Updates the memory state and permissions of the specified range. The range's original memory
      * state and permissions must match the `expected` parameters.
@@ -174,7 +179,7 @@ public:
 
     /// Gets a list of backing memory blocks for the specified range
     ResultVal<std::vector<std::pair<MemoryRef, u32>>> GetBackingBlocksForRange(VAddr address,
-                                                                               u32 size);
+                                                                               u32 size) const;
 
     /// Each VMManager has its own page table, which is set as the main one when the owning process
     /// is scheduled.

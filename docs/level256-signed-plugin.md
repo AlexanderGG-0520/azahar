@@ -36,27 +36,30 @@ blanket permission: each operation retains its existing handler-level checks.
 | `PluginUdsDataIPC` | `plg:UDS_Client` data IPC | Only command IDs and parameter shapes recognized by `TranslateLevel256UdsCommand` are translated; all other requests pass through unchanged. |
 | `NdmControlIPC` | `ndm:u_Client` | Only header `0x00010042`, argument `2`, while connected and unpaused is normalized to `1`. |
 | `SocAttachIPC` | `soc:U_Client` | Only the existing exact attach/detach headers trigger the plugin event path; requests still use the normal session. |
+| `MapProcessMemoryEx` | Luma SVC `0xA0` | Both official wrapper ABIs are decoded; handles, flags, page truncation, source backing, destination-Free state, range overflow and non-executable RW permissions are validated before alias mapping. |
 | `Level256LFCS` | `plg:ldr` command `0x2560` | Exact IPC header, PID and writable mapped-buffer shape; caller PID must own the plugin and match the PID descriptor; output is zeroed on denial and requests are rate limited. Seed data is still validated by its existing cryptographic loader. |
 
-The signed-plugin capability set does **not** grant `MapProcessMemoryEx` (`0xA0`) or
-`UnmapProcessMemoryEx` (`0xA1`). The current map handler still contains a fix-up TODO and makes
-the result RWX; the unmap handler does not enforce a narrow destination range. These contracts are
-not independently safe to infer from publisher signature or use. The exact historical legacy
-SHA-256 retains those two previously exposed SVCs for compatibility; this exception does not
-extend to newly signed artifacts. SVC `0xA2` has no handler and remains denied.
+The signed-plugin capability set grants `MapProcessMemoryEx` (`0xA0`) through the validated
+backing-alias path described above. The resulting mapping is RW and non-executable; no payload is
+copied. `UnmapProcessMemoryEx` (`0xA1`) remains withheld from newly signed artifacts because the
+VM manager does not yet track enough provenance to prove that an arbitrary requested unmap range
+belongs to a prior `0xA0` mapping. The exact historical legacy SHA-256 retains its previous
+`0xA1` exposure for compatibility. SVC `0xA2` has no handler and remains denied.
 
-No `plg:DLP` or `plg:FKCL` IPC adapter is granted here. `QueryProcessMemory`, `OpenProcess`, thread creation, and event observations remain ordinary 3DS
-SVC behavior or bounded diagnostics; this patch does not turn them into Level256-specific HLE
-success responses. There is no active `plg:UDS`, `plg:DLP`, or `plg:FKCL` Level256 bridge in this
-policy. The existing process service-redirect plumbing remains opt-in and has no production caller.
-Do not infer complete Level256 network compatibility from the signed-plugin capabilities above.
+`PluginUdsControlIPC`, `PluginUdsDataIPC`, `NdmControlIPC`, and `SocAttachIPC` are narrow adapters
+inside the normal `SendSyncRequest` path. They match specific service names and command/header
+shapes, then preserve ordinary IPC forwarding for commands they do not handle. Service redirection
+can route the documented DLP ports to their HLE endpoints when the per-process UDS state enables
+it. This does not make all `plg:DLP`, `plg:FKCL`, UDS, NDM, or SOC commands Level256-compatible.
+`QueryProcessMemory`, `OpenProcess`, thread creation, and event observations remain ordinary 3DS
+SVC behavior or bounded diagnostics; they are not turned into generic success responses. See the
+[Luma3DS compatibility matrix](level256-luma3ds-compatibility-matrix.md) for the audited surface.
 
-The legacy SHA-256 path retains its previous SVC exposure, including the two legacy-only memory-map
-capabilities. New signed files receive only the reviewed baseline set and no longer need a new
-baked-in hash or a preapproved manifest version. Every identity still passes through the same
-per-operation dispatcher; newly signed files receive no capability for the unreviewed mapping
-operations. Savestates do not serialize signature trust; loading a state clears the transient
-identity and capability basis.
+The legacy SHA-256 path retains its previous SVC exposure, including `0xA1`. New signed files
+receive reviewed baseline capabilities, including validated `0xA0`, without requiring a new
+baked-in hash or preapproved manifest version. Every identity still passes through the same
+per-operation dispatcher; unreviewed operations remain denied. Savestates do not serialize
+signature trust; loading a state clears the transient identity and capability basis.
 
 ## v2.0.1 startup `NoExecuteFault` investigation
 

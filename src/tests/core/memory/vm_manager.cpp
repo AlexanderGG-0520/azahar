@@ -150,3 +150,135 @@ TEST_CASE("Memory Basics", "[kernel][memory]") {
         REQUIRE(code == ResultSuccess);
     }
 }
+
+TEST_CASE("MapProcessMemoryEx aliases a multi-VMA source range with safe target permissions",
+          "[kernel][memory][luma3ds][level256]") {
+    constexpr u32 page_size = Memory::CITRA_PAGE_SIZE;
+    constexpr VAddr source_address = 0x08000000;
+    constexpr VAddr destination_address = 0x09000000;
+    constexpr VAddr private_destination_address = 0x09010000;
+
+    Core::Timing timing(1, 100);
+    Core::System system;
+    Memory::MemorySystem memory{system};
+    Kernel::KernelSystem kernel(memory, timing, [] {}, Kernel::MemoryMode::NewProd, 1);
+    auto source_process = std::make_unique<Kernel::Process>(kernel);
+    auto destination_process = std::make_unique<Kernel::Process>(kernel);
+    auto& source_vm = source_process->vm_manager;
+    auto& destination_vm = destination_process->vm_manager;
+
+    const auto first_backing = std::make_shared<BufferMem>(page_size);
+    const auto second_backing = std::make_shared<BufferMem>(page_size);
+    REQUIRE(source_vm
+                .MapBackingMemory(source_address, MemoryRef{first_backing}, page_size,
+                                  Kernel::MemoryState::Code)
+                .Succeeded());
+    REQUIRE(source_vm
+                .MapBackingMemory(source_address + page_size, MemoryRef{second_backing}, page_size,
+                                  Kernel::MemoryState::Private)
+                .Succeeded());
+    source_vm.Reprotect(source_vm.FindVMA(source_address), Kernel::VMAPermission::ReadExecute);
+
+    const Result map_result = destination_vm.MapBackingMemoryRange(
+        destination_address, source_vm, source_address, 2 * page_size, Kernel::MemoryState::Shared);
+    REQUIRE(map_result == ResultSuccess);
+
+    const auto first_destination = destination_vm.FindVMA(destination_address);
+    const auto second_destination = destination_vm.FindVMA(destination_address + page_size);
+    REQUIRE(first_destination != destination_vm.vma_map.end());
+    REQUIRE(second_destination != destination_vm.vma_map.end());
+    CHECK(first_destination->second.backing_memory.GetPtr() == first_backing->GetPtr());
+    CHECK(second_destination->second.backing_memory.GetPtr() == second_backing->GetPtr());
+    CHECK(first_destination->second.meminfo_state == Kernel::MemoryState::Shared);
+    CHECK(second_destination->second.meminfo_state == Kernel::MemoryState::Shared);
+    CHECK(first_destination->second.permissions == Kernel::VMAPermission::ReadWrite);
+    CHECK(second_destination->second.permissions == Kernel::VMAPermission::ReadWrite);
+    REQUIRE(destination_vm.MapBackingMemoryRange(private_destination_address, source_vm,
+                                                 source_address, page_size,
+                                                 Kernel::MemoryState::Private) == ResultSuccess);
+    CHECK(destination_vm.FindVMA(private_destination_address)->second.meminfo_state ==
+          Kernel::MemoryState::Private);
+    CHECK(destination_vm.FindVMA(private_destination_address)->second.permissions ==
+          Kernel::VMAPermission::ReadWrite);
+
+    memory.Write32(*source_process, source_address, 0x11223344);
+    CHECK(memory.Read32(*destination_process, destination_address) == 0x11223344);
+    memory.Write32(*destination_process, destination_address + page_size, 0xAABBCCDD);
+    CHECK(memory.Read32(*source_process, source_address + page_size) == 0xAABBCCDD);
+}
+
+TEST_CASE("MapProcessMemoryEx rejects invalid source and occupied destination ranges without "
+          "partial maps",
+          "[kernel][memory][luma3ds][level256]") {
+    constexpr u32 page_size = Memory::CITRA_PAGE_SIZE;
+    constexpr VAddr source_address = 0x08000000;
+    constexpr VAddr destination_address = 0x09000000;
+
+    Core::Timing timing(1, 100);
+    Core::System system;
+    Memory::MemorySystem memory{system};
+    Kernel::KernelSystem kernel(memory, timing, [] {}, Kernel::MemoryMode::NewProd, 1);
+    auto source_process = std::make_unique<Kernel::Process>(kernel);
+    auto destination_process = std::make_unique<Kernel::Process>(kernel);
+    auto& source_vm = source_process->vm_manager;
+    auto& destination_vm = destination_process->vm_manager;
+    const auto source_backing = std::make_shared<BufferMem>(page_size);
+    const auto destination_backing = std::make_shared<BufferMem>(page_size);
+
+    REQUIRE(source_vm
+                .MapBackingMemory(source_address, MemoryRef{source_backing}, page_size,
+                                  Kernel::MemoryState::Private)
+                .Succeeded());
+    REQUIRE(destination_vm
+                .MapBackingMemory(destination_address + page_size, MemoryRef{destination_backing},
+                                  page_size, Kernel::MemoryState::Private)
+                .Succeeded());
+
+    CHECK(destination_vm.MapBackingMemoryRange(destination_address, source_vm, source_address,
+                                               2 * page_size, Kernel::MemoryState::Shared) ==
+          Kernel::ResultInvalidAddressState);
+    CHECK(destination_vm.FindVMA(destination_address)->second.type == Kernel::VMAType::Free);
+
+    CHECK(destination_vm.MapBackingMemoryRange(
+              destination_address, source_vm, source_address + page_size, page_size,
+              Kernel::MemoryState::Shared) == Kernel::ResultInvalidAddressState);
+    CHECK(destination_vm.FindVMA(destination_address)->second.type == Kernel::VMAType::Free);
+
+    CHECK(destination_vm.MapBackingMemoryRange(destination_address + 1, source_vm, source_address,
+                                               page_size, Kernel::MemoryState::Shared) ==
+          Kernel::ResultInvalidAddress);
+    CHECK(destination_vm.MapBackingMemoryRange(destination_address, source_vm, source_address, 0,
+                                               Kernel::MemoryState::Shared) ==
+          Kernel::ResultInvalidAddress);
+    CHECK(destination_vm.MapBackingMemoryRange(destination_address, source_vm, source_address,
+                                               page_size - 1, Kernel::MemoryState::Shared) ==
+          Kernel::ResultInvalidAddress);
+    CHECK(destination_vm.MapBackingMemoryRange(0x3FFFF000, source_vm, source_address, 2 * page_size,
+                                               Kernel::MemoryState::Shared) ==
+          Kernel::ResultInvalidAddress);
+}
+
+TEST_CASE("MapProcessMemoryEx rejects IO-backed source memory", "[kernel][memory][luma3ds]") {
+    constexpr u32 page_size = Memory::CITRA_PAGE_SIZE;
+    constexpr VAddr source_address = 0x08000000;
+    constexpr VAddr destination_address = 0x09000000;
+
+    Core::Timing timing(1, 100);
+    Core::System system;
+    Memory::MemorySystem memory{system};
+    Kernel::KernelSystem kernel(memory, timing, [] {}, Kernel::MemoryMode::NewProd, 1);
+    auto source_process = std::make_unique<Kernel::Process>(kernel);
+    auto destination_process = std::make_unique<Kernel::Process>(kernel);
+    auto& source_vm = source_process->vm_manager;
+    auto& destination_vm = destination_process->vm_manager;
+    const auto source_backing = std::make_shared<BufferMem>(page_size);
+
+    REQUIRE(source_vm
+                .MapBackingMemory(source_address, MemoryRef{source_backing}, page_size,
+                                  Kernel::MemoryState::IO)
+                .Succeeded());
+    CHECK(destination_vm.MapBackingMemoryRange(destination_address, source_vm, source_address,
+                                               page_size, Kernel::MemoryState::Shared) ==
+          Kernel::ResultInvalidAddressState);
+    CHECK(destination_vm.FindVMA(destination_address)->second.type == Kernel::VMAType::Free);
+}

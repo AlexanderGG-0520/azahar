@@ -86,6 +86,11 @@ public:
         u32 plugin_last_return_pc = 0;
         bool plugin_instruction_trace_started = false;
         u32 plugin_service_trace_count = 0;
+        // Read-only, one-shot bootloader return diagnostics; transient, never savestated.
+        bool level256_bootloader_map_snapshot_logged = false;
+        bool level256_bootloader_pre_svc_snapshot_logged = false;
+        bool level256_bootloader_return_snapshot_logged = false;
+        bool level256_bootloader_return_trace_started = false;
         // Transient diagnostics; intentionally omitted from savestates.
         u32 plugin_query_process_memory_failures = 0;
         // A one-shot, bounded trace for the verified Level256 worker's OpenProcess path.
@@ -150,6 +155,9 @@ public:
         u32 level256_signed_plugin_artifact_version = 0;
         // Rejections are diagnostic only and bounded per plugin-load attempt.
         u32 level256_capability_rejection_log_count = 0;
+        // Detailed MapProcessMemoryEx request/result records are opt-in and bounded.
+        u32 level256_map_process_memory_ex_trace_count = 0;
+        u32 level256_map_process_memory_ex_result_trace_count = 0;
         // Count of 0x2560 requests for the current plugin load; deliberately transient.
         u32 level256_lfcs_request_count = 0;
         bool is_default_path = false;
@@ -164,6 +172,8 @@ public:
             level256_plugin_identity_verified = false;
             level256_signed_plugin_artifact_version = 0;
             level256_capability_rejection_log_count = 0;
+            level256_map_process_memory_ex_trace_count = 0;
+            level256_map_process_memory_ex_result_trace_count = 0;
             level256_lfcs_request_count = 0;
         }
 
@@ -192,10 +202,13 @@ public:
     void OnProcessExit(Kernel::Process& process, Kernel::KernelSystem& kernel);
     void OnProcessDestroyed(Kernel::Process& process);
     bool TracePluginSVC(const Kernel::Process& process, const Kernel::Thread& thread, u32 pc,
-                        u32 svc_id, const char* svc_name, const char* service_name);
+                        u32 svc_id, const char* svc_name, const char* service_name, u32 type,
+                        s32 param, const std::array<u32, 8>& registers);
     void TracePluginSVCResult(const Kernel::Process& process, const Kernel::Thread& thread,
                               u32 svc_id, const char* svc_name, u32 svc_pc, u32 post_hle_pc,
                               u32 type, s32 param, u32 result, u64 value);
+    void TraceLevel256BootloaderSnapshot(const Kernel::Process& process, const char* phase,
+                                         u32 thread_id);
     void TraceCtrpfStartupMemoryAccess(const Kernel::Process& process, const Kernel::Thread& thread,
                                        VAddr address, u32 size, bool is_write, u64 value, u32 pc,
                                        u32 lr);

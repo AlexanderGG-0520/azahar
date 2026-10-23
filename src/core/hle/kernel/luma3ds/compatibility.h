@@ -45,9 +45,9 @@ constexpr bool HasCapability(Level256CapabilityMask capabilities, Level256Capabi
 }
 
 /// Capabilities whose individual ABI adapters have reviewed, operation-specific validation.
-/// MapProcessMemoryEx and UnmapProcessMemoryEx are intentionally omitted: the former still has an
-/// unconditional RWX mapping TODO and the latter lacks a narrow Level256 target/range contract.
-/// New extension IDs are not added here implicitly; unsupported entries remain fail-closed.
+/// UnmapProcessMemoryEx remains omitted until its mapping ownership and range contract is narrow
+/// enough for signed plugins. New extension IDs are not added here implicitly; unsupported entries
+/// remain fail-closed.
 constexpr Level256CapabilityMask CapabilitiesForVerifiedPlugin(bool identity_verified) {
     if (!identity_verified) {
         return 0;
@@ -62,7 +62,8 @@ constexpr Level256CapabilityMask CapabilitiesForVerifiedPlugin(bool identity_ver
            CapabilityBit(Level256Capability::PluginUdsControlIPC) |
            CapabilityBit(Level256Capability::PluginUdsDataIPC) |
            CapabilityBit(Level256Capability::NdmControlIPC) |
-           CapabilityBit(Level256Capability::SocAttachIPC);
+           CapabilityBit(Level256Capability::SocAttachIPC) |
+           CapabilityBit(Level256Capability::MapProcessMemoryEx);
 }
 
 /// Preserve the previously shipped exact-digest profile for existing users. This exception does
@@ -109,6 +110,39 @@ struct SvcRequest {
     u32 entry_pc{};
     std::array<u32, 8> arguments{};
 };
+
+constexpr u32 MAP_PROCESS_MEMORY_EX_ABI_V2_MAGIC = 0xFFFFFFF2;
+constexpr u32 MAP_PROCESS_MEMORY_EX_FLAG_PRIVATE = 1;
+
+struct MapProcessMemoryExRequest {
+    bool abi_v2{};
+    u32 destination_process_handle{};
+    u32 destination_address{};
+    u32 source_process_handle{};
+    u32 source_address{};
+    u32 size{};
+    u32 flags{};
+};
+
+/// Decode the public Level256/Luma wrapper ABI. ABI v1 ignores r5; v2 places the destination
+/// handle in r6, flags in r5, and the marker in r0.
+constexpr MapProcessMemoryExRequest DecodeMapProcessMemoryExRequest(
+    const std::array<u32, 8>& registers) {
+    const bool abi_v2 = registers[0] == MAP_PROCESS_MEMORY_EX_ABI_V2_MAGIC;
+    return {
+        .abi_v2 = abi_v2,
+        .destination_process_handle = abi_v2 ? registers[6] : registers[0],
+        .destination_address = registers[1],
+        .source_process_handle = registers[2],
+        .source_address = registers[3],
+        .size = registers[4],
+        .flags = abi_v2 ? registers[5] : 0,
+    };
+}
+
+constexpr bool IsValidMapProcessMemoryExFlags(u32 flags) {
+    return (flags & ~MAP_PROCESS_MEMORY_EX_FLAG_PRIVATE) == 0;
+}
 
 enum class SvcDispatchKind {
     NotExtension,
