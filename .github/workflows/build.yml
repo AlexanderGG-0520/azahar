@@ -2,7 +2,7 @@ name: citra-build
 
 on:
   push:
-    branches: [ "*" ]
+    branches: [ "*", "codex/level256-registration-diagnostics" ]
     tags: [ "*" ]
   pull_request:
     branches: [ master, integration/yw ]
