@@ -19,6 +19,7 @@ add_executable(tests
     core/hle/service/soc/soc_u_address.cpp
     core/hle/service/plgldr_path.cpp
     core/hle/service/level256_registration_diagnostics.cpp
+    core/hle/service/soc/soc_u_error.cpp
     core/hle/kernel/hle_ipc.cpp
     core/hle/kernel/dsp_semaphore_signal_grace.cpp
     core/hle/kernel/level256_diagnostic.cpp

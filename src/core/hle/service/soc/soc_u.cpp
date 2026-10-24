@@ -284,6 +284,14 @@ static int TranslateError(int error) {
     return error;
 }
 
+int Detail::TranslateConnectError(int host_error, bool blocking_socket, int would_block_error,
+                                  int in_progress_error, SocketErrorTranslator translate_error) {
+    if (!blocking_socket && host_error == would_block_error) {
+        return translate_error(in_progress_error);
+    }
+    return translate_error(host_error);
+}
+
 /// Converts a getaddrinfo/getnameinfo error from platform-specific to 3ds-specific
 static int TranslateGaiError(int gai_error) {
     if (const auto& known_soc_errno = gai_error_map.find(gai_error);
@@ -1729,6 +1737,7 @@ void SOC_U::Connect(Kernel::HLERequestContext& ctx) {
         return;
     }
     SocketHolder& holder = socket_holder_optional->get();
+    const bool socket_blocking = GetSocketBlocking(holder);
     const auto caller_thread = ctx.ClientThread();
     const auto caller_process = caller_thread ? caller_thread->owner_process.lock() : nullptr;
     const u64 title_id =
@@ -1740,8 +1749,8 @@ void SOC_U::Connect(Kernel::HLERequestContext& ctx) {
     if (diagnostic_event != 0) {
         LOG_INFO(Service_SOC,
                  "[L256-REG] event={} op=soc.connect.begin pid={} title_id=0x{:016X} "
-                 "socket={} address_length={}",
-                 diagnostic_event, pid, title_id, socket_handle, input_addr_len);
+                 "socket={} address_length={} socket_blocking={}",
+                 diagnostic_event, pid, title_id, socket_handle, input_addr_len, socket_blocking);
     }
 
     struct AsyncData {
@@ -1752,6 +1761,7 @@ void SOC_U::Connect(Kernel::HLERequestContext& ctx) {
         u32 pid;
         u64 title_id;
         u32 diagnostic_event;
+        bool socket_blocking;
 
         // Output
         s32 ret{};
@@ -1763,6 +1773,7 @@ void SOC_U::Connect(Kernel::HLERequestContext& ctx) {
     async_data->pid = pid;
     async_data->title_id = title_id;
     async_data->diagnostic_event = diagnostic_event;
+    async_data->socket_blocking = socket_blocking;
 
     CTRSockAddr ctr_input_addr;
     std::memcpy(&ctr_input_addr, input_addr_buf.data(),
@@ -1780,8 +1791,18 @@ void SOC_U::Connect(Kernel::HLERequestContext& ctx) {
             return 0;
         },
         [async_data](Kernel::HLERequestContext& ctx) {
+            const int original_result = TranslateError(async_data->connect_error);
+            bool compatibility_mapping = false;
             if (async_data->ret != 0) {
+#ifdef _WIN32
+                compatibility_mapping =
+                    !async_data->socket_blocking && async_data->connect_error == WSAEWOULDBLOCK;
+                async_data->ret = Detail::TranslateConnectError(
+                    async_data->connect_error, async_data->socket_blocking, WSAEWOULDBLOCK,
+                    WSAEINPROGRESS, &TranslateError);
+#else
                 async_data->ret = TranslateError(async_data->connect_error);
+#endif
             }
 
             if (async_data->diagnostic_event != 0) {
@@ -1789,9 +1810,12 @@ void SOC_U::Connect(Kernel::HLERequestContext& ctx) {
                 if (end_event != 0) {
                     LOG_INFO(Service_SOC,
                              "[L256-REG] event={} op=soc.connect.end pid={} "
-                             "title_id=0x{:016X} socket={} host_error={} result={}",
+                             "title_id=0x{:016X} socket={} socket_blocking={} host_error={} "
+                             "original_result={} guest_result={} compatibility_mapping={}",
                              end_event, async_data->pid, async_data->title_id,
-                             async_data->socket_handle, async_data->connect_error, async_data->ret);
+                             async_data->socket_handle, async_data->socket_blocking,
+                             async_data->connect_error, original_result, async_data->ret,
+                             compatibility_mapping ? "nonblocking_connect" : "none");
                 }
             }
 
