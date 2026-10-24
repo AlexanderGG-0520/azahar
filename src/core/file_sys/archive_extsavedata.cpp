@@ -3,6 +3,7 @@
 // Refer to the license.txt file included.
 
 #include <algorithm>
+#include <array>
 #include <filesystem>
 #include <memory>
 #include <vector>
@@ -292,6 +293,21 @@ ResultVal<std::unique_ptr<ArchiveBackend>> ArchiveFactory_ExtSaveData::Open(cons
             // TODO(Subv): Verify the archive behavior of SharedExtSaveData compared to ExtSaveData.
             // ExtSaveData seems to return FS_NotFound (120) when the archive doesn't exist.
             if (type != ExtSaveDataType::Shared) {
+                const std::vector<u8> binary_path = path.AsBinary();
+                std::array<u32, 3> path_words{};
+                if (binary_path.size() == sizeof(path_words)) {
+                    std::memcpy(path_words.data(), binary_path.data(), sizeof(path_words));
+                }
+                if (type == ExtSaveDataType::Normal && path.GetType() == LowPathType::Binary &&
+                    path_words == std::array<u32, 3>{static_cast<u32>(Service::FS::MediaType::SDMC),
+                                                     0x16C6, 0}) {
+                    LOG_ERROR(Service_FS,
+                              "ExtSaveData path is not formatted: archive_id=0x{:08X} "
+                              "low_path={} host_path={} result=0x{:08X} "
+                              "(NotFoundInvalidState)",
+                              ExtSaveDataTypeToArchiveID(type), path.DebugStr(), fullpath,
+                              ResultNotFoundInvalidState.raw);
+                }
                 return ResultNotFoundInvalidState;
             } else {
                 return ResultNotFormatted;

@@ -1260,6 +1260,30 @@ void FS_USER::GetProgramLaunchInfo(Kernel::HLERequestContext& ctx) {
     rb.PushRaw<ProgramInfo>(program_info);
 }
 
+void FS_USER::GetMediaType(Kernel::HLERequestContext& ctx) {
+    IPC::RequestParser rp(ctx);
+    IPC::RequestBuilder rb = rp.MakeBuilder(2, 0);
+
+    const auto thread = ctx.ClientThread();
+    const auto process = thread ? thread->owner_process.lock() : nullptr;
+    if (!process) {
+        rb.Push(Result(FileSys::ErrCodes::ArchiveNotMounted, ErrorModule::FS,
+                       ErrorSummary::NotFound, ErrorLevel::Status));
+        rb.Push<u32>(0);
+        return;
+    }
+
+    auto program_info_result = GetProgramLaunchInfo(process->process_id);
+    if (program_info_result.Failed()) {
+        rb.Push(program_info_result.Code());
+        rb.Push<u32>(0);
+        return;
+    }
+
+    rb.Push(ResultSuccess);
+    rb.Push<u32>(static_cast<u32>(program_info_result->media_type));
+}
+
 void FS_USER::ObsoletedCreateExtSaveData(Kernel::HLERequestContext& ctx) {
     IPC::RequestParser rp(ctx);
     MediaType media_type = static_cast<MediaType>(rp.Pop<u8>());
@@ -1788,8 +1812,10 @@ ResultVal<u16> FS_USER::GetSpecialContentIndexFromTMD(MediaType media_type, u64 
     return ResultUnknown;
 }
 
-FS_USER::FS_USER(Core::System& system)
-    : ServiceFramework("fs:USER", 30), system(system), archives(system.ArchiveManager()) {
+FS_USER::FS_USER(Core::System& system) : FS_USER(system, system.ArchiveManager()) {}
+
+FS_USER::FS_USER(Core::System& system, ArchiveManager& archives)
+    : ServiceFramework("fs:USER", 30), system(system), archives(archives) {
     static const FunctionInfo functions[] = {
         // clang-format off
         {0x0001, nullptr, "Dummy1"},
@@ -1897,7 +1923,7 @@ FS_USER::FS_USER(Core::System& system)
         {0x0865, &FS_USER::ObsoletedSetSaveDataSecureValue, "SetSaveDataSecureValue"},
         {0x0866, &FS_USER::ObsoletedGetSaveDataSecureValue, "GetSaveDataSecureValue"},
         {0x0867, &FS_USER::ControlSecureSave, "ControlSecureSave"},
-        {0x0868, nullptr, "GetMediaType"},
+        {0x0868, &FS_USER::GetMediaType, "GetMediaType"},
         {0x0869, nullptr, "GetNandEraseCount"},
         {0x086A, nullptr, "ReadNandReport"},
         {0x086E, &FS_USER::SetThisSaveDataSecureValue, "SetThisSaveDataSecureValue" },

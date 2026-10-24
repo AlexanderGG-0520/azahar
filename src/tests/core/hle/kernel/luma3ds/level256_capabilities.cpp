@@ -47,6 +47,7 @@ TEST_CASE("Verified Level256 identity advertises only reviewed ABI capabilities"
     REQUIRE(HasCapability(capabilities, Level256Capability::ControlMemoryUnsafe));
     REQUIRE(HasCapability(capabilities, Level256Capability::Level256LFCS));
     REQUIRE(HasCapability(capabilities, Level256Capability::MapProcessMemoryEx));
+    REQUIRE(HasCapability(capabilities, Level256Capability::Level256RandomBytes));
     REQUIRE_FALSE(HasCapability(capabilities, Level256Capability::UnmapProcessMemoryEx));
     REQUIRE_FALSE(HasCapability(capabilities, static_cast<Level256Capability>(0xFF)));
     REQUIRE(HasCapability(capabilities, Level256Capability::PluginUdsControlIPC));

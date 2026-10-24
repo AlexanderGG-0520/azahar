@@ -282,6 +282,7 @@ private:
     void GetArbiter(Kernel::HLERequestContext& ctx);
     void GetPluginPath(Kernel::HLERequestContext& ctx);
     void GetLevel256LFCS(Kernel::HLERequestContext& ctx);
+    void GetLevel256RandomBytes(Kernel::HLERequestContext& ctx);
 
     template <class Archive>
     void serialize(Archive& ar, const unsigned int);

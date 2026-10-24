@@ -31,6 +31,41 @@
 
 namespace Service::FS {
 
+namespace {
+
+const char* GetFsResultName(Result result) {
+    if (result.IsSuccess()) {
+        return "Success";
+    }
+    if (result == FileSys::ResultNotFormatted) {
+        return "NotFormatted";
+    }
+    if (result == FileSys::ResultNotFoundInvalidState) {
+        return "NotFoundInvalidState";
+    }
+    if (result == FileSys::ResultPathNotFound) {
+        return "PathNotFound";
+    }
+    if (result == FileSys::ResultInvalidArchiveHandle) {
+        return "InvalidArchiveHandle";
+    }
+    if (result == FileSys::ResultInvalidPath) {
+        return "InvalidPath";
+    }
+    if (result == FileSys::ResultUnsupportedOpenFlags) {
+        return "UnsupportedOpenFlags";
+    }
+    if (result == FileSys::ResultFileNotFound) {
+        return "FileNotFound";
+    }
+    if (result == FileSys::ResultNotFound) {
+        return "NotFound";
+    }
+    return "Other";
+}
+
+} // namespace
+
 bool IsInstalledApplication(std::string_view path) {
     return path.rfind(FileUtil::GetUserPath(FileUtil::UserPath::NANDDir) + "title", 0) == 0 ||
            path.rfind(FileUtil::GetUserPath(FileUtil::UserPath::SDMCDir) + "Nintendo 3DS", 0) == 0;
@@ -61,8 +96,17 @@ ResultVal<ArchiveHandle> ArchiveManager::OpenArchive(ArchiveIdCode id_code,
         return FileSys::ResultNotFound;
     }
 
-    CASCADE_RESULT(std::unique_ptr<ArchiveBackend> res,
-                   itr->second->Open(archive_path, program_id));
+    auto open_result = itr->second->Open(archive_path, program_id);
+    if (open_result.Failed()) {
+        const Result result = open_result.Code();
+        LOG_ERROR(Service_FS,
+                  "OpenArchive failed: archive_id=0x{:08X} title_id=0x{:016X} low_path={} "
+                  "result=0x{:08X} ({})",
+                  id_code, program_id, archive_path.DebugStr(), result.raw,
+                  GetFsResultName(result));
+        return result;
+    }
+    std::unique_ptr<ArchiveBackend> res = std::move(open_result).Unwrap();
 
     // This should never even happen in the first place with 64-bit handles,
     while (handle_map.count(next_handle) != 0) {
@@ -214,7 +258,13 @@ ResultVal<std::shared_ptr<Directory>> ArchiveManager::OpenDirectoryFromArchive(
 
     auto backend = archive->OpenDirectory(path);
     if (backend.Failed()) {
-        return backend.Code();
+        const Result result = backend.Code();
+        LOG_ERROR(Service_FS,
+                  "OpenDirectory failed: archive_handle=0x{:016X} archive={} path={} "
+                  "result=0x{:08X} ({})",
+                  archive_handle, archive->GetName(), path.DebugStr(), result.raw,
+                  GetFsResultName(result));
+        return result;
     }
 
     return std::make_shared<Directory>(std::move(backend).Unwrap(), path);

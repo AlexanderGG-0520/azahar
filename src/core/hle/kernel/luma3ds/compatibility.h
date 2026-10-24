@@ -31,6 +31,7 @@ enum class Level256Capability : u8 {
     SocAttachIPC,
     MapProcessMemoryEx,
     UnmapProcessMemoryEx,
+    Level256RandomBytes,
 };
 
 /// Identifies the service that owns an IPC session by its connected ClientPort name. Session
@@ -86,7 +87,8 @@ constexpr Level256CapabilityMask CapabilitiesForVerifiedPlugin(bool identity_ver
            CapabilityBit(Level256Capability::PluginUdsDataIPC) |
            CapabilityBit(Level256Capability::NdmControlIPC) |
            CapabilityBit(Level256Capability::SocAttachIPC) |
-           CapabilityBit(Level256Capability::MapProcessMemoryEx);
+           CapabilityBit(Level256Capability::MapProcessMemoryEx) |
+           CapabilityBit(Level256Capability::Level256RandomBytes);
 }
 
 /// Preserve the previously shipped exact-digest profile for existing users. This exception does
