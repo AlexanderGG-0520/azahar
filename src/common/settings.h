@@ -510,6 +510,8 @@ struct Values {
     Setting<bool> level256_compatibility_enabled{false, Keys::level256_compatibility_enabled};
     Setting<bool> level256_bootloader_diagnostics_enabled{
         false, Keys::level256_bootloader_diagnostics_enabled};
+    Setting<bool> level256_registration_diagnostics_enabled{
+        false, Keys::level256_registration_diagnostics_enabled};
     Setting<u16> steps_per_hour{0, Keys::steps_per_hour};
     Setting<bool> apply_region_free_patch{true, Keys::apply_region_free_patch};
 

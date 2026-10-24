@@ -23,6 +23,8 @@
 #include "core/hle/romfs.h"
 #include "core/hle/service/fs/archive.h"
 #include "core/hle/service/http/http_c.h"
+#include "core/hle/service/level256_registration_diagnostics.h"
+#include "core/hle/service/plgldr/plugin_path.h"
 #include "core/hw/aes/key.h"
 
 SERIALIZE_EXPORT_IMPL(Service::HTTP::HTTP_C)
@@ -236,6 +238,19 @@ std::string Context::ParseMultipartFormData() {
 void Context::MakeRequest() {
     ASSERT(state == RequestState::NotStarted);
 
+    const bool registration_request = Service::PLGLDR::IsLevel256SupportedTitle(client_title_id) &&
+                                      Level256RegistrationDiagnostics::IsEnabled();
+    if (registration_request) {
+        const u32 event = Level256RegistrationDiagnostics::NextEventId();
+        if (event != 0) {
+            LOG_INFO(Service_HTTP,
+                     "[L256-REG] event={} op=http.request.begin pid={} title_id=0x{:016X} "
+                     "context={} method={} tls={}",
+                     event, client_process_id, client_title_id, handle, method,
+                     Common::SplitUrl(url).is_https);
+        }
+    }
+
     state = RequestState::SendingRequest;
 
     static const std::unordered_map<RequestMethod, std::string> request_method_strings{
@@ -343,9 +358,31 @@ void Context::MakeRequestNonSSL(httplib::Request& request, const Common::URLInfo
     if (!client->send(request, response, error)) {
         LOG_ERROR(Service_HTTP, "Request failed: {}: {}", error, httplib::to_string(error));
         state = RequestState::Completed;
+        if (Service::PLGLDR::IsLevel256SupportedTitle(client_title_id) &&
+            Level256RegistrationDiagnostics::IsEnabled()) {
+            const u32 event = Level256RegistrationDiagnostics::NextEventId();
+            if (event != 0) {
+                LOG_INFO(Service_HTTP,
+                         "[L256-REG] event={} op=http.request.end pid={} "
+                         "title_id=0x{:016X} context={} tls=false transport=error "
+                         "http_error={}",
+                         event, client_process_id, client_title_id, handle,
+                         httplib::to_string(error));
+            }
+        }
     } else {
         LOG_DEBUG(Service_HTTP, "Request successful");
         state = RequestState::ReceivingBody;
+        if (Service::PLGLDR::IsLevel256SupportedTitle(client_title_id) &&
+            Level256RegistrationDiagnostics::IsEnabled()) {
+            const u32 event = Level256RegistrationDiagnostics::NextEventId();
+            if (event != 0) {
+                LOG_INFO(Service_HTTP,
+                         "[L256-REG] event={} op=http.request.end pid={} "
+                         "title_id=0x{:016X} context={} tls=false transport=ok http_status={}",
+                         event, client_process_id, client_title_id, handle, response.status);
+            }
+        }
     }
 }
 
@@ -401,9 +438,31 @@ void Context::MakeRequestSSL(httplib::Request& request, const Common::URLInfo& u
     if (!client->send(request, response, error)) {
         LOG_ERROR(Service_HTTP, "Request failed: {}: {}", error, httplib::to_string(error));
         state = RequestState::Completed;
+        if (Service::PLGLDR::IsLevel256SupportedTitle(client_title_id) &&
+            Level256RegistrationDiagnostics::IsEnabled()) {
+            const u32 event = Level256RegistrationDiagnostics::NextEventId();
+            if (event != 0) {
+                LOG_INFO(Service_HTTP,
+                         "[L256-REG] event={} op=http.request.end pid={} "
+                         "title_id=0x{:016X} context={} tls=true transport=error "
+                         "http_error={}",
+                         event, client_process_id, client_title_id, handle,
+                         httplib::to_string(error));
+            }
+        }
     } else {
         LOG_DEBUG(Service_HTTP, "Request successful");
         state = RequestState::ReceivingBody;
+        if (Service::PLGLDR::IsLevel256SupportedTitle(client_title_id) &&
+            Level256RegistrationDiagnostics::IsEnabled()) {
+            const u32 event = Level256RegistrationDiagnostics::NextEventId();
+            if (event != 0) {
+                LOG_INFO(Service_HTTP,
+                         "[L256-REG] event={} op=http.request.end pid={} "
+                         "title_id=0x{:016X} context={} tls=true transport=ok http_status={}",
+                         event, client_process_id, client_title_id, handle, response.status);
+            }
+        }
     }
 }
 
@@ -697,7 +756,7 @@ void HTTP_C::CreateContext(Kernel::HLERequestContext& ctx) {
     std::string url(url_size - 1, '\0');
     buffer.Read(url.data(), 0, url_size - 1);
 
-    LOG_DEBUG(Service_HTTP, "called, url_size={}, url={}, method={}", url_size, url, method);
+    LOG_DEBUG(Service_HTTP, "called, url_size={}, method={}", url_size, method);
 
     auto* session_data = EnsureSessionInitialized(ctx, rp);
     if (!session_data) {
@@ -742,7 +801,25 @@ void HTTP_C::CreateContext(Kernel::HLERequestContext& ctx) {
     contexts[context_counter].socket_buffer_size = 0;
     contexts[context_counter].handle = context_counter;
     contexts[context_counter].session_id = session_data->session_id;
+    const auto caller_thread = ctx.ClientThread();
+    const auto caller_process = caller_thread ? caller_thread->owner_process.lock() : nullptr;
+    contexts[context_counter].client_process_id = caller_process ? caller_process->process_id : 0;
+    contexts[context_counter].client_title_id =
+        caller_process && caller_process->codeset ? caller_process->codeset->program_id : 0;
     contexts[context_counter].url_replacer = &url_replacer;
+
+    if (Service::PLGLDR::IsLevel256SupportedTitle(contexts[context_counter].client_title_id)) {
+        const u32 event = Level256RegistrationDiagnostics::NextEventId();
+        if (event != 0) {
+            const Common::URLInfo safe_url_info = Common::SplitUrl(contexts[context_counter].url);
+            LOG_INFO(Service_HTTP,
+                     "[L256-REG] event={} op=http.context.create pid={} title_id=0x{:016X} "
+                     "context={} method={} tls={}",
+                     event, contexts[context_counter].client_process_id,
+                     contexts[context_counter].client_title_id, context_counter, method,
+                     safe_url_info.is_https);
+        }
+    }
 
     session_data->num_http_contexts++;
 

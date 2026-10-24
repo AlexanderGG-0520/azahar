@@ -11,6 +11,7 @@
 #include <cryptopp/sha.h>
 #include <fmt/ranges.h>
 #include "common/archives.h"
+#include "common/error.h"
 #include "common/file_util.h"
 #include "common/hacks/hack_manager.h"
 #include "common/logging/log.h"
@@ -30,6 +31,7 @@
 #include "core/hle/service/cfg/cfg_nor.h"
 #include "core/hle/service/cfg/cfg_s.h"
 #include "core/hle/service/cfg/cfg_u.h"
+#include "core/hle/service/level256_registration_diagnostics.h"
 #include "core/hw/unique_data.h"
 #include "core/loader/loader.h"
 #ifdef HAVE_LIBRETRO
@@ -1107,6 +1109,13 @@ std::string& Module::GetMacAddress() {
     FileUtil::IOFile mac_address_file(
         fmt::format("{}/mac.txt", FileUtil::GetUserPath(FileUtil::UserPath::SysDataDir)), "rb");
     if (!mac_address_file.IsOpen() || mac_address_file.GetSize() > 100) {
+        const u32 diagnostic_event = Level256RegistrationDiagnostics::NextEventId();
+        if (diagnostic_event != 0) {
+            LOG_INFO(Service_CFG,
+                     "[L256-REG] event={} op=cfg.mac.read result=missing_or_invalid "
+                     "generated=true persist_requested=true",
+                     diagnostic_event);
+        }
         LOG_INFO(Service_CFG, "Cannot open mac address file for read, generating a new one");
         mac_address = GenerateRandomMAC();
         SaveMacAddress();
@@ -1115,7 +1124,14 @@ std::string& Module::GetMacAddress() {
 
     size_t file_size = mac_address_file.GetSize();
     mac_address.resize(file_size);
-    mac_address_file.ReadBytes(mac_address.data(), file_size);
+    const bool read_ok = mac_address_file.ReadBytes(mac_address.data(), file_size);
+    const u32 diagnostic_event = Level256RegistrationDiagnostics::NextEventId();
+    if (diagnostic_event != 0) {
+        LOG_INFO(Service_CFG,
+                 "[L256-REG] event={} op=cfg.mac.read result={} bytes_read={} "
+                 "secret_value=redacted",
+                 diagnostic_event, read_ok ? "success" : "failed", file_size);
+    }
     if (mac_address != MacToString(MacToU64(mac_address))) {
         LOG_WARNING(Service_CFG, "Imvalid saved MAC address, generating a new one");
         mac_address = GenerateRandomMAC();
@@ -1131,11 +1147,28 @@ void Module::SaveMacAddress() {
         fmt::format("{}/mac.txt", FileUtil::GetUserPath(FileUtil::UserPath::SysDataDir)), "wb");
 
     if (!mac_address_file.IsOpen()) {
+        const int host_error_code = Common::GetLastErrorCode();
+        const u32 diagnostic_event = Level256RegistrationDiagnostics::NextEventId();
+        if (diagnostic_event != 0) {
+            LOG_INFO(Service_CFG,
+                     "[L256-REG] event={} op=cfg.mac.write result=open_failed "
+                     "host_error_code={}",
+                     diagnostic_event, host_error_code);
+        }
         LOG_ERROR(Service_CFG, "Cannot open mac address file for write");
         return;
     }
 
-    mac_address_file.WriteBytes(mac_address.data(), mac_address.size());
+    const bool write_ok = mac_address_file.WriteBytes(mac_address.data(), mac_address.size());
+    const int host_error_code = write_ok ? 0 : Common::GetLastErrorCode();
+    const u32 diagnostic_event = Level256RegistrationDiagnostics::NextEventId();
+    if (diagnostic_event != 0) {
+        LOG_INFO(Service_CFG,
+                 "[L256-REG] event={} op=cfg.mac.write result={} bytes_written={} "
+                 "host_error_code={} secret_value=redacted",
+                 diagnostic_event, write_ok ? "success" : "failed", mac_address.size(),
+                 host_error_code);
+    }
 }
 
 void Module::UpdatePreferredRegionCode() {

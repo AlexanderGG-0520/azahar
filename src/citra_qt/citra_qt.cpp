@@ -262,6 +262,10 @@ GMainWindow::GMainWindow(Core::System& system_)
     Common::Log::Initialize();
     Common::Log::Start();
 
+    if (Settings::values.level256_registration_diagnostics_enabled.GetValue()) {
+        LOG_INFO(Frontend, "[L256-REG] diagnostics.enabled=true max_events=4096");
+    }
+
     Debugger::ToggleConsole();
 
     QStringList args = QApplication::arguments();

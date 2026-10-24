@@ -22,9 +22,9 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 #include <cstring>
-#include <openssl/rand.h>
 #include <boost/serialization/weak_ptr.hpp>
 #include <fmt/format.h>
+#include <openssl/rand.h>
 #include "common/archives.h"
 #include "common/file_util.h"
 #include "common/logging/log.h"
@@ -39,6 +39,7 @@
 #include "core/hle/kernel/process.h"
 #include "core/hle/kernel/thread.h"
 #include "core/hle/service/hid/hid.h"
+#include "core/hle/service/level256_registration_diagnostics.h"
 #include "core/hle/service/plgldr/level256_lfcs.h"
 #include "core/hle/service/plgldr/level256_random.h"
 #include "core/hle/service/plgldr/plgldr.h"
@@ -1199,8 +1200,37 @@ void PLG_LDR::GetLevel256RandomBytes(Kernel::HLERequestContext& ctx) {
     const u32 size = command_buffer[1];
     const u32 buffer_descriptor = command_buffer[2];
     const IPC::MappedBufferDescInfo buffer_info{buffer_descriptor};
+    const auto caller_thread = ctx.ClientThread();
+    const auto caller_process = caller_thread ? caller_thread->owner_process.lock() : nullptr;
+    const u32 caller_process_id = caller_process ? caller_process->process_id : 0;
+    const u64 caller_title_id =
+        caller_process && caller_process->codeset ? caller_process->codeset->program_id : 0;
+    const u32 diagnostic_event = Level256RegistrationDiagnostics::NextEventId();
+    if (diagnostic_event != 0) {
+        LOG_INFO(Service_PLGLDR,
+                 "[L256-REG] event={} op=plgldr.0x2561.begin pid={} title_id=0x{:016X} "
+                 "header=0x{:08X} size={} descriptor_size={} descriptor=0x{:08X}",
+                 diagnostic_event, caller_process_id, caller_title_id, ctx.CommandHeader().raw,
+                 size, buffer_info.size.Value(), buffer_descriptor);
+    }
+
+    std::string_view authorization = "not_checked";
+    std::string_view random_generation = "not_attempted";
+    const auto log_result = [&](Result result, u32 bytes_written) {
+        if (diagnostic_event != 0) {
+            const u32 end_event = Level256RegistrationDiagnostics::NextEventId();
+            if (end_event != 0) {
+                LOG_INFO(Service_PLGLDR,
+                         "[L256-REG] event={} op=plgldr.0x2561.end pid={} title_id=0x{:016X} "
+                         "authorization={} rand={} result=0x{:08X} bytes_written={}",
+                         end_event, caller_process_id, caller_title_id, authorization,
+                         random_generation, result.raw, bytes_written);
+            }
+        }
+    };
     if (!Level256Random::IsRequestShapeValid(ctx.CommandHeader().raw, size, buffer_descriptor,
-                                            buffer_info.size)) {
+                                             buffer_info.size)) {
+        log_result(IPC::ResultInvalidBufferDescriptor, 0);
         ReplyRandomWithoutBuffer(ctx, IPC::ResultInvalidBufferDescriptor);
         return;
     }
@@ -1208,37 +1238,37 @@ void PLG_LDR::GetLevel256RandomBytes(Kernel::HLERequestContext& ctx) {
     // IPC translation replaces the guest pointer with a mapped-buffer index.
     Kernel::MappedBuffer& buffer = ctx.GetMappedBuffer(command_buffer[3]);
     if (buffer.GetSize() != size) {
+        log_result(IPC::ResultInvalidBufferDescriptor, 0);
         ReplyRandomWithoutBuffer(ctx, IPC::ResultInvalidBufferDescriptor);
         return;
     }
 
     std::array<u8, Level256Random::kMaxRandomBytes> random_bytes{};
-    const auto caller_thread = ctx.ClientThread();
-    const auto caller_process = caller_thread ? caller_thread->owner_process.lock() : nullptr;
-    const u32 caller_process_id = caller_process ? caller_process->process_id : 0;
-    const u64 caller_title_id =
-        caller_process && caller_process->codeset ? caller_process->codeset->program_id : 0;
     const bool authorized = Level256Random::IsAuthorized(
         Settings::values.level256_compatibility_enabled.GetValue() && plgldr_context.is_enabled,
         IsLevel256SupportedTitle(caller_title_id), plgldr_context.plugin_loaded,
-        Kernel::Luma3DS::HasCapability(
-            Kernel::Luma3DS::CapabilitiesForLevel256Plugin(
-                plgldr_context.level256_plugin_identity_verified,
-                plgldr_context.level256_official_plugin_hash_matches),
-            Kernel::Luma3DS::Level256Capability::Level256RandomBytes),
+        Kernel::Luma3DS::HasCapability(Kernel::Luma3DS::CapabilitiesForLevel256Plugin(
+                                           plgldr_context.level256_plugin_identity_verified,
+                                           plgldr_context.level256_official_plugin_hash_matches),
+                                       Kernel::Luma3DS::Level256Capability::Level256RandomBytes),
         caller_process_id, plgldr_context.plugin_process_id);
+    authorization = authorized ? "allowed" : "denied";
 
     Result result = ResultSuccess;
     if (!authorized) {
         result = Kernel::ResultNotAuthorized;
-    } else if (!Level256Random::FillRandomBytes(
-                   std::span<u8>{random_bytes.data(), size},
-                   [](u8* output, std::size_t output_size) {
-                       return RAND_bytes(output, static_cast<int>(output_size)) == 1;
-                   })) {
-        result = ResultUnknown;
+    } else {
+        const bool generated = Level256Random::FillRandomBytes(
+            std::span<u8>{random_bytes.data(), size}, [](u8* output, std::size_t output_size) {
+                return RAND_bytes(output, static_cast<int>(output_size)) == 1;
+            });
+        random_generation = generated ? "success" : "failed";
+        if (!generated) {
+            result = ResultUnknown;
+        }
     }
     buffer.Write(random_bytes.data(), 0, size);
+    log_result(result, result.IsSuccess() ? size : 0);
 
     IPC::RequestBuilder rb(ctx, Level256Random::kCommandId, 1, 2);
     rb.Push(result);

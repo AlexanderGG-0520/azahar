@@ -18,6 +18,8 @@
 #include "core/hle/ipc_helpers.h"
 #include "core/hle/kernel/shared_memory.h"
 #include "core/hle/result.h"
+#include "core/hle/service/level256_registration_diagnostics.h"
+#include "core/hle/service/plgldr/plugin_path.h"
 #include "core/hle/service/soc/soc_u.h"
 #include "core/hle/service/soc/soc_u_address.h"
 #include "network/socket_manager.h"
@@ -667,8 +669,8 @@ struct CTRAddrInfo {
             .ai_protocol = static_cast<s32_le>(SocketProtocolFromPlatform(addr.ai_protocol)),
             .ai_addr = {},
         };
-        if (auto converted = CTRSockAddr::FromPlatform(
-                *reinterpret_cast<sockaddr_storage*>(addr.ai_addr))) {
+        if (auto converted =
+                CTRSockAddr::FromPlatform(*reinterpret_cast<sockaddr_storage*>(addr.ai_addr))) {
             ctr_addr.ai_addr = *converted;
         }
         ctr_addr.ai_addrlen = static_cast<s32_le>(ctr_addr.ai_addr.raw.len);
@@ -1286,8 +1288,7 @@ void SOC_U::RecvFromOther(Kernel::HLERequestContext& ctx) {
                     auto ctr_src_addr = CTRSockAddr::FromPlatform(src_addr);
                     if (ctr_src_addr) {
                         std::memcpy(async_data->addr_buff.data(), &*ctr_src_addr,
-                                    std::min<size_t>(async_data->addr_len,
-                                                     sizeof(*ctr_src_addr)));
+                                    std::min<size_t>(async_data->addr_len, sizeof(*ctr_src_addr)));
                     } else {
                         async_data->recv_error = ERRNO(EAFNOSUPPORT);
                         async_data->ret = SOCKET_ERROR_VALUE;
@@ -1411,8 +1412,7 @@ void SOC_U::RecvFrom(Kernel::HLERequestContext& ctx) {
                     auto ctr_src_addr = CTRSockAddr::FromPlatform(src_addr);
                     if (ctr_src_addr) {
                         std::memcpy(async_data->addr_buff.data(), &*ctr_src_addr,
-                                    std::min<size_t>(async_data->addr_len,
-                                                     sizeof(*ctr_src_addr)));
+                                    std::min<size_t>(async_data->addr_len, sizeof(*ctr_src_addr)));
                     } else {
                         async_data->recv_error = ERRNO(EAFNOSUPPORT);
                         async_data->ret = SOCKET_ERROR_VALUE;
@@ -1554,7 +1554,8 @@ void SOC_U::GetSockName(Kernel::HLERequestContext& ctx) {
         sizeof(sockaddr_storage), ERRNO(EAFNOSUPPORT),
         [&holder](sockaddr_storage& address, socklen_t& length) {
             return ::getsockname(holder.socket_fd, reinterpret_cast<sockaddr*>(&address), &length);
-        }, [] { return GET_ERRNO; }, [](int error) { return TranslateError(error); },
+        },
+        [] { return GET_ERRNO; }, [](int error) { return TranslateError(error); },
         [](sockaddr_storage const& address) { return CTRSockAddr::FromPlatform(address); });
 
     std::vector<u8> dest_addr_buff(sizeof(query.address), 0);
@@ -1695,7 +1696,8 @@ void SOC_U::GetPeerName(Kernel::HLERequestContext& ctx) {
         sizeof(sockaddr_storage), ERRNO(EAFNOSUPPORT),
         [&holder](sockaddr_storage& address, socklen_t& length) {
             return ::getpeername(holder.socket_fd, reinterpret_cast<sockaddr*>(&address), &length);
-        }, [] { return GET_ERRNO; }, [](int error) { return TranslateError(error); },
+        },
+        [] { return GET_ERRNO; }, [](int error) { return TranslateError(error); },
         [](sockaddr_storage const& address) { return CTRSockAddr::FromPlatform(address); });
 
     std::vector<u8> dest_addr_buff(sizeof(query.address), 0);
@@ -1727,6 +1729,20 @@ void SOC_U::Connect(Kernel::HLERequestContext& ctx) {
         return;
     }
     SocketHolder& holder = socket_holder_optional->get();
+    const auto caller_thread = ctx.ClientThread();
+    const auto caller_process = caller_thread ? caller_thread->owner_process.lock() : nullptr;
+    const u64 title_id =
+        caller_process && caller_process->codeset ? caller_process->codeset->program_id : 0;
+    const bool registration_diagnostics = Service::PLGLDR::IsLevel256SupportedTitle(title_id) &&
+                                          Service::Level256RegistrationDiagnostics::IsEnabled();
+    const u32 diagnostic_event =
+        registration_diagnostics ? Service::Level256RegistrationDiagnostics::NextEventId() : 0;
+    if (diagnostic_event != 0) {
+        LOG_INFO(Service_SOC,
+                 "[L256-REG] event={} op=soc.connect.begin pid={} title_id=0x{:016X} "
+                 "socket={} address_length={}",
+                 diagnostic_event, pid, title_id, socket_handle, input_addr_len);
+    }
 
     struct AsyncData {
         // Input
@@ -1734,6 +1750,8 @@ void SOC_U::Connect(Kernel::HLERequestContext& ctx) {
         std::pair<sockaddr_storage, socklen_t> input_addr;
         u32 socket_handle;
         u32 pid;
+        u64 title_id;
+        u32 diagnostic_event;
 
         // Output
         s32 ret{};
@@ -1743,6 +1761,8 @@ void SOC_U::Connect(Kernel::HLERequestContext& ctx) {
     auto async_data = std::make_shared<AsyncData>();
     async_data->fd_info = &holder;
     async_data->pid = pid;
+    async_data->title_id = title_id;
+    async_data->diagnostic_event = diagnostic_event;
 
     CTRSockAddr ctr_input_addr;
     std::memcpy(&ctr_input_addr, input_addr_buf.data(),
@@ -1762,6 +1782,17 @@ void SOC_U::Connect(Kernel::HLERequestContext& ctx) {
         [async_data](Kernel::HLERequestContext& ctx) {
             if (async_data->ret != 0) {
                 async_data->ret = TranslateError(async_data->connect_error);
+            }
+
+            if (async_data->diagnostic_event != 0) {
+                const u32 end_event = Service::Level256RegistrationDiagnostics::NextEventId();
+                if (end_event != 0) {
+                    LOG_INFO(Service_SOC,
+                             "[L256-REG] event={} op=soc.connect.end pid={} "
+                             "title_id=0x{:016X} socket={} host_error={} result={}",
+                             end_event, async_data->pid, async_data->title_id,
+                             async_data->socket_handle, async_data->connect_error, async_data->ret);
+                }
             }
 
             LOG_DEBUG(Service_SOC, "called, pid={}, fd={}, ret={}", async_data->pid,
@@ -1974,6 +2005,13 @@ void SOC_U::GetAddrInfoImpl(Kernel::HLERequestContext& ctx) {
     auto node = rp.PopStaticBuffer();
     auto service = rp.PopStaticBuffer();
     auto hints_buff = rp.PopStaticBuffer();
+    const auto caller_thread = ctx.ClientThread();
+    const auto caller_process = caller_thread ? caller_thread->owner_process.lock() : nullptr;
+    const u32 caller_pid = caller_process ? caller_process->process_id : 0;
+    const u64 title_id =
+        caller_process && caller_process->codeset ? caller_process->codeset->program_id : 0;
+    const bool registration_diagnostics = Service::PLGLDR::IsLevel256SupportedTitle(title_id) &&
+                                          Service::Level256RegistrationDiagnostics::IsEnabled();
 
     const char* node_data = node_length > 0 ? reinterpret_cast<const char*>(node.data()) : nullptr;
     const char* service_data =
@@ -2023,6 +2061,16 @@ void SOC_U::GetAddrInfoImpl(Kernel::HLERequestContext& ctx) {
         }
         if (out != nullptr)
             freeaddrinfo(out);
+    }
+
+    if (registration_diagnostics) {
+        const u32 event = Service::Level256RegistrationDiagnostics::NextEventId();
+        if (event != 0) {
+            LOG_INFO(Service_SOC,
+                     "[L256-REG] event={} op=soc.getaddrinfo pid={} title_id=0x{:016X} "
+                     "node_length={} service_length={} result={} addresses={}",
+                     event, caller_pid, title_id, node_length, service_length, ret, count);
+        }
     }
 
     IPC::RequestBuilder rb = rp.MakeBuilder(3, 2);

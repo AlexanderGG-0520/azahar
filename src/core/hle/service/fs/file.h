@@ -41,7 +41,7 @@ class File final : public ServiceFramework<File, FileSessionSlot> {
 public:
     File(Kernel::KernelSystem& kernel, std::unique_ptr<FileSys::FileBackend>&& backend,
          const FileSys::Path& path);
-    ~File() = default;
+    ~File();
 
     std::string GetName() const {
         return "Path: " + path.DebugStr();
@@ -74,6 +74,7 @@ private:
     void OpenSubFile(Kernel::HLERequestContext& ctx);
 
     Kernel::KernelSystem& kernel;
+    bool diagnostics_open_tracked{};
 
     File(Kernel::KernelSystem& kernel);
     File();

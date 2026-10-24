@@ -592,6 +592,16 @@ installed applications.</string>
               </property>
              </widget>
             </item>
+            <item row="24" column="1">
+             <widget class="QCheckBox" name="level256_registration_diagnostics_enabled">
+              <property name="text">
+               <string>Enable Level256 account registration diagnostics</string>
+              </property>
+              <property name="toolTip">
+               <string>Writes bounded [L256-REG] records for Level256 random IPC, account file operations, and HTTP request stages. Sensitive data and request contents are excluded. Disabled by default.</string>
+              </property>
+             </widget>
+            </item>
            </layout>
           </widget>
          </item>

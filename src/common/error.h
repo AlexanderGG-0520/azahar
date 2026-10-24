@@ -14,6 +14,9 @@ namespace Common {
 // Defined in error.cpp.
 [[nodiscard]] std::string GetLastErrorMsg();
 
+// Returns the native error code without converting it to text.
+[[nodiscard]] int GetLastErrorCode();
+
 // Like GetLastErrorMsg(), but passing an explicit error code.
 // Defined in error.cpp.
 [[nodiscard]] std::string NativeErrorToString(int e);

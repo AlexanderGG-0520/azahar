@@ -29,6 +29,8 @@
 #include "core/hle/service/am/am.h"
 #include "core/hle/service/fs/archive.h"
 #include "core/hle/service/fs/fs_user.h"
+#include "core/hle/service/level256_registration_diagnostics.h"
+#include "core/hle/service/plgldr/plugin_path.h"
 #include "core/hw/aes/key.h"
 #include "core/hw/unique_data.h"
 
@@ -64,12 +66,38 @@ void FS_USER::OpenFile(Kernel::HLERequestContext& ctx) {
     std::vector<u8> filename = rp.PopStaticBuffer();
     ASSERT(filename.size() == filename_size);
     const FileSys::Path file_path(filename_type, std::move(filename));
+    const std::string guest_path = file_path.DebugStr();
+    const bool registration_path = Level256RegistrationDiagnostics::IsAccountPath(guest_path);
+    const auto caller_thread = ctx.ClientThread();
+    const auto caller_process = caller_thread ? caller_thread->owner_process.lock() : nullptr;
+    const u32 caller_pid = caller_process ? caller_process->process_id : 0;
+    const u64 caller_title =
+        caller_process && caller_process->codeset ? caller_process->codeset->program_id : 0;
+    const u32 diagnostic_event =
+        registration_path ? Level256RegistrationDiagnostics::NextEventId() : 0;
+    if (diagnostic_event != 0) {
+        LOG_INFO(Service_FS,
+                 "[L256-REG] event={} op=fs.open_file.begin pid={} title_id=0x{:016X} "
+                 "archive_handle=0x{:016X} path={} low_path_type={} mode=0x{:X} attrs=0x{:X}",
+                 diagnostic_event, caller_pid, caller_title, archive_handle,
+                 Level256RegistrationDiagnostics::SafePathLabel(guest_path), filename_type,
+                 mode.hex, attributes);
+    }
 
     LOG_DEBUG(Service_FS, "path={}, mode={} attrs={}", file_path.DebugStr(), mode.hex, attributes);
 
     if (!archives.ArchiveIsSlow(archive_handle) && !Settings::values.async_fs_operations) {
         const auto [file_res, open_timeout_ns] =
             archives.OpenFileFromArchive(archive_handle, file_path, mode, attributes);
+        if (diagnostic_event != 0) {
+            const u32 end_event = Level256RegistrationDiagnostics::NextEventId();
+            if (end_event != 0) {
+                LOG_INFO(Service_FS,
+                         "[L256-REG] event={} op=fs.open_file.end pid={} title_id=0x{:016X} "
+                         "archive_handle=0x{:016X} result=0x{:08X}",
+                         end_event, caller_pid, caller_title, archive_handle, file_res.Code().raw);
+            }
+        }
         IPC::RequestBuilder rb = rp.MakeBuilder(1, 2);
         rb.Push(file_res.Code());
         if (file_res.Succeeded()) {
@@ -89,6 +117,9 @@ void FS_USER::OpenFile(Kernel::HLERequestContext& ctx) {
         FileSys::Path file_path;
         FileSys::Mode mode;
         u32 attributes;
+        u32 caller_pid;
+        u64 caller_title;
+        u32 diagnostic_event;
         std::chrono::steady_clock::time_point pre_timer;
 
         std::pair<ResultVal<std::shared_ptr<File>>, std::chrono::nanoseconds> file;
@@ -98,6 +129,9 @@ void FS_USER::OpenFile(Kernel::HLERequestContext& ctx) {
     async_data->file_path = file_path;
     async_data->mode = mode;
     async_data->attributes = attributes;
+    async_data->caller_pid = caller_pid;
+    async_data->caller_title = caller_title;
+    async_data->diagnostic_event = diagnostic_event;
     async_data->pre_timer = std::chrono::steady_clock::now();
 
     ctx.RunOnThreadWorker(
@@ -114,6 +148,16 @@ void FS_USER::OpenFile(Kernel::HLERequestContext& ctx) {
                                         .count());
         },
         [async_data](Kernel::HLERequestContext& ctx) {
+            if (async_data->diagnostic_event != 0) {
+                const u32 end_event = Level256RegistrationDiagnostics::NextEventId();
+                if (end_event != 0) {
+                    LOG_INFO(Service_FS,
+                             "[L256-REG] event={} op=fs.open_file.end pid={} "
+                             "title_id=0x{:016X} archive_handle=0x{:016X} result=0x{:08X}",
+                             end_event, async_data->caller_pid, async_data->caller_title,
+                             async_data->archive_handle, async_data->file.first.Code().raw);
+                }
+            }
             IPC::RequestBuilder rb(ctx, 1, 2);
 
             rb.Push(async_data->file.first.Code());
@@ -257,25 +301,51 @@ void FS_USER::DeleteFile(Kernel::HLERequestContext& ctx) {
     ASSERT(filename.size() == filename_size);
 
     const FileSys::Path file_path(filename_type, std::move(filename));
+    const std::string guest_path = file_path.DebugStr();
+    const bool registration_path = Level256RegistrationDiagnostics::IsAccountPath(guest_path);
+    const auto caller_thread = ctx.ClientThread();
+    const auto caller_process = caller_thread ? caller_thread->owner_process.lock() : nullptr;
+    const u32 caller_pid = caller_process ? caller_process->process_id : 0;
+    const u64 caller_title =
+        caller_process && caller_process->codeset ? caller_process->codeset->program_id : 0;
+    const u32 diagnostic_event =
+        registration_path ? Level256RegistrationDiagnostics::NextEventId() : 0;
 
     LOG_DEBUG(Service_FS, "type={} size={} data={}", filename_type, filename_size,
               file_path.DebugStr());
 
     if (!archives.ArchiveIsSlow(archive_handle) && !Settings::values.async_fs_operations) {
         IPC::RequestBuilder rb = rp.MakeBuilder(1, 0);
-        rb.Push(archives.DeleteFileFromArchive(archive_handle, file_path));
+        const Result result = archives.DeleteFileFromArchive(archive_handle, file_path);
+        if (diagnostic_event != 0) {
+            const u32 end_event = Level256RegistrationDiagnostics::NextEventId();
+            if (end_event != 0) {
+                LOG_INFO(Service_FS,
+                         "[L256-REG] event={} op=fs.delete_file pid={} title_id=0x{:016X} "
+                         "archive_handle=0x{:016X} path={} result=0x{:08X}",
+                         end_event, caller_pid, caller_title, archive_handle,
+                         Level256RegistrationDiagnostics::SafePathLabel(guest_path), result.raw);
+            }
+        }
+        rb.Push(result);
         return;
     }
 
     struct AsyncData {
         ArchiveHandle archive_handle;
         FileSys::Path file_path;
+        u32 diagnostic_event;
+        u32 caller_pid;
+        u64 caller_title;
 
         Result res{0};
     };
     auto async_data = std::make_shared<AsyncData>();
     async_data->archive_handle = archive_handle;
     async_data->file_path = file_path;
+    async_data->diagnostic_event = diagnostic_event;
+    async_data->caller_pid = caller_pid;
+    async_data->caller_title = caller_title;
 
     ctx.RunOnThreadWorker(
         fs_async_worker,
@@ -285,6 +355,19 @@ void FS_USER::DeleteFile(Kernel::HLERequestContext& ctx) {
             return 0;
         },
         [async_data](Kernel::HLERequestContext& ctx) {
+            if (async_data->diagnostic_event != 0) {
+                const u32 end_event = Level256RegistrationDiagnostics::NextEventId();
+                if (end_event != 0) {
+                    LOG_INFO(Service_FS,
+                             "[L256-REG] event={} op=fs.delete_file pid={} "
+                             "title_id=0x{:016X} archive_handle=0x{:016X} path={} result=0x{:08X}",
+                             end_event, async_data->caller_pid, async_data->caller_title,
+                             async_data->archive_handle,
+                             Level256RegistrationDiagnostics::SafePathLabel(
+                                 async_data->file_path.DebugStr()),
+                             async_data->res.raw);
+                }
+            }
             IPC::RequestBuilder rb(ctx, 1, 0);
             rb.Push(async_data->res);
         },
@@ -308,6 +391,17 @@ void FS_USER::RenameFile(Kernel::HLERequestContext& ctx) {
 
     const FileSys::Path src_file_path(src_filename_type, std::move(src_filename));
     const FileSys::Path dest_file_path(dest_filename_type, std::move(dest_filename));
+    const std::string src_guest_path = src_file_path.DebugStr();
+    const std::string dest_guest_path = dest_file_path.DebugStr();
+    const bool registration_path = Level256RegistrationDiagnostics::IsAccountPath(src_guest_path) ||
+                                   Level256RegistrationDiagnostics::IsAccountPath(dest_guest_path);
+    const auto caller_thread = ctx.ClientThread();
+    const auto caller_process = caller_thread ? caller_thread->owner_process.lock() : nullptr;
+    const u32 caller_pid = caller_process ? caller_process->process_id : 0;
+    const u64 caller_title =
+        caller_process && caller_process->codeset ? caller_process->codeset->program_id : 0;
+    const u32 diagnostic_event =
+        registration_path ? Level256RegistrationDiagnostics::NextEventId() : 0;
 
     LOG_DEBUG(Service_FS,
               "src_type={} src_size={} src_data={} dest_type={} dest_size={} dest_data={}",
@@ -317,8 +411,25 @@ void FS_USER::RenameFile(Kernel::HLERequestContext& ctx) {
     if (!archives.ArchiveIsSlow(src_archive_handle) &&
         !archives.ArchiveIsSlow(dest_archive_handle) && !Settings::values.async_fs_operations) {
         IPC::RequestBuilder rb = rp.MakeBuilder(1, 0);
-        rb.Push(archives.RenameFileBetweenArchives(src_archive_handle, src_file_path,
-                                                   dest_archive_handle, dest_file_path));
+        const Result result = archives.RenameFileBetweenArchives(
+            src_archive_handle, src_file_path, dest_archive_handle, dest_file_path);
+        if (diagnostic_event != 0) {
+            const u32 end_event = Level256RegistrationDiagnostics::NextEventId();
+            if (end_event != 0) {
+                LOG_INFO(Service_FS,
+                         "[L256-REG] event={} op=fs.rename_file pid={} title_id=0x{:016X} "
+                         "src_archive=0x{:016X} src={} dst_archive=0x{:016X} dst={} "
+                         "src_open_handles={} dst_open_handles={} result=0x{:08X}",
+                         end_event, caller_pid, caller_title, src_archive_handle,
+                         Level256RegistrationDiagnostics::SafePathLabel(src_guest_path),
+                         dest_archive_handle,
+                         Level256RegistrationDiagnostics::SafePathLabel(dest_guest_path),
+                         Level256RegistrationDiagnostics::OpenFileCount(src_guest_path),
+                         Level256RegistrationDiagnostics::OpenFileCount(dest_guest_path),
+                         result.raw);
+            }
+        }
+        rb.Push(result);
         return;
     }
 
@@ -329,12 +440,18 @@ void FS_USER::RenameFile(Kernel::HLERequestContext& ctx) {
         FileSys::Path dest_file_path;
 
         Result res{0};
+        u32 diagnostic_event;
+        u32 caller_pid;
+        u64 caller_title;
     };
     auto async_data = std::make_shared<AsyncData>();
     async_data->src_archive_handle = src_archive_handle;
     async_data->src_file_path = src_file_path;
     async_data->dest_archive_handle = dest_archive_handle;
     async_data->dest_file_path = dest_file_path;
+    async_data->diagnostic_event = diagnostic_event;
+    async_data->caller_pid = caller_pid;
+    async_data->caller_title = caller_title;
 
     ctx.RunOnThreadWorker(
         fs_async_worker,
@@ -345,6 +462,28 @@ void FS_USER::RenameFile(Kernel::HLERequestContext& ctx) {
             return 0;
         },
         [async_data](Kernel::HLERequestContext& ctx) {
+            if (async_data->diagnostic_event != 0) {
+                const u32 end_event = Level256RegistrationDiagnostics::NextEventId();
+                if (end_event != 0) {
+                    LOG_INFO(Service_FS,
+                             "[L256-REG] event={} op=fs.rename_file pid={} "
+                             "title_id=0x{:016X} src_archive=0x{:016X} src={} "
+                             "dst_archive=0x{:016X} dst={} src_open_handles={} "
+                             "dst_open_handles={} result=0x{:08X}",
+                             end_event, async_data->caller_pid, async_data->caller_title,
+                             async_data->src_archive_handle,
+                             Level256RegistrationDiagnostics::SafePathLabel(
+                                 async_data->src_file_path.DebugStr()),
+                             async_data->dest_archive_handle,
+                             Level256RegistrationDiagnostics::SafePathLabel(
+                                 async_data->dest_file_path.DebugStr()),
+                             Level256RegistrationDiagnostics::OpenFileCount(
+                                 async_data->src_file_path.DebugStr()),
+                             Level256RegistrationDiagnostics::OpenFileCount(
+                                 async_data->dest_file_path.DebugStr()),
+                             async_data->res.raw);
+                }
+            }
             IPC::RequestBuilder rb(ctx, 1, 0);
             rb.Push(async_data->res);
         },
@@ -454,13 +593,35 @@ void FS_USER::CreateFile(Kernel::HLERequestContext& ctx) {
     ASSERT(filename.size() == filename_size);
 
     const FileSys::Path file_path(filename_type, std::move(filename));
+    const std::string guest_path = file_path.DebugStr();
+    const bool registration_path = Level256RegistrationDiagnostics::IsAccountPath(guest_path);
+    const auto caller_thread = ctx.ClientThread();
+    const auto caller_process = caller_thread ? caller_thread->owner_process.lock() : nullptr;
+    const u32 caller_pid = caller_process ? caller_process->process_id : 0;
+    const u64 caller_title =
+        caller_process && caller_process->codeset ? caller_process->codeset->program_id : 0;
+    const u32 diagnostic_event =
+        registration_path ? Level256RegistrationDiagnostics::NextEventId() : 0;
 
     LOG_DEBUG(Service_FS, "type={} attributes={} size={:x} data={}", filename_type, attributes,
               file_size, file_path.DebugStr());
 
     if (!archives.ArchiveIsSlow(archive_handle) && !Settings::values.async_fs_operations) {
         IPC::RequestBuilder rb = rp.MakeBuilder(1, 0);
-        rb.Push(archives.CreateFileInArchive(archive_handle, file_path, file_size, attributes));
+        const Result result =
+            archives.CreateFileInArchive(archive_handle, file_path, file_size, attributes);
+        if (diagnostic_event != 0) {
+            const u32 end_event = Level256RegistrationDiagnostics::NextEventId();
+            if (end_event != 0) {
+                LOG_INFO(Service_FS,
+                         "[L256-REG] event={} op=fs.create_file pid={} title_id=0x{:016X} "
+                         "archive_handle=0x{:016X} path={} size={} attrs=0x{:X} result=0x{:08X}",
+                         end_event, caller_pid, caller_title, archive_handle,
+                         Level256RegistrationDiagnostics::SafePathLabel(guest_path), file_size,
+                         attributes, result.raw);
+            }
+        }
+        rb.Push(result);
         return;
     }
 
@@ -469,6 +630,9 @@ void FS_USER::CreateFile(Kernel::HLERequestContext& ctx) {
         FileSys::Path file_path;
         u64 file_size;
         u32 attributes;
+        u32 diagnostic_event;
+        u32 caller_pid;
+        u64 caller_title;
 
         Result res{0};
     };
@@ -477,6 +641,9 @@ void FS_USER::CreateFile(Kernel::HLERequestContext& ctx) {
     async_data->file_path = file_path;
     async_data->file_size = file_size;
     async_data->attributes = attributes;
+    async_data->diagnostic_event = diagnostic_event;
+    async_data->caller_pid = caller_pid;
+    async_data->caller_title = caller_title;
 
     ctx.RunOnThreadWorker(
         fs_async_worker,
@@ -487,6 +654,20 @@ void FS_USER::CreateFile(Kernel::HLERequestContext& ctx) {
             return 0;
         },
         [async_data](Kernel::HLERequestContext& ctx) {
+            if (async_data->diagnostic_event != 0) {
+                const u32 end_event = Level256RegistrationDiagnostics::NextEventId();
+                if (end_event != 0) {
+                    LOG_INFO(Service_FS,
+                             "[L256-REG] event={} op=fs.create_file pid={} "
+                             "title_id=0x{:016X} archive_handle=0x{:016X} path={} size={} "
+                             "result=0x{:08X}",
+                             end_event, async_data->caller_pid, async_data->caller_title,
+                             async_data->archive_handle,
+                             Level256RegistrationDiagnostics::SafePathLabel(
+                                 async_data->file_path.DebugStr()),
+                             async_data->file_size, async_data->res.raw);
+                }
+            }
             IPC::RequestBuilder rb(ctx, 1, 0);
             rb.Push(async_data->res);
         },
@@ -503,13 +684,34 @@ void FS_USER::CreateDirectory(Kernel::HLERequestContext& ctx) {
     std::vector<u8> dirname = rp.PopStaticBuffer();
     ASSERT(dirname.size() == dirname_size);
     const FileSys::Path dir_path(dirname_type, std::move(dirname));
+    const std::string guest_path = dir_path.DebugStr();
+    const u32 diagnostic_event = Level256RegistrationDiagnostics::IsAccountPath(guest_path)
+                                     ? Level256RegistrationDiagnostics::NextEventId()
+                                     : 0;
+    const auto caller_thread = ctx.ClientThread();
+    const auto caller_process = caller_thread ? caller_thread->owner_process.lock() : nullptr;
+    const u32 caller_pid = caller_process ? caller_process->process_id : 0;
+    const u64 caller_title =
+        caller_process && caller_process->codeset ? caller_process->codeset->program_id : 0;
 
     LOG_DEBUG(Service_FS, "type={} size={} data={}", dirname_type, dirname_size,
               dir_path.DebugStr());
 
     if (!archives.ArchiveIsSlow(archive_handle) && !Settings::values.async_fs_operations) {
         IPC::RequestBuilder rb = rp.MakeBuilder(1, 0);
-        rb.Push(archives.CreateDirectoryFromArchive(archive_handle, dir_path, attributes));
+        const Result result =
+            archives.CreateDirectoryFromArchive(archive_handle, dir_path, attributes);
+        if (diagnostic_event != 0) {
+            const u32 end_event = Level256RegistrationDiagnostics::NextEventId();
+            if (end_event != 0) {
+                LOG_INFO(Service_FS,
+                         "[L256-REG] event={} op=fs.create_directory pid={} "
+                         "title_id=0x{:016X} archive_handle=0x{:016X} path={} result=0x{:08X}",
+                         end_event, caller_pid, caller_title, archive_handle,
+                         Level256RegistrationDiagnostics::SafePathLabel(guest_path), result.raw);
+            }
+        }
+        rb.Push(result);
         return;
     }
 
@@ -517,6 +719,9 @@ void FS_USER::CreateDirectory(Kernel::HLERequestContext& ctx) {
         ArchiveHandle archive_handle;
         FileSys::Path dir_path;
         u32 attributes;
+        u32 diagnostic_event;
+        u32 caller_pid;
+        u64 caller_title;
 
         Result res{0};
     };
@@ -524,6 +729,9 @@ void FS_USER::CreateDirectory(Kernel::HLERequestContext& ctx) {
     async_data->archive_handle = archive_handle;
     async_data->dir_path = dir_path;
     async_data->attributes = attributes;
+    async_data->diagnostic_event = diagnostic_event;
+    async_data->caller_pid = caller_pid;
+    async_data->caller_title = caller_title;
 
     ctx.RunOnThreadWorker(
         fs_async_worker,
@@ -533,6 +741,20 @@ void FS_USER::CreateDirectory(Kernel::HLERequestContext& ctx) {
             return 0;
         },
         [async_data](Kernel::HLERequestContext& ctx) {
+            if (async_data->diagnostic_event != 0) {
+                const u32 end_event = Level256RegistrationDiagnostics::NextEventId();
+                if (end_event != 0) {
+                    LOG_INFO(Service_FS,
+                             "[L256-REG] event={} op=fs.create_directory pid={} "
+                             "title_id=0x{:016X} archive_handle=0x{:016X} path={} "
+                             "result=0x{:08X}",
+                             end_event, async_data->caller_pid, async_data->caller_title,
+                             async_data->archive_handle,
+                             Level256RegistrationDiagnostics::SafePathLabel(
+                                 async_data->dir_path.DebugStr()),
+                             async_data->res.raw);
+                }
+            }
             IPC::RequestBuilder rb(ctx, 1, 0);
             rb.Push(async_data->res);
         },
@@ -607,6 +829,15 @@ void FS_USER::OpenDirectory(Kernel::HLERequestContext& ctx) {
     ASSERT(dirname.size() == dirname_size);
 
     const FileSys::Path dir_path(dirname_type, std::move(dirname));
+    const std::string guest_path = dir_path.DebugStr();
+    const u32 diagnostic_event = Level256RegistrationDiagnostics::IsAccountPath(guest_path)
+                                     ? Level256RegistrationDiagnostics::NextEventId()
+                                     : 0;
+    const auto caller_thread = ctx.ClientThread();
+    const auto caller_process = caller_thread ? caller_thread->owner_process.lock() : nullptr;
+    const u32 caller_pid = caller_process ? caller_process->process_id : 0;
+    const u64 caller_title =
+        caller_process && caller_process->codeset ? caller_process->codeset->program_id : 0;
 
     LOG_DEBUG(Service_FS, "type={} size={} data={}", dirname_type, dirname_size,
               dir_path.DebugStr());
@@ -615,6 +846,17 @@ void FS_USER::OpenDirectory(Kernel::HLERequestContext& ctx) {
         IPC::RequestBuilder rb = rp.MakeBuilder(1, 2);
         ResultVal<std::shared_ptr<Directory>> dir_res =
             archives.OpenDirectoryFromArchive(archive_handle, dir_path);
+        if (diagnostic_event != 0) {
+            const u32 end_event = Level256RegistrationDiagnostics::NextEventId();
+            if (end_event != 0) {
+                LOG_INFO(Service_FS,
+                         "[L256-REG] event={} op=fs.open_directory pid={} "
+                         "title_id=0x{:016X} archive_handle=0x{:016X} path={} result=0x{:08X}",
+                         end_event, caller_pid, caller_title, archive_handle,
+                         Level256RegistrationDiagnostics::SafePathLabel(guest_path),
+                         dir_res.Code().raw);
+            }
+        }
         rb.Push(dir_res.Code());
         if (dir_res.Succeeded()) {
             std::shared_ptr<Directory> directory = *dir_res;
@@ -632,12 +874,18 @@ void FS_USER::OpenDirectory(Kernel::HLERequestContext& ctx) {
     struct AsyncData {
         ArchiveHandle archive_handle;
         FileSys::Path dir_path;
+        u32 diagnostic_event;
+        u32 caller_pid;
+        u64 caller_title;
 
         ResultVal<std::shared_ptr<Directory>> dir_res;
     };
     auto async_data = std::make_shared<AsyncData>();
     async_data->archive_handle = archive_handle;
     async_data->dir_path = dir_path;
+    async_data->diagnostic_event = diagnostic_event;
+    async_data->caller_pid = caller_pid;
+    async_data->caller_title = caller_title;
 
     ctx.RunOnThreadWorker(
         fs_async_worker,
@@ -647,6 +895,19 @@ void FS_USER::OpenDirectory(Kernel::HLERequestContext& ctx) {
             return 0;
         },
         [this, async_data](Kernel::HLERequestContext& ctx) {
+            if (async_data->diagnostic_event != 0) {
+                const u32 end_event = Level256RegistrationDiagnostics::NextEventId();
+                if (end_event != 0) {
+                    LOG_INFO(Service_FS,
+                             "[L256-REG] event={} op=fs.open_directory pid={} "
+                             "title_id=0x{:016X} archive_handle=0x{:016X} path={} result=0x{:08X}",
+                             end_event, async_data->caller_pid, async_data->caller_title,
+                             async_data->archive_handle,
+                             Level256RegistrationDiagnostics::SafePathLabel(
+                                 async_data->dir_path.DebugStr()),
+                             async_data->dir_res.Code().raw);
+                }
+            }
             IPC::RequestBuilder rb(ctx, 1, 2);
 
             rb.Push(async_data->dir_res.Code());
@@ -677,12 +938,46 @@ void FS_USER::OpenArchive(Kernel::HLERequestContext& ctx) {
               archive_path.DebugStr());
     ClientSlot* slot = GetSessionData(ctx.Session());
     u64 program_id = slot->program_id;
+    const auto caller_thread = ctx.ClientThread();
+    const auto caller_process = caller_thread ? caller_thread->owner_process.lock() : nullptr;
+    const u32 caller_pid = caller_process ? caller_process->process_id : 0;
+    const bool level256_title = Service::PLGLDR::IsLevel256SupportedTitle(program_id);
+    const bool relevant_archive =
+        archive_id == ArchiveIdCode::SDMC || archive_id == ArchiveIdCode::ExtSaveData ||
+        archive_id == ArchiveIdCode::OtherSaveDataGeneral || archive_id == ArchiveIdCode::NCCH;
+    const u32 diagnostic_event =
+        level256_title && relevant_archive ? Level256RegistrationDiagnostics::NextEventId() : 0;
+    u32 media_type = 0xFFFFFFFF;
+    if (archive_path.GetType() == FileSys::LowPathType::Binary) {
+        const auto binary_path = archive_path.AsBinary();
+        if (!binary_path.empty()) {
+            media_type = binary_path[0];
+        }
+    }
+    if (diagnostic_event != 0) {
+        LOG_INFO(Service_FS,
+                 "[L256-REG] event={} op=fs.open_archive.begin pid={} title_id=0x{:016X} "
+                 "archive_id=0x{:08X} low_path_type={} low_path_size={} media_type={}",
+                 diagnostic_event, caller_pid, program_id, archive_id, archivename_type,
+                 archivename_size, media_type);
+    }
 
     // Conventional opening
     if (!archives.ArchiveIsSlow(archive_id) && !Settings::values.async_fs_operations) {
         IPC::RequestBuilder rb = rp.MakeBuilder(3, 0);
         const ResultVal<ArchiveHandle> handle =
             archives.OpenArchive(archive_id, archive_path, program_id);
+        if (diagnostic_event != 0) {
+            const u32 end_event = Level256RegistrationDiagnostics::NextEventId();
+            if (end_event != 0) {
+                LOG_INFO(Service_FS,
+                         "[L256-REG] event={} op=fs.open_archive.end pid={} "
+                         "title_id=0x{:016X} archive_id=0x{:08X} handle=0x{:016X} "
+                         "result=0x{:08X}",
+                         end_event, caller_pid, program_id, archive_id,
+                         handle.Succeeded() ? *handle : 0, handle.Code().raw);
+            }
+        }
         rb.Push(handle.Code());
         if (handle.Succeeded()) {
             rb.PushRaw(*handle);
@@ -700,6 +995,8 @@ void FS_USER::OpenArchive(Kernel::HLERequestContext& ctx) {
         ArchiveIdCode archive_id;
         FileSys::Path archive_path;
         u64 program_id;
+        u32 caller_pid;
+        u32 diagnostic_event;
 
         // Output
         ResultVal<ArchiveHandle> handle;
@@ -708,6 +1005,8 @@ void FS_USER::OpenArchive(Kernel::HLERequestContext& ctx) {
     async_data->archive_id = archive_id;
     async_data->archive_path = archive_path;
     async_data->program_id = program_id;
+    async_data->caller_pid = caller_pid;
+    async_data->diagnostic_event = diagnostic_event;
 
     ctx.RunOnThreadWorker(
         fs_async_worker,
@@ -717,6 +1016,19 @@ void FS_USER::OpenArchive(Kernel::HLERequestContext& ctx) {
             return 0;
         },
         [async_data](Kernel::HLERequestContext& ctx) {
+            if (async_data->diagnostic_event != 0) {
+                const u32 end_event = Level256RegistrationDiagnostics::NextEventId();
+                if (end_event != 0) {
+                    LOG_INFO(Service_FS,
+                             "[L256-REG] event={} op=fs.open_archive.end pid={} "
+                             "title_id=0x{:016X} archive_id=0x{:08X} handle=0x{:016X} "
+                             "result=0x{:08X}",
+                             end_event, async_data->caller_pid, async_data->program_id,
+                             async_data->archive_id,
+                             async_data->handle.Succeeded() ? *async_data->handle : 0,
+                             async_data->handle.Code().raw);
+                }
+            }
             IPC::RequestBuilder rb(ctx, 3, 0);
             rb.Push(async_data->handle.Code());
             if (async_data->handle.Succeeded()) {
