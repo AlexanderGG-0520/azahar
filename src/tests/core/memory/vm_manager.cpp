@@ -178,6 +178,31 @@ TEST_CASE("Memory Basics", "[kernel][memory]") {
     }
 }
 
+TEST_CASE("Adjacent VMAs merge only when they share one backing allocation",
+          "[kernel][memory][luma3ds][level256]") {
+    constexpr u32 page_size = Memory::CITRA_PAGE_SIZE;
+    auto shared_backing = std::make_shared<BufferMem>(2 * page_size);
+    auto separate_backing = std::make_shared<BufferMem>(page_size);
+
+    Kernel::VirtualMemoryArea first{};
+    first.base = 0x08000000;
+    first.size = page_size;
+    first.type = Kernel::VMAType::BackingMemory;
+    first.permissions = Kernel::VMAPermission::ReadWrite;
+    first.meminfo_state = Kernel::MemoryState::Shared;
+    first.backing_memory = MemoryRef{shared_backing};
+
+    Kernel::VirtualMemoryArea next = first;
+    next.base += page_size;
+    next.backing_memory = MemoryRef{shared_backing, page_size};
+    REQUIRE(first.CanBeMergedWith(next));
+
+    // Independent allocations must not merge, even if their raw host pointers
+    // happen to be adjacent (as observed in the macOS CI failure).
+    next.backing_memory = MemoryRef{separate_backing};
+    REQUIRE_FALSE(first.CanBeMergedWith(next));
+}
+
 TEST_CASE("MapProcessMemoryEx aliases a multi-VMA source range with safe target permissions",
           "[kernel][memory][luma3ds][level256]") {
     constexpr u32 page_size = Memory::CITRA_PAGE_SIZE;
