@@ -22,6 +22,7 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 #include <cstring>
+#include <openssl/rand.h>
 #include <boost/serialization/weak_ptr.hpp>
 #include <fmt/format.h>
 #include "common/archives.h"
@@ -39,6 +40,7 @@
 #include "core/hle/kernel/thread.h"
 #include "core/hle/service/hid/hid.h"
 #include "core/hle/service/plgldr/level256_lfcs.h"
+#include "core/hle/service/plgldr/level256_random.h"
 #include "core/hle/service/plgldr/plgldr.h"
 #include "core/hle/service/plgldr/plugin_path.h"
 #include "core/hw/aes/key.h"
@@ -149,6 +151,7 @@ PLG_LDR::PLG_LDR(Core::System& system_) : ServiceFramework{"plg:ldr", 1}, system
         {0x000C, nullptr, "SetSwapParam"},
         {0x000D, nullptr, "SetLoadExeParam"},
         {0x2560, &PLG_LDR::GetLevel256LFCS, "GetLevel256LFCS"},
+        {0x2561, &PLG_LDR::GetLevel256RandomBytes, "GetLevel256RandomBytes"},
         // clang-format on
     };
     RegisterHandlers(functions);
@@ -1115,6 +1118,11 @@ void ReplyLfcsWithoutBuffer(Kernel::HLERequestContext& ctx, Result result) {
     rb.Push(static_cast<u32>(Level256LFCS::Source::None));
 }
 
+void ReplyRandomWithoutBuffer(Kernel::HLERequestContext& ctx, Result result) {
+    IPC::RequestBuilder rb(ctx, Level256Random::kCommandId, 1, 0);
+    rb.Push(result);
+}
+
 } // namespace
 
 void PLG_LDR::GetLevel256LFCS(Kernel::HLERequestContext& ctx) {
@@ -1183,6 +1191,57 @@ void PLG_LDR::GetLevel256LFCS(Kernel::HLERequestContext& ctx) {
     IPC::RequestBuilder rb(ctx, Level256LFCS::kCommandId, 2, 2);
     rb.Push(result);
     rb.Push(static_cast<u32>(selection.source));
+    rb.PushMappedBuffer(buffer);
+}
+
+void PLG_LDR::GetLevel256RandomBytes(Kernel::HLERequestContext& ctx) {
+    const u32* const command_buffer = ctx.CommandBuffer();
+    const u32 size = command_buffer[1];
+    const u32 buffer_descriptor = command_buffer[2];
+    const IPC::MappedBufferDescInfo buffer_info{buffer_descriptor};
+    if (!Level256Random::IsRequestShapeValid(ctx.CommandHeader().raw, size, buffer_descriptor,
+                                            buffer_info.size)) {
+        ReplyRandomWithoutBuffer(ctx, IPC::ResultInvalidBufferDescriptor);
+        return;
+    }
+
+    // IPC translation replaces the guest pointer with a mapped-buffer index.
+    Kernel::MappedBuffer& buffer = ctx.GetMappedBuffer(command_buffer[3]);
+    if (buffer.GetSize() != size) {
+        ReplyRandomWithoutBuffer(ctx, IPC::ResultInvalidBufferDescriptor);
+        return;
+    }
+
+    std::array<u8, Level256Random::kMaxRandomBytes> random_bytes{};
+    const auto caller_thread = ctx.ClientThread();
+    const auto caller_process = caller_thread ? caller_thread->owner_process.lock() : nullptr;
+    const u32 caller_process_id = caller_process ? caller_process->process_id : 0;
+    const u64 caller_title_id =
+        caller_process && caller_process->codeset ? caller_process->codeset->program_id : 0;
+    const bool authorized = Level256Random::IsAuthorized(
+        Settings::values.level256_compatibility_enabled.GetValue() && plgldr_context.is_enabled,
+        IsLevel256SupportedTitle(caller_title_id), plgldr_context.plugin_loaded,
+        Kernel::Luma3DS::HasCapability(
+            Kernel::Luma3DS::CapabilitiesForLevel256Plugin(
+                plgldr_context.level256_plugin_identity_verified,
+                plgldr_context.level256_official_plugin_hash_matches),
+            Kernel::Luma3DS::Level256Capability::Level256RandomBytes),
+        caller_process_id, plgldr_context.plugin_process_id);
+
+    Result result = ResultSuccess;
+    if (!authorized) {
+        result = Kernel::ResultNotAuthorized;
+    } else if (!Level256Random::FillRandomBytes(
+                   std::span<u8>{random_bytes.data(), size},
+                   [](u8* output, std::size_t output_size) {
+                       return RAND_bytes(output, static_cast<int>(output_size)) == 1;
+                   })) {
+        result = ResultUnknown;
+    }
+    buffer.Write(random_bytes.data(), 0, size);
+
+    IPC::RequestBuilder rb(ctx, Level256Random::kCommandId, 1, 2);
+    rb.Push(result);
     rb.PushMappedBuffer(buffer);
 }
 

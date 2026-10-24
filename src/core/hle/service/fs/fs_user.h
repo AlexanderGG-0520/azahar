@@ -49,6 +49,7 @@ private:
 class FS_USER final : public ServiceFramework<FS_USER, ClientSlot> {
 public:
     explicit FS_USER(Core::System& system);
+    FS_USER(Core::System& system, ArchiveManager& archives);
     ~FS_USER() {
         fs_async_worker.WaitForRequests();
     }
@@ -578,6 +579,17 @@ private:
      *      5 : Unknown
      */
     void GetProgramLaunchInfo(Kernel::HLERequestContext& ctx);
+
+    /**
+     * FS_User::GetMediaType service function.
+     *  Inputs:
+     *      0 : 0x08680000
+     *  Outputs:
+     *      0 : 0x08680080
+     *      1 : Result of function, 0 on success, otherwise error code
+     *      2 : Media type of the calling process
+     */
+    void GetMediaType(Kernel::HLERequestContext& ctx);
 
     /**
      * FS_User::Obsoleted_3_0_CreateExtSaveData service function.

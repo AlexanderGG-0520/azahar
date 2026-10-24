@@ -11,7 +11,9 @@ add_executable(tests
     core/gdbstub/thread_debug_info.cpp
     core/hle/service/sm/process_service_redirect.cpp
     core/hle/service/sm/srv_redirect.cpp
+    core/hle/service/fs/fs_user_media_type.cpp
     core/hle/service/plgldr_level256_lfcs.cpp
+    core/hle/service/plgldr_level256_random.cpp
     core/hle/service/plgldr_level256_restore.cpp
     core/hle/service/plgldr_level256_process_view.cpp
     core/hle/service/soc/soc_u_address.cpp

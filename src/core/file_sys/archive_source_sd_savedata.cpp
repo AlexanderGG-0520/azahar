@@ -55,6 +55,12 @@ ResultVal<std::unique_ptr<ArchiveBackend>> ArchiveSource_SDSaveData::Open(
             // the save file/directory structure expected by the game has not yet been initialized.
             // Returning the NotFormatted error code will signal the game to provision the SaveData
             // archive with the files and folders that it expects.
+            if (archive_id == Service::FS::ArchiveIdCode::OtherSaveDataGeneral) {
+                LOG_ERROR(Service_FS,
+                          "OtherSaveDataGeneral path is not formatted: title_id=0x{:016X} "
+                          "host_path={} result=0x{:08X} (NotFormatted)",
+                          program_id, concrete_mount_point, ResultNotFormatted.raw);
+            }
             return ResultNotFormatted;
         }
 
