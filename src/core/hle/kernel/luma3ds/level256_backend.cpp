@@ -33,7 +33,8 @@ Level256BackdoorResult HandleLevel256CustomBackdoor(
     const u32 in_r2 = request.arguments[2];
     const u32 in_r3 = request.arguments[3];
     const bool level256_plugin_context =
-        process && CanDispatchExtension(luma_context, authorization, process->process_id, in_pc);
+        process && CanDispatchExtension(luma_context, authorization, process->process_id, in_pc,
+                                        Level256Capability::CustomBackdoor);
     bool level256_backdoor_handled = false;
     u32 level256_backdoor_result = 0;
     if (immediate == Kernel::LEVEL256_CUSTOM_BACKDOOR_SVC_ID && level256_plugin_context &&
@@ -41,37 +42,52 @@ Level256BackdoorResult HandleLevel256CustomBackdoor(
         IsValidCustomBackdoorCallback(luma_context, authorization, process->process_id, in_r0)) {
         const bool compatibility_enabled =
             Settings::values.level256_compatibility_enabled.GetValue();
-        const bool trusted_plugin = context.level256_official_plugin_hash_matches;
+        const bool trusted_plugin =
+            HasCapability(CapabilitiesForVerifiedPlugin(context.level256_plugin_identity_verified),
+                          Level256Capability::CustomBackdoor);
         const u32 callback = in_r0;
         const u32 arg0 = in_r1;
         const u32 arg1 = in_r2;
         const u32 arg2 = in_r3;
         const auto& lctx = context;
-        const auto callback_header_matches = [&](u32 target_callback) {
+        std::array<u32, 17> callback_instructions{};
+        std::size_t callback_instruction_count = 0;
+        for (; callback_instruction_count < callback_instructions.size();
+             ++callback_instruction_count) {
+            const u64 instruction_address =
+                static_cast<u64>(callback) + callback_instruction_count * sizeof(u32);
+            if (instruction_address + sizeof(u32) > lctx.plugin_code_end ||
+                !memory.IsValidVirtualAddress(*process, static_cast<VAddr>(instruction_address))) {
+                break;
+            }
+            callback_instructions[callback_instruction_count] =
+                memory.Read32(*process, static_cast<VAddr>(instruction_address));
+        }
+        const auto callback_kind = ResolveLevel256BackdoorCallback(
+            callback,
+            std::span<const u32>{callback_instructions.data(), callback_instruction_count},
+            lctx.plugin_code_begin, lctx.plugin_code_end,
+            context.level256_official_plugin_hash_matches);
+        const auto callback_header_matches = [&]() {
             return compatibility_enabled && trusted_plugin && process->codeset &&
                    Service::PLGLDR::IsLevel256SupportedTitle(process->codeset->program_id) &&
                    process->process_id == lctx.plugin_process_id && lctx.plugin_loaded &&
-                   lctx.plugin_code_begin == LEVEL256_DIAGNOSTIC_CODE_BEGIN &&
-                   lctx.plugin_code_end == LEVEL256_DIAGNOSTIC_CODE_END &&
-                   in_pc == LEVEL256_CUSTOM_BACKDOOR_SVC_PC &&
-                   immediate == LEVEL256_CUSTOM_BACKDOOR_SVC_ID && callback == target_callback;
+                   IsLevel256PluginCodeAddress(lctx.plugin_code_begin, lctx.plugin_code_end,
+                                               in_pc) &&
+                   immediate == LEVEL256_CUSTOM_BACKDOOR_SVC_ID &&
+                   callback_kind != Level256BackdoorCallbackKind::Unknown;
         };
         const auto get_plugin_model = [&]() -> std::optional<bool> {
-            if (!memory.IsValidVirtualAddress(*process, LEVEL256_PROCESS_VIEW_MODEL_FLAG_ADDRESS)) {
-                return std::nullopt;
-            }
-            const u8 model_flag = memory.Read8(*process, LEVEL256_PROCESS_VIEW_MODEL_FLAG_ADDRESS);
-            if (model_flag > 1) {
-                return std::nullopt;
-            }
-            return model_flag != 0;
+            // Use Azahar's emulated hardware model. A plugin-relative absolute address here
+            // becomes stale when Level256 changes its linker layout.
+            return Settings::values.is_new_3ds.GetValue();
         };
         const auto get_owned_view_address = [&]() -> VAddr {
             return process_view_manager.GetAddress(*process);
         };
 
-        if (callback == LEVEL256_BACKDOOR_PRIORITY_LIMIT_CALLBACK &&
-            callback_header_matches(callback) && process->resource_limit) {
+        if (callback_kind == Level256BackdoorCallbackKind::PriorityLimit &&
+            callback_header_matches() && process->resource_limit) {
             // This exact guest routine stores r1 at KResourceLimit::maxPriority (+0x08)
             // and returns the previous value in r0. Keep the guest view and the real
             // ResourceLimit priority cap in sync.
@@ -160,12 +176,15 @@ Level256BackdoorResult HandleLevel256CustomBackdoor(
                             view_memory_valid, old_guest_limit, old_priority_limit, arg1, arg2,
                             resource_limit_offset);
             }
-        } else if (callback == LEVEL256_BACKDOOR_CURRENT_PROCESS_CALLBACK) {
-            const bool callback_matches = ShouldHandleLevel256CurrentProcessCallback(
-                compatibility_enabled, trusted_plugin, process->codeset->program_id,
-                process->process_id, lctx.plugin_process_id, lctx.plugin_loaded,
-                lctx.plugin_code_begin, lctx.plugin_code_end, in_pc, immediate, callback, arg0,
-                arg1, arg2);
+        } else if (callback_kind == Level256BackdoorCallbackKind::CurrentProcess) {
+            const bool callback_matches =
+                process->codeset && callback_header_matches() &&
+                ShouldHandleLevel256CurrentProcessCallback(
+                    compatibility_enabled, trusted_plugin, process->codeset->program_id,
+                    process->process_id, lctx.plugin_process_id, lctx.plugin_loaded,
+                    lctx.plugin_code_begin, lctx.plugin_code_end, in_pc, immediate,
+                    callback_kind == Level256BackdoorCallbackKind::CurrentProcess, arg0, arg1,
+                    arg2);
             if (!callback_matches) {
                 LOG_WARNING(Kernel_SVC,
                             "Level256 CustomBackdoor callback rejected: reason=conditions "
@@ -184,10 +203,8 @@ Level256BackdoorResult HandleLevel256CustomBackdoor(
                 if (!is_n3ds) {
                     LOG_WARNING(Kernel_SVC,
                                 "Level256 CustomBackdoor callback rejected: "
-                                "reason=unknown_kernel_model_flag pid={} thread={} "
-                                "address=0x{:08X}",
-                                process->process_id, thread->GetThreadId(),
-                                LEVEL256_PROCESS_VIEW_MODEL_FLAG_ADDRESS);
+                                "reason=unknown_emulated_hardware_model pid={} thread={}",
+                                process->process_id, thread->GetThreadId());
                 } else if (view_address == 0) {
                     VAddr candidate_address = 0;
                     for (const auto& entry : process->vm_manager.vma_map) {
@@ -260,17 +277,15 @@ Level256BackdoorResult HandleLevel256CustomBackdoor(
                                       : LEVEL256_PROCESS_VIEW_O3DS8X_PROCESS_ID_OFFSET);
                 }
             }
-        } else if ((callback == LEVEL256_BACKDOOR_VIEW_FLAG_CALLBACK ||
-                    callback == LEVEL256_BACKDOOR_VIEW_FIELD_CALLBACK) &&
-                   callback_header_matches(callback) && arg0 == get_owned_view_address() &&
+        } else if ((callback_kind == Level256BackdoorCallbackKind::ViewFlag ||
+                    callback_kind == Level256BackdoorCallbackKind::ViewField) &&
+                   callback_header_matches() && arg0 == get_owned_view_address() &&
                    process->resource_limit) {
             constexpr std::array<u32, 4> flag_callback_code{0xE59030B0, 0xE3833A02, 0xE58030B0,
                                                             0xE12FFF1E};
             constexpr std::array<u32, 6> field_callback_code{0xE790C002, 0xE3CC3C0F, 0xE1833001,
                                                              0xE7803002, 0xE20C0C0F, 0xE12FFF1E};
-            const u32 expected_callback_code = callback == LEVEL256_BACKDOOR_VIEW_FLAG_CALLBACK
-                                                   ? LEVEL256_BACKDOOR_VIEW_FLAG_CALLBACK
-                                                   : LEVEL256_BACKDOOR_VIEW_FIELD_CALLBACK;
+            const u32 expected_callback_code = callback;
             const auto callback_code_matches = [&](const auto& expected_code) {
                 for (std::size_t i = 0; i < expected_code.size(); ++i) {
                     const VAddr instruction_address =
@@ -283,7 +298,7 @@ Level256BackdoorResult HandleLevel256CustomBackdoor(
                 return true;
             };
             const bool callback_instructions_match =
-                callback == LEVEL256_BACKDOOR_VIEW_FLAG_CALLBACK
+                callback_kind == Level256BackdoorCallbackKind::ViewFlag
                     ? callback_code_matches(flag_callback_code)
                     : callback_code_matches(field_callback_code);
             const auto is_n3ds = get_plugin_model();
@@ -322,11 +337,12 @@ Level256BackdoorResult HandleLevel256CustomBackdoor(
             const VAddr field_address = arg0 + LEVEL256_BACKDOOR_VIEW_FLAG_OFFSET;
 
             if (callback_instructions_match && view_memory_valid &&
-                ShouldHandleLevel256ViewFlagCallback(callback, arg1, arg2, old_value)) {
-                const u32 new_value = ApplyLevel256ViewFlagCallback(callback, old_value, arg1);
+                ShouldHandleLevel256ViewFlagCallback(callback_kind, callback, arg1, arg2,
+                                                     old_value)) {
+                const u32 new_value = ApplyLevel256ViewFlagCallback(callback_kind, old_value, arg1);
                 process_view_manager.WriteWord(*process, memory, arg0,
                                                LEVEL256_BACKDOOR_VIEW_FLAG_OFFSET, new_value);
-                level256_backdoor_result = callback == LEVEL256_BACKDOOR_VIEW_FLAG_CALLBACK
+                level256_backdoor_result = callback_kind == Level256BackdoorCallbackKind::ViewFlag
                                                ? arg0
                                                : GetLevel256FieldUpdateResult(old_value);
                 level256_backdoor_handled = true;
@@ -345,8 +361,9 @@ Level256BackdoorResult HandleLevel256CustomBackdoor(
                             process->process_id, thread->GetThreadId(), callback, arg0,
                             callback_instructions_match, view_memory_valid, old_value, arg1, arg2);
             }
-        } else if (callback_header_matches(LEVEL256_BACKDOOR_RESOURCE_LIMIT_CALLBACK) &&
-                   arg0 == get_owned_view_address() && process->resource_limit) {
+        } else if (callback_kind == Level256BackdoorCallbackKind::ResourceLimit &&
+                   callback_header_matches() && arg0 == get_owned_view_address() &&
+                   process->resource_limit) {
             const auto is_n3ds = get_plugin_model();
             const u32 resource_limit_offset =
                 is_n3ds.value_or(true) ? LEVEL256_PROCESS_VIEW_N3DS_RESOURCE_LIMIT_OFFSET
@@ -356,7 +373,7 @@ Level256BackdoorResult HandleLevel256CustomBackdoor(
                 ShouldHandleLevel256ResourceLimitCallback(
                     compatibility_enabled, trusted_plugin, process->codeset->program_id,
                     process->process_id, lctx.plugin_process_id, lctx.plugin_loaded,
-                    lctx.plugin_code_begin, lctx.plugin_code_end, in_pc, immediate, callback,
+                    lctx.plugin_code_begin, lctx.plugin_code_end, in_pc, immediate, true,
                     get_owned_view_address(), arg0, arg1, arg2, resource_limit_offset) &&
                 process_view_manager.IsOwnedMapping(*process, arg0);
             u32 resource_view = 0;
@@ -394,12 +411,17 @@ Level256BackdoorResult HandleLevel256CustomBackdoor(
                             process->process_id, callback, is_n3ds.has_value(),
                             is_n3ds.value_or(false), arg1, resource_limit_offset, arg0);
             }
-        } else if (callback_header_matches(LEVEL256_BACKDOOR_COPY_CALLBACK) &&
+        } else if (callback_kind == Level256BackdoorCallbackKind::ProcessSnapshotCopy &&
+                   callback_header_matches() &&
                    ShouldHandleLevel256ProcessSnapshotCopy(
                        compatibility_enabled, trusted_plugin, process->codeset->program_id,
                        process->process_id, lctx.plugin_process_id, lctx.plugin_loaded,
-                       lctx.plugin_code_begin, lctx.plugin_code_end, in_pc, immediate, callback,
-                       arg0, arg1, get_owned_view_address(), arg2)) {
+                       lctx.plugin_code_begin, lctx.plugin_code_end, in_pc, immediate, true, arg0,
+                       arg1, get_owned_view_address(), arg2,
+                       lctx.plugin_data_begin < lctx.plugin_data_end &&
+                           IsLevel256PluginDataRange(arg0, arg2, lctx.plugin_data_begin,
+                                                     lctx.plugin_data_end -
+                                                         lctx.plugin_data_begin))) {
             if (process_view_manager.CopySnapshot(*process, memory, arg0, arg1, arg2)) {
                 level256_backdoor_result = arg0;
                 level256_backdoor_handled = true;
@@ -429,12 +451,12 @@ Level256BackdoorResult HandleLevel256CustomBackdoor(
             writable_code ? memory.Read32(*process, patch_address) : 0xFFFFFFFF;
         u32 patched_instruction = current_instruction;
         u32 callback_return = 0;
-        if (!level256_backdoor_handled && writable_code && patch_is_inside_verified_plugin_ram &&
-            process->codeset &&
+        if (!level256_backdoor_handled && context.level256_official_plugin_hash_matches &&
+            writable_code && patch_is_inside_verified_plugin_ram && process->codeset &&
             Kernel::ApplyLevel256BackdoorPatch(
                 Kernel::ShouldApplyLevel256BackdoorPatch(
                     Settings::values.level256_compatibility_enabled.GetValue(),
-                    context.level256_official_plugin_hash_matches, process->codeset->program_id,
+                    context.level256_plugin_identity_verified, process->codeset->program_id,
                     process->process_id, context.plugin_process_id, context.plugin_loaded,
                     context.plugin_code_begin, context.plugin_code_end, in_pc, immediate, in_r0,
                     in_r1, in_r2, in_r3, current_instruction),

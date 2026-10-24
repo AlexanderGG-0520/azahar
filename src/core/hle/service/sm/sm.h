@@ -61,6 +61,7 @@ public:
                           const std::string& name);
     Result ConnectToService(std::shared_ptr<Kernel::ClientSession>* out_client_session,
                             const std::string& name);
+    std::shared_ptr<SRV> GetSRV() const;
     // For IPC Recorder
     std::string GetServiceNameByPortId(u32 port) const;
 

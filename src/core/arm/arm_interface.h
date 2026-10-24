@@ -78,7 +78,7 @@ public:
     /// Begin a bounded plugin instruction trace. Backends without instruction stepping may ignore
     /// it.
     virtual void StartPluginInstructionTrace(u32, u32, u32, u32, u32, u32, u32, bool = false,
-                                             bool = false) {}
+                                             bool = false, bool = false) {}
 
     /// Clear all instruction cache
     virtual void ClearInstructionCache() = 0;

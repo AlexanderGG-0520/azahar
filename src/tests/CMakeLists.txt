@@ -6,11 +6,13 @@ add_executable(tests
     core/file_sys/path_parser.cpp
     core/file_sys/ywb_save_date.cpp
     core/file_sys/plugin_3gx.cpp
+    core/file_sys/level256_signature.cpp
     core/file_sys/yw2_save_date.cpp
     core/gdbstub/thread_debug_info.cpp
     core/hle/service/sm/process_service_redirect.cpp
     core/hle/service/sm/srv_redirect.cpp
     core/hle/service/plgldr_level256_lfcs.cpp
+    core/hle/service/plgldr_level256_restore.cpp
     core/hle/service/plgldr_level256_process_view.cpp
     core/hle/service/soc/soc_u_address.cpp
     core/hle/service/plgldr_path.cpp
@@ -19,6 +21,7 @@ add_executable(tests
     core/hle/kernel/level256_diagnostic.cpp
     core/hle/kernel/luma3ds/compatibility.cpp
     core/hle/kernel/luma3ds/compatibility_dispatch.cpp
+    core/hle/kernel/luma3ds/level256_capabilities.cpp
     core/hle/kernel/luma3ds/custom_backdoor.cpp
     core/hle/kernel/luma3ds/level256_process_view.cpp
     core/hle/kernel/luma3ds/level256_memory_operations.cpp

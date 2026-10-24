@@ -202,6 +202,22 @@ public:
                     pc >= context.plugin_code_begin && pc < context.plugin_code_end;
                 const bool in_bootloader =
                     pc >= context.plugin_bootloader_begin && pc < context.plugin_bootloader_end;
+                if (context.level256_bootloader_return_trace_started && process->codeset &&
+                    Kernel::ShouldCaptureLevel256BootloaderExceptionDiagnostic(
+                        Settings::values.level256_compatibility_enabled.GetValue(),
+                        Settings::values.level256_bootloader_diagnostics_enabled.GetValue(),
+                        context.level256_plugin_identity_verified, process->codeset->program_id,
+                        process->process_id, context.plugin_process_id, context.plugin_loaded,
+                        thread->GetThreadId(), context.plugin_trace_thread_id)) {
+                    const u32 cpsr = parent.GetCPSR();
+                    LOG_ERROR(Service_PLGLDR,
+                              "Level256 bootloader exception pid={} title_id={:016X} "
+                              "thread={} exception={} pc=0x{:08X} cpsr=0x{:08X} thumb={} "
+                              "sp=0x{:08X} lr=0x{:08X}",
+                              process->process_id, process->codeset->program_id,
+                              thread->GetThreadId(), ExceptionToString(exception), pc, cpsr,
+                              (cpsr & (1U << 5)) != 0, parent.GetReg(13), parent.GetReg(14));
+                }
                 if (context.plugin_loaded && context.plugin_process_id == process->process_id &&
                     (in_plugin || in_bootloader)) {
                     LOG_ERROR(Service_PLGLDR,
@@ -259,9 +275,8 @@ private:
         if (!plugin_loader) {
             return;
         }
-        plugin_loader->TraceCtrpfStartupMemoryAccess(
-            *process, *thread, address, size, is_write, value, parent.GetReg(15),
-            parent.GetReg(14));
+        plugin_loader->TraceCtrpfStartupMemoryAccess(*process, *thread, address, size, is_write,
+                                                     value, parent.GetReg(15), parent.GetReg(14));
     }
 
     ARM_Dynarmic& parent;
@@ -332,13 +347,13 @@ void ARM_Dynarmic::Run() {
                 auto& context = plugin_loader->GetPluginLoaderContext();
                 if (context.ctrpf_hook_execution_trace_armed &&
                     context.ctrpf_hook_trace_process_id == process->process_id &&
-                    context.plugin_loaded && context.level256_official_plugin_hash_matches &&
+                    context.plugin_loaded && context.level256_plugin_identity_verified &&
                     context.plugin_process_id == process->process_id &&
                     memory.IsValidVirtualAddress(*process, osd_candidate_pc)) {
                     const u32 instruction = memory.Read32(*process, osd_candidate_pc);
                     const u32 cpsr_before = GetCPSR();
-                    const std::array<u32, 6> regs_before = {GetReg(0), GetReg(1), GetReg(2),
-                                                           GetReg(3), GetReg(13), GetReg(14)};
+                    const std::array<u32, 6> regs_before = {GetReg(0), GetReg(1),  GetReg(2),
+                                                            GetReg(3), GetReg(13), GetReg(14)};
                     context.ctrpf_hook_execution_trace_armed = false;
                     jit->Step();
                     const u32 pc_after = thread->status == Kernel::ThreadStatus::Running
@@ -372,7 +387,7 @@ void ARM_Dynarmic::Run() {
                     }
                     return;
                 }
-                if (context.plugin_loaded && context.level256_official_plugin_hash_matches &&
+                if (context.plugin_loaded && context.level256_plugin_identity_verified &&
                     context.plugin_process_id == process->process_id &&
                     context.ctrpf_osd_candidate_execution_seen &&
                     context.ctrpf_hook_callback_target ==
@@ -403,7 +418,7 @@ void ARM_Dynarmic::Run() {
                 auto& context = plugin_loader->GetPluginLoaderContext();
                 const u32 candidate = context.ctrpf_osd_scan.selected_candidate;
                 const u32 pc_before = osd_candidate_pc;
-                if (context.plugin_loaded && context.level256_official_plugin_hash_matches &&
+                if (context.plugin_loaded && context.level256_plugin_identity_verified &&
                     context.plugin_process_id == process->process_id &&
                     candidate == Kernel::LEVEL256_CTRPF_OSD_CANDIDATE_ADDRESS &&
                     context.ctrpf_osd_candidate_initial_words[0] == 0xE92D5FF0 &&
@@ -533,7 +548,7 @@ void ARM_Dynarmic::Run() {
             if (const auto plugin_loader = Service::PLGLDR::GetService(system)) {
                 auto& context = plugin_loader->GetPluginLoaderContext();
                 if (context.ctrpf_hook_trace_started && context.plugin_loaded &&
-                    context.level256_official_plugin_hash_matches &&
+                    context.level256_plugin_identity_verified &&
                     context.plugin_process_id == process->process_id &&
                     context.ctrpf_hook_trace_thread_id == thread->GetThreadId() &&
                     context.ctrpf_hook_trace_runs < Kernel::LEVEL256_CTRPF_HOOK_TRACE_RUN_LIMIT) {
@@ -568,8 +583,8 @@ void ARM_Dynarmic::Run() {
                                  "Level256 CTRPF generated callback target entered pid={} "
                                  "thread={} target_pc=0x{:08X} instruction=0x{:08X} "
                                  "r0=0x{:08X} is_bottom={}",
-                                 process->process_id, thread->GetThreadId(), pc_before,
-                                 instruction, regs_before[0], regs_before[0] != 0);
+                                 process->process_id, thread->GetThreadId(), pc_before, instruction,
+                                 regs_before[0], regs_before[0] != 0);
                     }
                     if (context.ctrpf_hook_callback_target ==
                             Kernel::LEVEL256_CTRPF_MAIN_CALLBACK_ADDRESS &&
@@ -629,10 +644,10 @@ void ARM_Dynarmic::Run() {
                                  "r0_after=0x{:08X} r1_after=0x{:08X} lr_after=0x{:08X} "
                                  "thread_status_after={}",
                                  process->process_id, thread->GetThreadId(),
-                                 context.ctrpf_hook_trace_runs, pc_before, instruction,
-                                 cpsr_before, regs_before[0], regs_before[1], regs_before[2],
-                                 regs_before[3], regs_before[4], regs_before[5], regs_before[6],
-                                 pc_after, reg_after(0), reg_after(1), reg_after(14),
+                                 context.ctrpf_hook_trace_runs, pc_before, instruction, cpsr_before,
+                                 regs_before[0], regs_before[1], regs_before[2], regs_before[3],
+                                 regs_before[4], regs_before[5], regs_before[6], pc_after,
+                                 reg_after(0), reg_after(1), reg_after(14),
                                  PluginTraceThreadStatusName(status_after));
                     }
                     // The official MITM hook dispatches through `LDR pc, [pc, #-4]`
@@ -647,8 +662,7 @@ void ARM_Dynarmic::Run() {
                                  "asm_pc=0x{:08X} instruction=0x{:08X} dispatch={} "
                                  "target_pc=0x{:08X} target_in_plugin_code={}",
                                  process->process_id, thread->GetThreadId(), pc_before, instruction,
-                                 is_blx_lr ? "BLX_LR" : "LDR_PC_LITERAL",
-                                 pc_after,
+                                 is_blx_lr ? "BLX_LR" : "LDR_PC_LITERAL", pc_after,
                                  pc_after >= context.plugin_code_begin &&
                                      pc_after < context.plugin_code_end);
                     }
@@ -695,14 +709,40 @@ void ARM_Dynarmic::Run() {
                                         process->process_id, plugin_trace_process_id,
                                         thread->GetThreadId(), plugin_trace_thread_id);
         const auto stop_trace = [&](const char* reason, u32 pc) {
-            LOG_INFO(Service_PLGLDR,
-                     "Level256 OpenProcess trace stopped reason={} pid={} thread={} "
-                     "instructions={} records={} critical_records={} context_records={} "
-                     "pc=0x{:08X} r6=0x{:08X} wait_runs={}",
-                     reason, plugin_trace_process_id, plugin_trace_thread_id,
-                     plugin_trace_instruction_index, plugin_trace_log_count,
-                     plugin_trace_critical_log_count, plugin_trace_context_log_count, pc,
-                     GetReg(6), plugin_trace_wait_count);
+            if (plugin_trace_bootloader_return) {
+                LOG_INFO(Service_PLGLDR,
+                         "Level256 bootloader trace stopped reason={} pid={} thread={} "
+                         "instructions={} pc=0x{:08X} cpsr=0x{:08X} thumb={} "
+                         "sp=0x{:08X} lr=0x{:08X} ring_count={}",
+                         reason, plugin_trace_process_id, plugin_trace_thread_id,
+                         plugin_trace_instruction_index, pc, GetCPSR(),
+                         (GetCPSR() & (1U << 5)) != 0, GetReg(13), GetReg(14),
+                         plugin_trace_instruction_ring_count);
+                for (std::size_t i = 0; i < plugin_trace_instruction_ring_count; ++i) {
+                    const std::size_t index =
+                        (plugin_trace_instruction_ring_next + plugin_trace_instruction_ring.size() -
+                         plugin_trace_instruction_ring_count + i) %
+                        plugin_trace_instruction_ring.size();
+                    const auto& entry = plugin_trace_instruction_ring[index];
+                    LOG_INFO(Service_PLGLDR,
+                             "Level256 bootloader trace recent pid={} thread={} "
+                             "pc=0x{:08X} instruction=0x{:08X} cpsr=0x{:08X} "
+                             "thumb={} sp=0x{:08X} lr=0x{:08X}",
+                             plugin_trace_process_id, plugin_trace_thread_id, entry.pc,
+                             entry.instruction, entry.cpsr, (entry.cpsr & (1U << 5)) != 0, entry.sp,
+                             entry.lr);
+                }
+                plugin_trace_bootloader_return = false;
+            } else {
+                LOG_INFO(Service_PLGLDR,
+                         "Level256 OpenProcess trace stopped reason={} pid={} thread={} "
+                         "instructions={} records={} critical_records={} context_records={} "
+                         "pc=0x{:08X} r6=0x{:08X} wait_runs={}",
+                         reason, plugin_trace_process_id, plugin_trace_thread_id,
+                         plugin_trace_instruction_index, plugin_trace_log_count,
+                         plugin_trace_critical_log_count, plugin_trace_context_log_count, pc,
+                         GetReg(6), plugin_trace_wait_count);
+            }
             plugin_trace_instruction_limit = 0;
             plugin_trace_wait_for_target = false;
         };
@@ -758,13 +798,30 @@ void ARM_Dynarmic::Run() {
             plugin_trace_wait_count = 0;
             plugin_trace_waiting_reported = false;
             const u32 pc = GetReg(15);
-            if (pc == 0x07023EE8 || pc == 0x07023DA0 || pc == 0x07023DA8 ||
-                pc == 0x07023DB8 || pc == 0x07023E10 || pc == 0x07023E2C ||
-                pc == 0x07023E78 || pc == 0x07023DE8 || pc == 0x07023DF4 ||
-                pc == 0x07023EB0 || pc == 0x0701C4A8 || pc == 0x0701C508 ||
-                pc == 0x0701C568 || pc == 0x0701C574 || pc == 0x0701C5D8 ||
-                pc == 0x0701C5F4 || pc == 0x0701C88C || pc == 0x07046774 ||
-                pc == 0x070467D0) {
+            if (plugin_trace_bootloader_return) {
+                const auto plugin_loader = Service::PLGLDR::GetService(system);
+                if (!plugin_loader || !process->codeset) {
+                    stop_trace("diagnostic_scope_lost", pc);
+                    return;
+                }
+                const auto& context = plugin_loader->GetPluginLoaderContext();
+                if (!Kernel::ShouldCaptureLevel256BootloaderDiagnostic(
+                        Settings::values.level256_compatibility_enabled.GetValue(),
+                        Settings::values.level256_bootloader_diagnostics_enabled.GetValue(),
+                        context.level256_plugin_identity_verified, process->codeset->program_id,
+                        process->process_id, context.plugin_process_id, context.plugin_loaded,
+                        thread->GetThreadId(), plugin_trace_thread_id, pc,
+                        context.plugin_code_begin, context.plugin_code_end,
+                        context.plugin_bootloader_begin, context.plugin_bootloader_end)) {
+                    stop_trace("diagnostic_scope_lost", pc);
+                    return;
+                }
+            }
+            if (pc == 0x07023EE8 || pc == 0x07023DA0 || pc == 0x07023DA8 || pc == 0x07023DB8 ||
+                pc == 0x07023E10 || pc == 0x07023E2C || pc == 0x07023E78 || pc == 0x07023DE8 ||
+                pc == 0x07023DF4 || pc == 0x07023EB0 || pc == 0x0701C4A8 || pc == 0x0701C508 ||
+                pc == 0x0701C568 || pc == 0x0701C574 || pc == 0x0701C5D8 || pc == 0x0701C5F4 ||
+                pc == 0x0701C88C || pc == 0x07046774 || pc == 0x070467D0) {
                 const u32 hook_object = memory.Read32(*process, 0x070F41E4);
                 const bool has_shinuchi_osd_candidate =
                     process->codeset->program_id == Kernel::LEVEL256_DIAGNOSTIC_TITLE_ID;
@@ -778,8 +835,7 @@ void ARM_Dynarmic::Run() {
                          "text_pages={} hook_object=0x{:08X} hook_state=0x{:08X} "
                          "candidate_word=0x{:08X} trace_index={}",
                          process->process_id, thread->GetThreadId(), pc, GetReg(0), GetReg(1),
-                         GetReg(2), GetReg(14), memory.Read32(*process, 0x070F56A8),
-                         hook_object,
+                         GetReg(2), GetReg(14), memory.Read32(*process, 0x070F56A8), hook_object,
                          memory.IsValidVirtualAddress(*process, hook_object)
                              ? memory.Read32(*process, hook_object + 4)
                              : 0xFFFFFFFF,
@@ -843,12 +899,11 @@ void ARM_Dynarmic::Run() {
                                   decoded.rn, decoded.rd);
                     } else {
                         const s64 effective = decoded.effective_address;
-                        const bool address_valid = memory.IsValidVirtualAddress(
-                            *process, static_cast<VAddr>(effective));
-                        const u32 value = address_valid
-                                              ? memory.Read32(*process,
-                                                              static_cast<VAddr>(effective))
-                                              : 0;
+                        const bool address_valid =
+                            memory.IsValidVirtualAddress(*process, static_cast<VAddr>(effective));
+                        const u32 value =
+                            address_valid ? memory.Read32(*process, static_cast<VAddr>(effective))
+                                          : 0;
                         const u64 snapshot_base = static_cast<u64>(before[13]) + 0x10;
                         ++plugin_trace_log_count;
                         ++plugin_trace_critical_log_count;
@@ -867,8 +922,7 @@ void ARM_Dynarmic::Run() {
                                 ? fmt::format("0x{:08X}", static_cast<u32>(snapshot_base))
                                 : "overflow",
                             effective >= static_cast<s64>(snapshot_base)
-                                ? fmt::format("0x{:X}",
-                                              effective - static_cast<s64>(snapshot_base))
+                                ? fmt::format("0x{:X}", effective - static_cast<s64>(snapshot_base))
                                 : "before_snapshot");
                     }
                 }
@@ -901,6 +955,73 @@ void ARM_Dynarmic::Run() {
                              cpsr_before);
                 }
 
+                bool bootloader_entry_valid = false;
+                u32 bootloader_entry_before = 0;
+                if (plugin_trace_bootloader_return) {
+                    plugin_trace_instruction_ring[plugin_trace_instruction_ring_next] = {
+                        .pc = pc,
+                        .instruction = instruction,
+                        .cpsr = cpsr_before,
+                        .sp = before[13],
+                        .lr = before[14],
+                    };
+                    plugin_trace_instruction_ring_next = (plugin_trace_instruction_ring_next + 1) %
+                                                         plugin_trace_instruction_ring.size();
+                    plugin_trace_instruction_ring_count =
+                        std::min(plugin_trace_instruction_ring_count + 1,
+                                 plugin_trace_instruction_ring.size());
+                    const VAddr entry_pointer = Kernel::LEVEL256_BOOTLOADER_SNAPSHOT_ADDRESSES[2];
+                    bootloader_entry_valid = memory.IsValidVirtualAddress(*process, entry_pointer);
+                    if (bootloader_entry_valid) {
+                        bootloader_entry_before = memory.Read32(*process, entry_pointer);
+                    }
+                }
+
+                const bool at_bootloader_load_pc = plugin_trace_bootloader_return &&
+                                                   pc == Kernel::LEVEL256_BOOTLOADER_TRACE_LOAD_PC;
+                const bool load_game_entry_pointer = at_bootloader_load_pc && !thumb;
+                const auto bootloader_load =
+                    load_game_entry_pointer
+                        ? Kernel::DecodeLevel256ArmLdrAddress(instruction, pc, before)
+                        : Kernel::Level256ArmLoadAddress{};
+                const bool bootloader_load_source_valid =
+                    bootloader_load.valid && bootloader_load.effective_address >= 0 &&
+                    memory.IsValidVirtualAddress(
+                        *process, static_cast<VAddr>(bootloader_load.effective_address));
+                const u32 bootloader_load_value =
+                    bootloader_load_source_valid
+                        ? memory.Read32(*process,
+                                        static_cast<VAddr>(bootloader_load.effective_address))
+                        : 0;
+                std::array<u32, Kernel::LEVEL256_BOOTLOADER_SNAPSHOT_ADDRESSES.size()>
+                    bootloader_snapshot{};
+                std::array<bool, Kernel::LEVEL256_BOOTLOADER_SNAPSHOT_ADDRESSES.size()>
+                    bootloader_snapshot_valid{};
+                std::array<u32, Kernel::LEVEL256_GAME_ENTRY_SNAPSHOT_ADDRESSES.size()>
+                    game_entry_snapshot{};
+                std::array<bool, Kernel::LEVEL256_GAME_ENTRY_SNAPSHOT_ADDRESSES.size()>
+                    game_entry_snapshot_valid{};
+                if (plugin_trace_bootloader_return &&
+                    (pc == Kernel::LEVEL256_BOOTLOADER_TRACE_ADD_LR_PC ||
+                     pc == Kernel::LEVEL256_BOOTLOADER_TRACE_LOAD_PC)) {
+                    for (std::size_t i = 0; i < bootloader_snapshot.size(); ++i) {
+                        const VAddr address = Kernel::LEVEL256_BOOTLOADER_SNAPSHOT_ADDRESSES[i];
+                        bootloader_snapshot_valid[i] =
+                            memory.IsValidVirtualAddress(*process, address);
+                        if (bootloader_snapshot_valid[i]) {
+                            bootloader_snapshot[i] = memory.Read32(*process, address);
+                        }
+                    }
+                    for (std::size_t i = 0; i < game_entry_snapshot.size(); ++i) {
+                        const VAddr address = Kernel::LEVEL256_GAME_ENTRY_SNAPSHOT_ADDRESSES[i];
+                        game_entry_snapshot_valid[i] =
+                            memory.IsValidVirtualAddress(*process, address);
+                        if (game_entry_snapshot_valid[i]) {
+                            game_entry_snapshot[i] = memory.Read32(*process, address);
+                        }
+                    }
+                }
+
                 jit->Step();
                 const auto reg_after = [&](int index) {
                     return thread->status == Kernel::ThreadStatus::Running
@@ -908,6 +1029,107 @@ void ARM_Dynarmic::Run() {
                                : thread->context.cpu_registers[index];
                 };
                 const u32 post_pc = reg_after(15);
+                if (plugin_trace_bootloader_return) {
+                    const u32 post_cpsr = GetCPSR();
+                    const VAddr entry_pointer = Kernel::LEVEL256_BOOTLOADER_SNAPSHOT_ADDRESSES[2];
+                    if (bootloader_entry_valid &&
+                        memory.IsValidVirtualAddress(*process, entry_pointer)) {
+                        const u32 entry_after = memory.Read32(*process, entry_pointer);
+                        if (entry_after != bootloader_entry_before &&
+                            plugin_trace_entry_pointer_change_log_count <
+                                Kernel::LEVEL256_BOOTLOADER_POINTER_CHANGE_LOG_LIMIT) {
+                            ++plugin_trace_entry_pointer_change_log_count;
+                            LOG_WARNING(Service_PLGLDR,
+                                        "Level256 bootloader return pointer changed pid={} "
+                                        "thread={} store_pc=0x{:08X} instruction=0x{:08X} "
+                                        "old=0x{:08X} new=0x{:08X} cpsr=0x{:08X} "
+                                        "thumb={} sp=0x{:08X} lr=0x{:08X}",
+                                        process->process_id, thread->GetThreadId(), pc, instruction,
+                                        bootloader_entry_before, entry_after, cpsr_before, thumb,
+                                        before[13], before[14]);
+                        }
+                    }
+                    const bool is_add_lr = pc == Kernel::LEVEL256_BOOTLOADER_TRACE_ADD_LR_PC;
+                    if ((is_add_lr && !plugin_trace_bootloader_d0_logged) ||
+                        (at_bootloader_load_pc && !plugin_trace_bootloader_d4_logged)) {
+                        plugin_trace_bootloader_d0_logged |= is_add_lr;
+                        plugin_trace_bootloader_d4_logged |= at_bootloader_load_pc;
+                        LOG_INFO(
+                            Service_PLGLDR,
+                            "Level256 bootloader instruction pid={} thread={} "
+                            "pc_before=0x{:08X} instruction=0x{:08X} cpsr_before=0x{:08X} "
+                            "thumb_before={} lr_before=0x{:08X} lr_after=0x{:08X} "
+                            "sp_before=0x{:08X} sp_after=0x{:08X} "
+                            "cpsr_after=0x{:08X} thumb_after={} pc_after=0x{:08X} "
+                            "effective_address={} source_valid={} loaded_value={} "
+                            "loaded_equals_saved_game_instruction={} "
+                            "entry_pointer_before={} entry_pointer_after={} "
+                            "0x00100000={} 0x00100004={} "
+                            "0x06FFF0E8={} 0x06FFF0EC={} 0x06FFF0F0={}",
+                            process->process_id, thread->GetThreadId(), pc, instruction,
+                            cpsr_before, thumb, before[14], reg_after(14), before[13],
+                            reg_after(13), post_cpsr, (post_cpsr & (1U << 5)) != 0, post_pc,
+                            bootloader_load.valid
+                                ? fmt::format("0x{:08X}",
+                                              static_cast<u32>(bootloader_load.effective_address))
+                                : "decode_invalid",
+                            bootloader_load_source_valid,
+                            bootloader_load_source_valid
+                                ? fmt::format("0x{:08X}", bootloader_load_value)
+                                : "invalid",
+                            bootloader_load_source_valid && bootloader_snapshot_valid[0] &&
+                                bootloader_load_value == bootloader_snapshot[0],
+                            bootloader_entry_valid
+                                ? fmt::format("0x{:08X}", bootloader_entry_before)
+                                : "invalid",
+                            bootloader_entry_valid &&
+                                    memory.IsValidVirtualAddress(
+                                        *process, Kernel::LEVEL256_BOOTLOADER_SNAPSHOT_ADDRESSES[2])
+                                ? fmt::format(
+                                      "0x{:08X}",
+                                      memory.Read32(
+                                          *process,
+                                          Kernel::LEVEL256_BOOTLOADER_SNAPSHOT_ADDRESSES[2]))
+                                : "invalid",
+                            game_entry_snapshot_valid[0]
+                                ? fmt::format("0x{:08X}", game_entry_snapshot[0])
+                                : "invalid",
+                            game_entry_snapshot_valid[1]
+                                ? fmt::format("0x{:08X}", game_entry_snapshot[1])
+                                : "invalid",
+                            bootloader_snapshot_valid[0]
+                                ? fmt::format("0x{:08X}", bootloader_snapshot[0])
+                                : "invalid",
+                            bootloader_snapshot_valid[1]
+                                ? fmt::format("0x{:08X}", bootloader_snapshot[1])
+                                : "invalid",
+                            bootloader_snapshot_valid[2]
+                                ? fmt::format("0x{:08X}", bootloader_snapshot[2])
+                                : "invalid");
+                    }
+                    if (at_bootloader_load_pc) {
+                        LOG_INFO(Service_PLGLDR,
+                                 "Level256 bootloader return observed pid={} thread={} "
+                                 "expected_target=0x{:08X} actual_pc=0x{:08X} "
+                                 "loaded_is_pc={} loaded_is_0xEB000FB0={} "
+                                 "loaded_equals_saved_game_instruction={} "
+                                 "loaded_equals_original_game_instruction={} ring_count={}",
+                                 process->process_id, thread->GetThreadId(),
+                                 Kernel::LEVEL256_BOOTLOADER_EXPECTED_RETURN_TARGET, post_pc,
+                                 bootloader_load_source_valid && bootloader_load_value == post_pc,
+                                 bootloader_load_source_valid &&
+                                     bootloader_load_value == 0xEB000FB0,
+                                 bootloader_load_source_valid && bootloader_snapshot_valid[0] &&
+                                     bootloader_load_value == bootloader_snapshot[0],
+                                 bootloader_load_source_valid && game_entry_snapshot_valid[0] &&
+                                     bootloader_load_value == game_entry_snapshot[0],
+                                 plugin_trace_instruction_ring_count);
+                        ++plugin_trace_instruction_index;
+                        --plugin_trace_instruction_limit;
+                        stop_trace("bootloader_return_observed", post_pc);
+                        return;
+                    }
+                }
                 if (focused_trace && open_process_svc) {
                     ++plugin_trace_instruction_index;
                     --plugin_trace_instruction_limit;
@@ -1075,7 +1297,8 @@ void ARM_Dynarmic::Run() {
 void ARM_Dynarmic::StartPluginInstructionTrace(u32 process_id, u32 thread_id, u32 code_begin,
                                                u32 code_end, u32 bootloader_begin,
                                                u32 bootloader_end, u32 instruction_limit,
-                                               bool focus_open_process, bool wait_for_target) {
+                                               bool focus_open_process, bool wait_for_target,
+                                               bool trace_bootloader_return) {
     if (instruction_limit == 0 || code_begin >= code_end || bootloader_begin >= bootloader_end) {
         return;
     }
@@ -1094,15 +1317,22 @@ void ARM_Dynarmic::StartPluginInstructionTrace(u32 process_id, u32 thread_id, u3
     plugin_trace_focus_open_process = focus_open_process;
     plugin_trace_wait_for_target = wait_for_target;
     plugin_trace_waiting_reported = false;
-    LOG_INFO(
-        Service_PLGLDR,
-        "3GX ARM trace armed pid={} thread={} start_pc=0x{:08X} "
-        "code=0x{:08X}-0x{:08X} bootloader=0x{:08X}-0x{:08X} "
-        "guest_instruction_limit={} focused_critical_limit={} focused_context_limit={} "
-        "focus_open_process={} wait_for_target={}",
-        process_id, thread_id, GetReg(15), code_begin, code_end, bootloader_begin, bootloader_end,
-        instruction_limit, Kernel::LEVEL256_OPEN_PROCESS_TRACE_CRITICAL_LOG_LIMIT,
-        Kernel::LEVEL256_OPEN_PROCESS_TRACE_CONTEXT_LOG_LIMIT, focus_open_process, wait_for_target);
+    plugin_trace_bootloader_return = trace_bootloader_return;
+    plugin_trace_instruction_ring_next = 0;
+    plugin_trace_instruction_ring_count = 0;
+    plugin_trace_bootloader_d0_logged = false;
+    plugin_trace_bootloader_d4_logged = false;
+    plugin_trace_entry_pointer_change_log_count = 0;
+    LOG_INFO(Service_PLGLDR,
+             "3GX ARM trace armed pid={} thread={} start_pc=0x{:08X} "
+             "code=0x{:08X}-0x{:08X} bootloader=0x{:08X}-0x{:08X} "
+             "guest_instruction_limit={} focused_critical_limit={} focused_context_limit={} "
+             "focus_open_process={} wait_for_target={} bootloader_return={}",
+             process_id, thread_id, GetReg(15), code_begin, code_end, bootloader_begin,
+             bootloader_end, instruction_limit,
+             Kernel::LEVEL256_OPEN_PROCESS_TRACE_CRITICAL_LOG_LIMIT,
+             Kernel::LEVEL256_OPEN_PROCESS_TRACE_CONTEXT_LOG_LIMIT, focus_open_process,
+             wait_for_target, trace_bootloader_return);
     if (jit && jit->IsExecuting()) {
         jit->HaltExecution();
     }

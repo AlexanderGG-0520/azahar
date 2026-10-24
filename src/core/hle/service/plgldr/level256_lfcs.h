@@ -37,21 +37,21 @@ constexpr u32 ResponseHeader() {
 }
 
 constexpr bool IsRequestShapeValid(u32 raw_header, u32 pid_descriptor, u32 buffer_descriptor,
-                                  std::size_t buffer_size) {
+                                   std::size_t buffer_size) {
     if (raw_header != RequestHeader() || pid_descriptor != IPC::CallingPidDesc() ||
         IPC::GetDescriptorType(buffer_descriptor) != IPC::MappedBuffer) {
         return false;
     }
 
     const IPC::MappedBufferDescInfo buffer_info{buffer_descriptor};
-    return (static_cast<u32>(buffer_info.perms) & IPC::W) != 0 &&
-           buffer_info.size == kLfcsSize && buffer_size == kLfcsSize;
+    return (static_cast<u32>(buffer_info.perms) & IPC::W) != 0 && buffer_info.size == kLfcsSize &&
+           buffer_size == kLfcsSize;
 }
 
 constexpr bool IsAuthorized(bool compatibility_mode, bool supported_title, bool plugin_loaded,
-                            bool official_hash_matches, u32 calling_process_id,
+                            bool capability_authorized, u32 calling_process_id,
                             u32 plugin_process_id, u32 descriptor_process_id) {
-    return compatibility_mode && supported_title && plugin_loaded && official_hash_matches &&
+    return compatibility_mode && supported_title && plugin_loaded && capability_authorized &&
            calling_process_id != 0 && calling_process_id == plugin_process_id &&
            descriptor_process_id == calling_process_id;
 }
@@ -64,8 +64,7 @@ constexpr bool ConsumeRequestSlot(u32& request_count) {
     return true;
 }
 
-inline Selection SelectLfcs(std::optional<LfcsPayload> lfcs_b,
-                            std::optional<LfcsPayload> lfcs_a) {
+inline Selection SelectLfcs(std::optional<LfcsPayload> lfcs_b, std::optional<LfcsPayload> lfcs_a) {
     if (lfcs_b) {
         return {Source::LFCS_B, *lfcs_b};
     }

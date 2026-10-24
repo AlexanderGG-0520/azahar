@@ -120,6 +120,13 @@ public:
         return csize;
     }
 
+    // Adjacent host addresses do not imply the same backing allocation.
+    // VMAs may only coalesce when both references retain the same owner and span.
+    bool IsContiguousWith(const MemoryRef& next, std::size_t size) const {
+        return backing_mem && backing_mem == next.backing_mem && size <= csize &&
+               offset + size == next.offset;
+    }
+
     MemoryRef& operator+=(u32 offset_by) {
         ASSERT(offset_by < csize);
         offset += offset_by;

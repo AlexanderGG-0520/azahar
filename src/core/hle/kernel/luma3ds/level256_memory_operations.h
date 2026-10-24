@@ -27,21 +27,63 @@ struct Level256MemoryOperationResult {
     Result result{ResultNotImplemented};
 };
 
-/// Matches the one observed Level256 ControlMemoryUnsafe request. This is backend policy, not a
-/// general Luma SVC rule.
-constexpr bool ShouldHandleLevel256ControlMemoryUnsafe(
-    bool enabled, bool official_plugin_hash_matches, u64 title_id, u32 pid, u32 plugin_pid,
-    bool plugin_loaded, u32 code_begin, u32 code_end, u32 pc, u32 svc_id, u32 out_address,
-    u32 address, u32 size, u32 operation, u32 permissions) {
-    return enabled && official_plugin_hash_matches && IsLevel256SupportedTitleId(title_id) &&
-           pid == plugin_pid && plugin_loaded && code_begin == LEVEL256_DIAGNOSTIC_CODE_BEGIN &&
-           code_end == LEVEL256_DIAGNOSTIC_CODE_END &&
-           pc == LEVEL256_CONTROL_MEMORY_UNSAFE_SVC_PC &&
-           svc_id == LEVEL256_CONTROL_MEMORY_UNSAFE_SVC_ID &&
-           address == LEVEL256_CONTROL_MEMORY_UNSAFE_TARGET &&
-           size == LEVEL256_CONTROL_MEMORY_UNSAFE_SIZE &&
-           operation == LEVEL256_CONTROL_MEMORY_UNSAFE_OPERATION &&
-           permissions == LEVEL256_CONTROL_MEMORY_UNSAFE_PERMISSIONS && out_address != 0;
+enum class Level256UnsafeCommitRequestStatus {
+    Valid,
+    UnsupportedOperation,
+    InvalidAddress,
+    InvalidSize,
+    InvalidPermissions,
+};
+
+constexpr Level256UnsafeCommitRequestStatus ValidateLevel256UnsafeCommitRequest(u32 address,
+                                                                                u32 size,
+                                                                                u32 operation,
+                                                                                u32 permissions) {
+    if (operation != LEVEL256_CONTROL_MEMORY_UNSAFE_OPERATION) {
+        return Level256UnsafeCommitRequestStatus::UnsupportedOperation;
+    }
+    if ((address & 0xFFF) != 0 ||
+        static_cast<u64>(address) + size > static_cast<u64>(UINT32_MAX) + 1 ||
+        address != LEVEL256_CONTROL_MEMORY_UNSAFE_TARGET) {
+        return Level256UnsafeCommitRequestStatus::InvalidAddress;
+    }
+    if (size != LEVEL256_CONTROL_MEMORY_UNSAFE_SIZE || size == 0 || (size & 0xFFF) != 0) {
+        return Level256UnsafeCommitRequestStatus::InvalidSize;
+    }
+    if (permissions != LEVEL256_CONTROL_MEMORY_UNSAFE_PERMISSIONS) {
+        return Level256UnsafeCommitRequestStatus::InvalidPermissions;
+    }
+    return Level256UnsafeCommitRequestStatus::Valid;
+}
+
+enum class Level256UnsafeCommitMappingStatus {
+    Valid,
+    InvalidOutputPointer,
+    DestinationUnavailable,
+};
+
+constexpr Level256UnsafeCommitMappingStatus ValidateLevel256UnsafeCommitMapping(
+    bool output_pointer_valid, bool destination_free, bool overlaps_process_view,
+    bool overlaps_plugin_image) {
+    if (!output_pointer_valid) {
+        return Level256UnsafeCommitMappingStatus::InvalidOutputPointer;
+    }
+    if (!destination_free || overlaps_process_view || overlaps_plugin_image) {
+        return Level256UnsafeCommitMappingStatus::DestinationUnavailable;
+    }
+    return Level256UnsafeCommitMappingStatus::Valid;
+}
+
+/// Selects ControlMemoryUnsafe calls from the authenticated plugin's actual loaded code range.
+/// Request-specific ABI and memory checks remain in the operation handler.
+constexpr bool ShouldHandleLevel256ControlMemoryUnsafe(bool enabled, bool capability_authorized,
+                                                       u64 title_id, u32 pid, u32 plugin_pid,
+                                                       bool plugin_loaded, u32 code_begin,
+                                                       u32 code_end, u32 pc, u32 svc_id) {
+    return enabled && capability_authorized && IsLevel256SupportedTitleId(title_id) &&
+           pid == plugin_pid && plugin_loaded &&
+           IsLevel256PluginCodeAddress(code_begin, code_end, pc) &&
+           svc_id == LEVEL256_CONTROL_MEMORY_UNSAFE_SVC_ID;
 }
 
 /// Handles only the currently verified Level256 ControlMemoryUnsafe COMMIT request.

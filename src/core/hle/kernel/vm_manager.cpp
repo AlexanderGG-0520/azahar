@@ -35,7 +35,7 @@ bool VirtualMemoryArea::CanBeMergedWith(const VirtualMemoryArea& next) const {
         return false;
     }
     if (type == VMAType::BackingMemory &&
-        backing_memory.GetPtr() + size != next.backing_memory.GetPtr()) {
+        !backing_memory.IsContiguousWith(next.backing_memory, size)) {
         return false;
     }
     return true;
@@ -129,6 +129,87 @@ ResultVal<VMManager::VMAHandle> VMManager::MapBackingMemory(VAddr target, Memory
     UpdatePageTableForVMA(final_vma);
 
     return MergeAdjacent(vma_handle);
+}
+
+Result VMManager::MapBackingMemoryRange(VAddr target, const VMManager& source_manager,
+                                        VAddr source_address, u32 size, MemoryState state) {
+    constexpr u32 page_mask = Memory::CITRA_PAGE_MASK;
+    if (size == 0 || (target & page_mask) != 0 || (source_address & page_mask) != 0 ||
+        (size & page_mask) != 0) {
+        return ResultInvalidAddress;
+    }
+
+    const u64 target_end = static_cast<u64>(target) + size;
+    const u64 source_end = static_cast<u64>(source_address) + size;
+    if (target_end > MAX_ADDRESS || source_end > MAX_ADDRESS) {
+        return ResultInvalidAddress;
+    }
+
+    // The source must consist entirely of readable, backed mappings. MMIO and reserved regions
+    // are excluded because this manager models them as host-backed mappings but does not emulate
+    // their process-specific access semantics.
+    VAddr source_cursor = source_address;
+    while (source_cursor < source_end) {
+        const VMAHandle vma = source_manager.FindVMA(source_cursor);
+        if (vma == source_manager.vma_map.end() || vma->second.type != VMAType::BackingMemory ||
+            vma->second.meminfo_state == MemoryState::IO ||
+            vma->second.meminfo_state == MemoryState::Reserved ||
+            (static_cast<u32>(vma->second.permissions) & static_cast<u32>(VMAPermission::Read)) ==
+                0) {
+            return ResultInvalidAddressState;
+        }
+        source_cursor = static_cast<VAddr>(
+            std::min<u64>(source_end, static_cast<u64>(vma->second.base) + vma->second.size));
+    }
+
+    // Preflight the complete destination before changing any VMA, so ordinary occupancy errors
+    // cannot leave a partially mapped range.
+    VAddr target_cursor = target;
+    while (target_cursor < target_end) {
+        const VMAHandle vma = FindVMA(target_cursor);
+        if (vma == vma_map.end() || vma->second.type != VMAType::Free ||
+            vma->second.meminfo_state != MemoryState::Free) {
+            return ResultInvalidAddressState;
+        }
+        target_cursor = static_cast<VAddr>(
+            std::min<u64>(target_end, static_cast<u64>(vma->second.base) + vma->second.size));
+    }
+
+    auto backing_blocks_result = source_manager.GetBackingBlocksForRange(source_address, size);
+    if (backing_blocks_result.Failed()) {
+        return backing_blocks_result.Code();
+    }
+    const auto backing_blocks = std::move(backing_blocks_result).Unwrap();
+
+    u32 mapped_size = 0;
+    for (const auto& [backing_memory, block_size] : backing_blocks) {
+        if (block_size == 0 || block_size > size - mapped_size || (block_size & page_mask) != 0 ||
+            backing_memory.GetPtr() == nullptr || backing_memory.GetSize() < block_size) {
+            if (mapped_size != 0) {
+                UnmapRange(target, mapped_size);
+            }
+            return ResultInvalidAddressState;
+        }
+
+        const ResultVal<VMAHandle> map_result =
+            MapBackingMemory(static_cast<VAddr>(static_cast<u64>(target) + mapped_size),
+                             backing_memory, block_size, state);
+        if (map_result.Failed()) {
+            if (mapped_size != 0) {
+                UnmapRange(target, mapped_size);
+            }
+            return map_result.Code();
+        }
+        mapped_size += block_size;
+    }
+
+    if (mapped_size != size) {
+        if (mapped_size != 0) {
+            UnmapRange(target, mapped_size);
+        }
+        return ResultInvalidAddressState;
+    }
+    return ResultSuccess;
 }
 
 Result VMManager::ChangeMemoryState(VAddr target, u32 size, MemoryState expected_state,
@@ -376,8 +457,8 @@ void VMManager::UpdatePageTableForVMA(const VirtualMemoryArea& vma) {
         plgldr->OnMemoryChanged(process, Core::System::GetInstance().Kernel());
 }
 
-ResultVal<std::vector<std::pair<MemoryRef, u32>>> VMManager::GetBackingBlocksForRange(VAddr address,
-                                                                                      u32 size) {
+ResultVal<std::vector<std::pair<MemoryRef, u32>>> VMManager::GetBackingBlocksForRange(
+    VAddr address, u32 size) const {
     std::vector<std::pair<MemoryRef, u32>> backing_blocks;
     VAddr interval_target = address;
     while (interval_target != address + size) {

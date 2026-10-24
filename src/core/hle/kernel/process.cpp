@@ -281,8 +281,7 @@ void Process::Run(s32 main_thread_priority, u32 stack_size) {
 
 void Process::Exit() {
     Core::System::GetInstance().ServiceManager().UnregisterServicesForProcess(process_id);
-    if (auto srv = Core::System::GetInstance().ServiceManager().GetService<Service::SM::SRV>(
-            "srv:")) {
+    if (auto srv = Core::System::GetInstance().ServiceManager().GetSRV()) {
         srv->OnProcessExit(process_id);
     }
 #ifdef ENABLE_GDBSTUB

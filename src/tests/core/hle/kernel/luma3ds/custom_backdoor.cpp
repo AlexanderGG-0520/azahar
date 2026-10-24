@@ -15,6 +15,7 @@ TEST_CASE("CustomBackdoor validates ABI and leaves guest callback dispatch to a 
         .owner_process_id = 42,
         .plugin_code_begin = 0x07000100,
         .plugin_code_end = 0x07100000,
+        .capabilities = CapabilitiesForVerifiedPlugin(true),
     };
     SvcRequest request{
         .svc_id = 0x80,

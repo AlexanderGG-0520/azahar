@@ -32,17 +32,19 @@ Level256MemoryOperationResult ControlMemoryUnsafe(
     if (immediate == LEVEL256_CONTROL_MEMORY_UNSAFE_SVC_ID && process.codeset) {
         const u32 output_address = in_r0;
         const u32 address = in_r1;
+        const u32 raw_size = in_r2;
         const u32 size = in_r2 & ~Memory::CITRA_PAGE_MASK;
         const u32 operation = in_r3;
         const u32 permissions = in_r4;
-        const bool exact_request = ShouldHandleLevel256ControlMemoryUnsafe(
+        const bool authorized_call = ShouldHandleLevel256ControlMemoryUnsafe(
             Settings::values.level256_compatibility_enabled.GetValue(),
-            context.level256_official_plugin_hash_matches, process.codeset->program_id,
-            process.process_id, context.plugin_process_id, context.plugin_loaded,
-            context.plugin_code_begin, context.plugin_code_end, in_pc, immediate, output_address,
-            address, in_r2, operation, permissions);
-        if (exact_request) {
-            Result result = ResultInvalidAddress;
+            HasCapability(CapabilitiesForVerifiedPlugin(context.level256_plugin_identity_verified),
+                          Level256Capability::ControlMemoryUnsafe),
+            process.codeset->program_id, process.process_id, context.plugin_process_id,
+            context.plugin_loaded, context.plugin_code_begin, context.plugin_code_end, in_pc,
+            immediate);
+        if (authorized_call) {
+            Result result = ResultNotImplemented;
             const u64 output_end = static_cast<u64>(output_address) + sizeof(u32);
             const auto output_vma = process.vm_manager.FindVMA(output_address);
             const bool output_valid =
@@ -66,31 +68,54 @@ Level256MemoryOperationResult ControlMemoryUnsafe(
                 view_begin != 0 && address < view_end && view_begin < target_end;
             const bool overlaps_plugin =
                 address < context.plugin_code_end && context.plugin_code_begin < target_end;
-            if (!output_valid) {
-                result = ResultInvalidPointer;
-            } else if (!target_is_free || overlaps_view || overlaps_plugin) {
-                result = target_vma != process.vm_manager.vma_map.end() &&
-                                 target_vma->second.type != VMAType::Free
-                             ? ResultInvalidAddressState
-                             : ResultInvalidAddress;
-            } else {
-                try {
-                    auto backing = std::make_shared<BufferMem>(size);
-                    const auto mapping = process.vm_manager.MapBackingMemory(
-                        address, MemoryRef{backing}, size, MemoryState::Private);
-                    if (mapping.Succeeded()) {
-                        memory.Write32(process, output_address, address);
-                        result = ResultSuccess;
-                    } else {
-                        result = mapping.Code();
+            switch (
+                ValidateLevel256UnsafeCommitRequest(address, raw_size, operation, permissions)) {
+            case Level256UnsafeCommitRequestStatus::UnsupportedOperation:
+                result = ResultNotImplemented;
+                break;
+            case Level256UnsafeCommitRequestStatus::InvalidAddress:
+                result = ResultInvalidAddress;
+                break;
+            case Level256UnsafeCommitRequestStatus::InvalidSize:
+                result = ResultMisalignedSize;
+                break;
+            case Level256UnsafeCommitRequestStatus::InvalidPermissions:
+                result = ResultInvalidEnumValue;
+                break;
+            case Level256UnsafeCommitRequestStatus::Valid: {
+                switch (ValidateLevel256UnsafeCommitMapping(output_valid, target_is_free,
+                                                            overlaps_view, overlaps_plugin)) {
+                case Level256UnsafeCommitMappingStatus::InvalidOutputPointer:
+                    result = ResultInvalidPointer;
+                    break;
+                case Level256UnsafeCommitMappingStatus::DestinationUnavailable:
+                    result = target_vma != process.vm_manager.vma_map.end() &&
+                                     target_vma->second.type != VMAType::Free
+                                 ? ResultInvalidAddressState
+                                 : ResultInvalidAddress;
+                    break;
+                case Level256UnsafeCommitMappingStatus::Valid:
+                    try {
+                        auto backing = std::make_shared<BufferMem>(size);
+                        const auto mapping = process.vm_manager.MapBackingMemory(
+                            address, MemoryRef{backing}, size, MemoryState::Private);
+                        if (mapping.Succeeded()) {
+                            memory.Write32(process, output_address, address);
+                            result = ResultSuccess;
+                        } else {
+                            result = mapping.Code();
+                        }
+                    } catch (const std::bad_alloc&) {
+                        result = ResultOutOfMemory;
                     }
-                } catch (const std::bad_alloc&) {
-                    result = ResultOutOfMemory;
+                    break;
                 }
+                break;
+            }
             }
 
             LOG_INFO(Kernel_SVC,
-                     "Level256 ControlMemoryUnsafe exact COMMIT: pid={} thread={} "
+                     "Level256 ControlMemoryUnsafe COMMIT: pid={} thread={} "
                      "pc=0x{:08X} target=0x{:08X}-0x{:08X} size=0x{:X} "
                      "region=SYSTEM permissions=RW state=Private output=0x{:08X} "
                      "result=0x{:08X} output_valid={} target_free={} overlaps_view={} "

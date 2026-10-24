@@ -17,31 +17,38 @@ TEST_CASE("Luma kernel compatibility context authenticates only the loaded owner
         .plugin_code_end = 0x07103000,
         .bootloader_code_begin = 0x06FFF000,
         .bootloader_code_end = 0x07000000,
+        .capabilities = Kernel::Luma3DS::CapabilitiesForVerifiedPlugin(true),
     };
 
-    REQUIRE(authorization.Authorizes(42, 0x07000100));
-    REQUIRE(Kernel::Luma3DS::CanDispatchExtension(context, authorization, 42, 0x07000100));
-    REQUIRE(Kernel::Luma3DS::IsValidCustomBackdoorCallback(context, authorization, 42,
-                                                            0x07000100));
-    REQUIRE_FALSE(Kernel::Luma3DS::IsValidCustomBackdoorCallback(context, authorization, 42,
-                                                                 0x07000101));
-    REQUIRE(authorization.Authorizes(42, 0x07102FFC));
-    REQUIRE(authorization.Authorizes(42, 0x06FFF000));
-    REQUIRE_FALSE(Kernel::Luma3DS::IsValidCustomBackdoorCallback(context, authorization, 42,
-                                                                 0x06FFF000));
-    REQUIRE_FALSE(authorization.Authorizes(41, 0x07000100));
-    REQUIRE_FALSE(Kernel::Luma3DS::CanDispatchExtension(context, authorization, 41,
-                                                         0x07000100));
-    REQUIRE_FALSE(authorization.Authorizes(42, 0x070000FC));
-    REQUIRE_FALSE(authorization.Authorizes(42, 0x07103000));
+    REQUIRE(authorization.OwnsCode(42, 0x07000100));
+    REQUIRE(authorization.Authorizes(42, 0x07000100,
+                                     Kernel::Luma3DS::Level256Capability::CustomBackdoor));
+    REQUIRE(
+        Kernel::Luma3DS::CanDispatchExtension(context, authorization, 42, 0x07000100,
+                                              Kernel::Luma3DS::Level256Capability::CustomBackdoor));
+    REQUIRE(Kernel::Luma3DS::IsValidCustomBackdoorCallback(context, authorization, 42, 0x07000100));
+    REQUIRE_FALSE(
+        Kernel::Luma3DS::IsValidCustomBackdoorCallback(context, authorization, 42, 0x07000101));
+    REQUIRE(authorization.OwnsCode(42, 0x07102FFC));
+    REQUIRE(authorization.OwnsCode(42, 0x06FFF000));
+    REQUIRE_FALSE(
+        Kernel::Luma3DS::IsValidCustomBackdoorCallback(context, authorization, 42, 0x06FFF000));
+    REQUIRE_FALSE(authorization.OwnsCode(41, 0x07000100));
+    REQUIRE_FALSE(
+        Kernel::Luma3DS::CanDispatchExtension(context, authorization, 41, 0x07000100,
+                                              Kernel::Luma3DS::Level256Capability::CustomBackdoor));
+    REQUIRE_FALSE(authorization.OwnsCode(42, 0x070000FC));
+    REQUIRE_FALSE(authorization.OwnsCode(42, 0x07103000));
 
     auto disabled = context;
     disabled.enabled = false;
-    REQUIRE_FALSE(Kernel::Luma3DS::CanDispatchExtension(disabled, authorization, 42,
-                                                         0x07000100));
+    REQUIRE_FALSE(
+        Kernel::Luma3DS::CanDispatchExtension(disabled, authorization, 42, 0x07000100,
+                                              Kernel::Luma3DS::Level256Capability::CustomBackdoor));
     auto unverified = authorization;
     unverified.plugin_integrity_verified = false;
-    REQUIRE_FALSE(unverified.Authorizes(42, 0x07000100));
+    REQUIRE_FALSE(
+        unverified.Authorizes(42, 0x07000100, Kernel::Luma3DS::Level256Capability::CustomBackdoor));
 }
 
 TEST_CASE("Luma cache operation classes preserve separate data and instruction semantics",

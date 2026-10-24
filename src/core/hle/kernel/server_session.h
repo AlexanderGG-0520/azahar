@@ -5,11 +5,13 @@
 #pragma once
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <boost/serialization/export.hpp>
 #include "common/assert.h"
 #include "common/common_types.h"
 #include "core/hle/kernel/ipc.h"
+#include "core/hle/kernel/level256_start_scan_diagnostic.h"
 #include "core/hle/kernel/object.h"
 #include "core/hle/kernel/session.h"
 #include "core/hle/kernel/wait_object.h"
@@ -115,6 +117,11 @@ private:
     friend class boost::serialization::access;
     template <class Archive>
     void serialize(Archive& ar, const unsigned int);
+
+    // Diagnostic-only state for correlating the StartScan output buffer across one guest LLE
+    // request/reply. Deliberately omitted from savestates; a pending diagnostic may be dropped.
+    std::optional<Level256StartScanBuffer> level256_start_scan_buffer;
+    u32 level256_start_scan_client_session_id{};
 };
 
 } // namespace Kernel

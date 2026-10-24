@@ -31,21 +31,28 @@ inline bool operator==(const UdsCommandShape& lhs, const UdsCommandShape& rhs) {
 }
 
 /// IPC shape changes confirmed in Luma3DS-level256 SendSyncRequest.c.
-inline std::optional<UdsCommandShape> TranslateLevel256UdsCommand(u16 command_id,
-                                                                  u8 normal_params,
+inline std::optional<UdsCommandShape> TranslateLevel256UdsCommand(u16 command_id, u8 normal_params,
                                                                   u8 translate_params) {
     const UdsCommandShape input{command_id, normal_params, translate_params};
     if (input == UdsCommandShape{14, 0, 6} || input == UdsCommandShape{31, 0, 6}) {
         return UdsCommandShape{31, 7, 0};
     }
-    if (input == UdsCommandShape{15, 16, 4}) return UdsCommandShape{15, 20, 0};
-    if (input == UdsCommandShape{16, 1, 2}) return UdsCommandShape{16, 3, 0};
-    if (input == UdsCommandShape{17, 1, 0}) return UdsCommandShape{17, 2, 0};
-    if (input == UdsCommandShape{20, 3, 0}) return UdsCommandShape{20, 4, 0};
-    if (input == UdsCommandShape{23, 6, 2}) return UdsCommandShape{23, 8, 0};
-    if (input == UdsCommandShape{27, 12, 2}) return UdsCommandShape{27, 14, 0};
-    if (input == UdsCommandShape{29, 1, 4}) return UdsCommandShape{29, 5, 0};
-    if (input == UdsCommandShape{30, 2, 4}) return UdsCommandShape{30, 6, 0};
+    if (input == UdsCommandShape{15, 16, 4})
+        return UdsCommandShape{15, 20, 0};
+    if (input == UdsCommandShape{16, 1, 2})
+        return UdsCommandShape{16, 3, 0};
+    if (input == UdsCommandShape{17, 1, 0})
+        return UdsCommandShape{17, 2, 0};
+    if (input == UdsCommandShape{20, 3, 0})
+        return UdsCommandShape{20, 4, 0};
+    if (input == UdsCommandShape{23, 6, 2})
+        return UdsCommandShape{23, 8, 0};
+    if (input == UdsCommandShape{27, 12, 2})
+        return UdsCommandShape{27, 14, 0};
+    if (input == UdsCommandShape{29, 1, 4})
+        return UdsCommandShape{29, 5, 0};
+    if (input == UdsCommandShape{30, 2, 4})
+        return UdsCommandShape{30, 6, 0};
     return std::nullopt;
 }
 
@@ -81,9 +88,8 @@ public:
         state.dlp_enabled = dlp_enabled;
     }
 
-    PlgUdsControlResult ProcessPlgUdsControl(u32 process_id, u16 command_id,
-                                             u8 normal_params, u8 translate_params, u32 arg1,
-                                             u32 arg2) {
+    PlgUdsControlResult ProcessPlgUdsControl(u32 process_id, u16 command_id, u8 normal_params,
+                                             u8 translate_params, u32 arg1, u32 arg2) {
         constexpr u32 not_authorized = 0xD90007EA;
         constexpr u32 out_of_range = 0xD90007FD;
         const auto response = [command_id](u32 value) {
@@ -105,8 +111,8 @@ public:
             states.erase(it);
             return {true, true, command_id, 0};
         }
-        if ((command_id == 104 || command_id == 105 || command_id == 106) &&
-            normal_params == 1 && translate_params == 0) {
+        if ((command_id == 104 || command_id == 105 || command_id == 106) && normal_params == 1 &&
+            translate_params == 0) {
             auto it = states.find(process_id);
             if (it == states.end()) {
                 return response(not_authorized);
@@ -161,6 +167,14 @@ public:
     bool IsConnectedProcess(u32 process_id) const {
         const auto it = states.find(process_id);
         return it != states.end() && !it->second.is_log_mode;
+    }
+
+    std::optional<State> GetState(u32 process_id) const {
+        const auto it = states.find(process_id);
+        if (it == states.end()) {
+            return std::nullopt;
+        }
+        return it->second;
     }
 
     bool IsPaused(u32 process_id) const {

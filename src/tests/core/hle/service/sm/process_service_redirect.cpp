@@ -1,8 +1,8 @@
 // Copyright 2026 Azahar Emulator Project
 // Licensed under GPLv2 or any later version
 
-#include "core/hle/service/sm/process_service_redirect.h"
 #include <catch2/catch_test_macros.hpp>
+#include "core/hle/service/sm/process_service_redirect.h"
 
 TEST_CASE("service redirects are isolated by process and opt-in", "[core][service][sm]") {
     Service::SM::ProcessServiceRedirect redirects;
@@ -28,8 +28,7 @@ TEST_CASE("service redirects are isolated by process and opt-in", "[core][servic
     REQUIRE_FALSE(redirects.Resolve(1, "nwm::UDS"));
 }
 
-TEST_CASE("Level256 UDS IPC shape translations match the public Luma hook",
-          "[core][service][sm]") {
+TEST_CASE("Level256 UDS IPC shape translations match the public Luma hook", "[core][service][sm]") {
     using Service::SM::TranslateLevel256UdsCommand;
     using Service::SM::UdsCommandShape;
 
@@ -61,9 +60,19 @@ TEST_CASE("PLGUDS control state is owner-scoped and pause/DLP-aware",
     REQUIRE(result.handled);
     REQUIRE(result.forward_to_server);
     REQUIRE(redirects.Resolve(16, "nwm::UDS") == "plg:UDS");
+    REQUIRE(redirects.GetState(16));
+    REQUIRE_FALSE(redirects.GetState(16)->is_log_mode);
+    REQUIRE_FALSE(redirects.GetState(16)->is_paused);
     REQUIRE_FALSE(redirects.Resolve(17, "nwm::UDS"));
 
-    result = redirects.ProcessPlgUdsControl(17, 101, 0, 0, 0, 0);
+    result = redirects.ProcessPlgUdsControl(17, 100, 2, 0, 17, 1);
+    REQUIRE(result.handled);
+    REQUIRE(result.forward_to_server);
+    REQUIRE(redirects.GetState(17));
+    REQUIRE(redirects.GetState(17)->is_log_mode);
+    REQUIRE_FALSE(redirects.IsConnectedProcess(17));
+
+    result = redirects.ProcessPlgUdsControl(18, 101, 0, 0, 0, 0);
     REQUIRE(result.handled);
     REQUIRE_FALSE(result.forward_to_server);
     REQUIRE(result.response_value == 0xD90007EA);

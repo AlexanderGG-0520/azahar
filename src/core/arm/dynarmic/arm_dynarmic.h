@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <array>
 #include <map>
 #include <memory>
 #include <dynarmic/interface/A32/a32.h>
@@ -35,7 +36,8 @@ public:
     void StartPluginInstructionTrace(u32 process_id, u32 thread_id, u32 code_begin, u32 code_end,
                                      u32 bootloader_begin, u32 bootloader_end,
                                      u32 instruction_limit, bool focus_open_process = false,
-                                     bool wait_for_target = false) override;
+                                     bool wait_for_target = false,
+                                     bool trace_bootloader_return = false) override;
 
     void SetPC(u32 pc) override;
     u32 GetPC() const override;
@@ -98,6 +100,20 @@ private:
     bool plugin_trace_focus_open_process = false;
     bool plugin_trace_wait_for_target = false;
     bool plugin_trace_waiting_reported = false;
+    struct PluginTraceInstruction {
+        u32 pc{};
+        u32 instruction{};
+        u32 cpsr{};
+        u32 sp{};
+        u32 lr{};
+    };
+    std::array<PluginTraceInstruction, 16> plugin_trace_instruction_ring{};
+    std::size_t plugin_trace_instruction_ring_next{};
+    std::size_t plugin_trace_instruction_ring_count{};
+    bool plugin_trace_bootloader_return = false;
+    bool plugin_trace_bootloader_d0_logged = false;
+    bool plugin_trace_bootloader_d4_logged = false;
+    u32 plugin_trace_entry_pointer_change_log_count{};
 };
 
 } // namespace Core

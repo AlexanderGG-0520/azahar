@@ -24,6 +24,7 @@
 #pragma once
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <unordered_set>
@@ -77,6 +78,10 @@ public:
         bool plugin_code_reached = false;
         u32 plugin_code_begin = 0;
         u32 plugin_code_end = 0;
+        // Runtime guest range for the 3GX .data and .bss sections. Not serialized as authority;
+        // it is populated again only when the plugin is loaded from its verified artifact.
+        u32 plugin_data_begin = 0;
+        u32 plugin_data_end = 0;
         u32 plugin_bootloader_begin = 0;
         u32 plugin_bootloader_end = 0;
         u32 plugin_trace_count = 0;
@@ -86,8 +91,22 @@ public:
         u32 plugin_last_return_pc = 0;
         bool plugin_instruction_trace_started = false;
         u32 plugin_service_trace_count = 0;
+        // Read-only, one-shot bootloader return diagnostics; transient, never savestated.
+        bool level256_bootloader_map_snapshot_logged = false;
+        bool level256_bootloader_pre_svc_snapshot_logged = false;
+        bool level256_bootloader_return_snapshot_logged = false;
+        bool level256_bootloader_return_trace_started = false;
         // Transient diagnostics; intentionally omitted from savestates.
         u32 plugin_query_process_memory_failures = 0;
+        // Distinct register patterns only, bounded to eight calls per SVC and plugin load.
+        std::array<Kernel::Level256SvcDiagnosticPattern,
+                   Kernel::LEVEL256_SVC_DIAGNOSTIC_PATTERN_LIMIT>
+            level256_custom_backdoor_patterns{};
+        std::size_t level256_custom_backdoor_pattern_count = 0;
+        std::array<Kernel::Level256SvcDiagnosticPattern,
+                   Kernel::LEVEL256_SVC_DIAGNOSTIC_PATTERN_LIMIT>
+            level256_open_process_patterns{};
+        std::size_t level256_open_process_pattern_count = 0;
         // A one-shot, bounded trace for the verified Level256 worker's OpenProcess path.
         // Transient diagnostic state; intentionally omitted from savestates.
         bool level256_open_process_trace_started = false;
@@ -141,9 +160,20 @@ public:
         u32 ctrpf_guest_arbiter_wait_count = 0;
         u32 ctrpf_guest_arbiter_signal_count = 0;
         u32 ctrpf_guest_arbiter_wakeup_count = 0;
-        // True only when the loaded bytes match the known official Level256.3gx digest.
-        // Transient so restored savestates cannot inherit compatibility trust blindly.
+        // Exact legacy file identity, retained for the previously reviewed plugin.
         bool level256_official_plugin_hash_matches = false;
+        // Publisher identity from the appended Ed25519 manifest, transient across savestates.
+        bool level256_official_plugin_signature_verified = false;
+        // Privileged HLE profile authorization; stricter than publisher identity.
+        bool level256_plugin_identity_verified = false;
+        u32 level256_signed_plugin_artifact_version = 0;
+        // Rejections are diagnostic only and bounded per plugin-load attempt.
+        u32 level256_capability_rejection_log_count = 0;
+        // Detailed MapProcessMemoryEx request/result records are opt-in and bounded.
+        u32 level256_map_process_memory_ex_trace_count = 0;
+        u32 level256_map_process_memory_ex_result_trace_count = 0;
+        // One-run E2E PLGUDS request/reply trace; transient and deliberately not savestated.
+        u32 level256_network_ipc_trace_count = 0;
         // Count of 0x2560 requests for the current plugin load; deliberately transient.
         u32 level256_lfcs_request_count = 0;
         bool is_default_path = false;
@@ -151,6 +181,18 @@ public:
         u32 plugin_process_id = UINT32_MAX;
         Kernel::MemoryRegion memory_region{};
         std::pair<u32, u32> memory_block{};
+
+        void ResetTransientLevel256Authorization() {
+            level256_official_plugin_hash_matches = false;
+            level256_official_plugin_signature_verified = false;
+            level256_plugin_identity_verified = false;
+            level256_signed_plugin_artifact_version = 0;
+            level256_capability_rejection_log_count = 0;
+            level256_map_process_memory_ex_trace_count = 0;
+            level256_map_process_memory_ex_result_trace_count = 0;
+            level256_network_ipc_trace_count = 0;
+            level256_lfcs_request_count = 0;
+        }
 
         bool use_user_load_parameters = false;
         PluginLoadParameters user_load_parameters;
@@ -177,13 +219,16 @@ public:
     void OnProcessExit(Kernel::Process& process, Kernel::KernelSystem& kernel);
     void OnProcessDestroyed(Kernel::Process& process);
     bool TracePluginSVC(const Kernel::Process& process, const Kernel::Thread& thread, u32 pc,
-                        u32 svc_id, const char* svc_name, const char* service_name);
+                        u32 svc_id, const char* svc_name, const char* service_name, u32 type,
+                        s32 param, const std::array<u32, 8>& registers);
     void TracePluginSVCResult(const Kernel::Process& process, const Kernel::Thread& thread,
                               u32 svc_id, const char* svc_name, u32 svc_pc, u32 post_hle_pc,
                               u32 type, s32 param, u32 result, u64 value);
-    void TraceCtrpfStartupMemoryAccess(const Kernel::Process& process,
-                                       const Kernel::Thread& thread, VAddr address, u32 size,
-                                       bool is_write, u64 value, u32 pc, u32 lr);
+    void TraceLevel256BootloaderSnapshot(const Kernel::Process& process, const char* phase,
+                                         u32 thread_id);
+    void TraceCtrpfStartupMemoryAccess(const Kernel::Process& process, const Kernel::Thread& thread,
+                                       VAddr address, u32 size, bool is_write, u64 value, u32 pc,
+                                       u32 lr);
     void TraceLevel256GuestWait(const Kernel::Process& process, u32 thread_id, u32 pc,
                                 const std::string& phase, const std::string& object_type,
                                 u32 object_id, const std::string& object_name, u32 resume_pc);
@@ -197,8 +242,10 @@ public:
         return {.enabled = enabled};
     }
     Kernel::Luma3DS::PluginAuthorization GetLumaExtensionAuthorization(u64 title_id) const;
-    Kernel::Luma3DS::Level256VerificationPolicy GetLevel256VerificationPolicy(
-        bool enabled, u64 title_id) const;
+    Kernel::Luma3DS::Level256VerificationPolicy GetLevel256VerificationPolicy(bool enabled,
+                                                                              u64 title_id) const;
+    bool ShouldTraceLevel256NetworkIPC(const Kernel::Process& process) const;
+    bool ConsumeLevel256NetworkIPCTraceSlot();
     Kernel::Luma3DS::Level256ProcessViewManager& GetProcessViewManager() {
         return process_view_manager;
     }
