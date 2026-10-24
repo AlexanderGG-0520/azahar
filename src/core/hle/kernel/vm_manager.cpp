@@ -35,7 +35,7 @@ bool VirtualMemoryArea::CanBeMergedWith(const VirtualMemoryArea& next) const {
         return false;
     }
     if (type == VMAType::BackingMemory &&
-        backing_memory.GetPtr() + size != next.backing_memory.GetPtr()) {
+        !backing_memory.IsContiguousWith(next.backing_memory, size)) {
         return false;
     }
     return true;
