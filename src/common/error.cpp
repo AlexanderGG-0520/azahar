@@ -51,10 +51,14 @@ std::string NativeErrorToString(int e) {
 }
 
 std::string GetLastErrorMsg() {
+    return NativeErrorToString(GetLastErrorCode());
+}
+
+int GetLastErrorCode() {
 #ifdef _WIN32
-    return NativeErrorToString(GetLastError());
+    return static_cast<int>(GetLastError());
 #else
-    return NativeErrorToString(errno);
+    return errno;
 #endif
 }
 

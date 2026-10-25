@@ -13,6 +13,7 @@
 #include "core/file_sys/disk_archive.h"
 #include "core/file_sys/errors.h"
 #include "core/file_sys/path_parser.h"
+#include "core/hle/service/level256_registration_diagnostics.h"
 
 SERIALIZE_EXPORT_IMPL(FileSys::SDMCArchive)
 SERIALIZE_EXPORT_IMPL(FileSys::ArchiveFactory_SDMC)
@@ -56,6 +57,9 @@ ResultVal<std::unique_ptr<FileBackend>> SDMCArchive::OpenFile(const Path& path, 
 
 ResultVal<std::unique_ptr<FileBackend>> SDMCArchive::OpenFileBase(const Path& path,
                                                                   const Mode& mode) const {
+    const std::string guest_path = path.DebugStr();
+    const bool registration_path =
+        Service::Level256RegistrationDiagnostics::IsAccountPath(guest_path);
     LOG_DEBUG(Service_FS, "called path={} mode={:01X}", path.DebugStr(), mode.hex);
 
     const PathParser path_parser(path);
@@ -95,7 +99,21 @@ ResultVal<std::unique_ptr<FileBackend>> SDMCArchive::OpenFileBase(const Path& pa
             return ResultNotFound;
         } else {
             // Create the file
-            FileUtil::CreateEmptyFile(full_path);
+            const bool created = FileUtil::CreateEmptyFile(full_path);
+            if (registration_path) {
+                const u32 event = Service::Level256RegistrationDiagnostics::NextEventId();
+                if (event != 0) {
+                    const int host_error_code = created ? 0 : Common::GetLastErrorCode();
+                    const std::string host_error =
+                        created ? "none" : Common::NativeErrorToString(host_error_code);
+                    LOG_INFO(Service_FS,
+                             "[L256-REG] event={} op=sdmc.create_file path={} mode=0x{:X} "
+                             "created={} host_error_code={} host_error={}",
+                             event,
+                             Service::Level256RegistrationDiagnostics::SafePathLabel(guest_path),
+                             mode.hex, created, host_error_code, host_error);
+                }
+            }
         }
         break;
     case PathParser::FileFound:
@@ -104,8 +122,30 @@ ResultVal<std::unique_ptr<FileBackend>> SDMCArchive::OpenFileBase(const Path& pa
 
     FileUtil::IOFile file(full_path, mode.write_flag ? "r+b" : "rb");
     if (!file.IsOpen()) {
-        LOG_CRITICAL(Service_FS, "Error opening {}: {}", full_path, Common::GetLastErrorMsg());
+        const int host_error_code = Common::GetLastErrorCode();
+        const std::string host_error = Common::NativeErrorToString(host_error_code);
+        if (registration_path) {
+            const u32 event = Service::Level256RegistrationDiagnostics::NextEventId();
+            if (event != 0) {
+                LOG_INFO(Service_FS,
+                         "[L256-REG] event={} op=sdmc.open_file path={} result=0x{:08X} "
+                         "host_error_code={} host_error={}",
+                         event, Service::Level256RegistrationDiagnostics::SafePathLabel(guest_path),
+                         ResultNotFound.raw, host_error_code, host_error);
+            }
+        }
+        LOG_CRITICAL(Service_FS, "Error opening {}: {}", full_path, host_error);
         return ResultNotFound;
+    }
+
+    if (registration_path) {
+        const u32 event = Service::Level256RegistrationDiagnostics::NextEventId();
+        if (event != 0) {
+            LOG_INFO(Service_FS,
+                     "[L256-REG] event={} op=sdmc.open_file path={} mode=0x{:X} result=0x{:08X}",
+                     event, Service::Level256RegistrationDiagnostics::SafePathLabel(guest_path),
+                     mode.hex, ResultSuccess.raw);
+        }
     }
 
     std::unique_ptr<DelayGenerator> delay_generator = std::make_unique<SDMCDelayGenerator>();
@@ -113,6 +153,9 @@ ResultVal<std::unique_ptr<FileBackend>> SDMCArchive::OpenFileBase(const Path& pa
 }
 
 Result SDMCArchive::DeleteFile(const Path& path) const {
+    const std::string guest_path = path.DebugStr();
+    const bool registration_path =
+        Service::Level256RegistrationDiagnostics::IsAccountPath(guest_path);
     const PathParser path_parser(path);
 
     if (!path_parser.IsValid()) {
@@ -139,14 +182,40 @@ Result SDMCArchive::DeleteFile(const Path& path) const {
     }
 
     if (FileUtil::Delete(full_path)) {
+        if (registration_path) {
+            const u32 event = Service::Level256RegistrationDiagnostics::NextEventId();
+            if (event != 0) {
+                LOG_INFO(Service_FS,
+                         "[L256-REG] event={} op=sdmc.delete_file path={} result=0x{:08X}", event,
+                         Service::Level256RegistrationDiagnostics::SafePathLabel(guest_path),
+                         ResultSuccess.raw);
+            }
+        }
         return ResultSuccess;
     }
 
-    LOG_CRITICAL(Service_FS, "(unreachable) Unknown error deleting {}", full_path);
+    const int host_error_code = Common::GetLastErrorCode();
+    const std::string host_error = Common::NativeErrorToString(host_error_code);
+    if (registration_path) {
+        const u32 event = Service::Level256RegistrationDiagnostics::NextEventId();
+        if (event != 0) {
+            LOG_INFO(Service_FS,
+                     "[L256-REG] event={} op=sdmc.delete_file path={} result=0x{:08X} "
+                     "host_error_code={} host_error={}",
+                     event, Service::Level256RegistrationDiagnostics::SafePathLabel(guest_path),
+                     ResultNotFound.raw, host_error_code, host_error);
+        }
+    }
+    LOG_CRITICAL(Service_FS, "(unreachable) Unknown error deleting {}: {}", full_path, host_error);
     return ResultNotFound;
 }
 
 Result SDMCArchive::RenameFile(const Path& src_path, const Path& dest_path) const {
+    const std::string src_guest_path = src_path.DebugStr();
+    const std::string dest_guest_path = dest_path.DebugStr();
+    const bool registration_path =
+        Service::Level256RegistrationDiagnostics::IsAccountPath(src_guest_path) ||
+        Service::Level256RegistrationDiagnostics::IsAccountPath(dest_guest_path);
     const PathParser path_parser_src(src_path);
 
     // TODO: Verify these return codes with HW
@@ -166,7 +235,35 @@ Result SDMCArchive::RenameFile(const Path& src_path, const Path& dest_path) cons
     const auto dest_path_full = path_parser_dest.BuildHostPath(mount_point);
 
     if (FileUtil::Rename(src_path_full, dest_path_full)) {
+        if (registration_path) {
+            const u32 event = Service::Level256RegistrationDiagnostics::NextEventId();
+            if (event != 0) {
+                LOG_INFO(Service_FS,
+                         "[L256-REG] event={} op=sdmc.rename_file src={} dst={} result=0x{:08X}",
+                         event,
+                         Service::Level256RegistrationDiagnostics::SafePathLabel(src_guest_path),
+                         Service::Level256RegistrationDiagnostics::SafePathLabel(dest_guest_path),
+                         ResultSuccess.raw);
+            }
+        }
         return ResultSuccess;
+    }
+
+    const int host_error_code = Common::GetLastErrorCode();
+    const std::string host_error = Common::NativeErrorToString(host_error_code);
+    if (registration_path) {
+        const u32 event = Service::Level256RegistrationDiagnostics::NextEventId();
+        if (event != 0) {
+            LOG_INFO(Service_FS,
+                     "[L256-REG] event={} op=sdmc.rename_file src={} dst={} "
+                     "result=0x{:08X} host_error_code={} host_error={}",
+                     event, Service::Level256RegistrationDiagnostics::SafePathLabel(src_guest_path),
+                     Service::Level256RegistrationDiagnostics::SafePathLabel(dest_guest_path),
+                     Result(ErrorDescription::NoData, ErrorModule::FS,
+                            ErrorSummary::NothingHappened, ErrorLevel::Status)
+                         .raw,
+                     host_error_code, host_error);
+        }
     }
 
     // TODO(yuriks): This code probably isn't right, it'll return a Status even if the file didn't
@@ -223,6 +320,9 @@ Result SDMCArchive::DeleteDirectoryRecursively(const Path& path) const {
 }
 
 Result SDMCArchive::CreateFile(const FileSys::Path& path, u64 size, u32 attributes) const {
+    const std::string guest_path = path.DebugStr();
+    const bool registration_path =
+        Service::Level256RegistrationDiagnostics::IsAccountPath(guest_path);
     const PathParser path_parser(path);
 
     if (!path_parser.IsValid()) {
@@ -251,7 +351,18 @@ Result SDMCArchive::CreateFile(const FileSys::Path& path, u64 size, u32 attribut
     }
 
     if (size == 0) {
-        FileUtil::CreateEmptyFile(full_path);
+        const bool created = FileUtil::CreateEmptyFile(full_path);
+        const int host_error_code = created ? 0 : Common::GetLastErrorCode();
+        if (registration_path) {
+            const u32 event = Service::Level256RegistrationDiagnostics::NextEventId();
+            if (event != 0) {
+                LOG_INFO(Service_FS,
+                         "[L256-REG] event={} op=sdmc.create_file path={} requested_size=0 "
+                         "host_created={} host_error_code={} guest_result=0x{:08X}",
+                         event, Service::Level256RegistrationDiagnostics::SafePathLabel(guest_path),
+                         created, host_error_code, ResultSuccess.raw);
+            }
+        }
         return ResultSuccess;
     }
 
@@ -259,15 +370,40 @@ Result SDMCArchive::CreateFile(const FileSys::Path& path, u64 size, u32 attribut
     // Creates a sparse file (or a normal file on filesystems without the concept of sparse files)
     // We do this by seeking to the right size, then writing a single null byte.
     if (file.Seek(size - 1, SEEK_SET) && file.WriteBytes("", 1) == 1) {
+        if (registration_path) {
+            const u32 event = Service::Level256RegistrationDiagnostics::NextEventId();
+            if (event != 0) {
+                LOG_INFO(Service_FS,
+                         "[L256-REG] event={} op=sdmc.create_file path={} requested_size={} "
+                         "host_written=1 guest_result=0x{:08X}",
+                         event, Service::Level256RegistrationDiagnostics::SafePathLabel(guest_path),
+                         size, ResultSuccess.raw);
+            }
+        }
         return ResultSuccess;
     }
 
+    const int host_error_code = Common::GetLastErrorCode();
+    const std::string host_error = Common::NativeErrorToString(host_error_code);
+    if (registration_path) {
+        const u32 event = Service::Level256RegistrationDiagnostics::NextEventId();
+        if (event != 0) {
+            LOG_INFO(Service_FS,
+                     "[L256-REG] event={} op=sdmc.create_file path={} requested_size={} "
+                     "guest_result=too_large host_error_code={} host_error={}",
+                     event, Service::Level256RegistrationDiagnostics::SafePathLabel(guest_path),
+                     size, host_error_code, host_error);
+        }
+    }
     LOG_ERROR(Service_FS, "Too large file");
     return Result(ErrorDescription::TooLarge, ErrorModule::FS, ErrorSummary::OutOfResource,
                   ErrorLevel::Info);
 }
 
 Result SDMCArchive::CreateDirectory(const Path& path, u32 attributes) const {
+    const std::string guest_path = path.DebugStr();
+    const bool registration_path =
+        Service::Level256RegistrationDiagnostics::IsAccountPath(guest_path);
     const PathParser path_parser(path);
 
     if (!path_parser.IsValid()) {
@@ -294,9 +430,30 @@ Result SDMCArchive::CreateDirectory(const Path& path, u32 attributes) const {
     }
 
     if (FileUtil::CreateDir(mount_point + path.AsString())) {
+        if (registration_path) {
+            const u32 event = Service::Level256RegistrationDiagnostics::NextEventId();
+            if (event != 0) {
+                LOG_INFO(Service_FS,
+                         "[L256-REG] event={} op=sdmc.create_directory path={} result=0x{:08X}",
+                         event, Service::Level256RegistrationDiagnostics::SafePathLabel(guest_path),
+                         ResultSuccess.raw);
+            }
+        }
         return ResultSuccess;
     }
 
+    const int host_error_code = Common::GetLastErrorCode();
+    const std::string host_error = Common::NativeErrorToString(host_error_code);
+    if (registration_path) {
+        const u32 event = Service::Level256RegistrationDiagnostics::NextEventId();
+        if (event != 0) {
+            LOG_INFO(Service_FS,
+                     "[L256-REG] event={} op=sdmc.create_directory path={} "
+                     "guest_result=failed host_error_code={} host_error={}",
+                     event, Service::Level256RegistrationDiagnostics::SafePathLabel(guest_path),
+                     host_error_code, host_error);
+        }
+    }
     LOG_CRITICAL(Service_FS, "(unreachable) Unknown error creating {}", mount_point);
     return Result(ErrorDescription::NoData, ErrorModule::FS, ErrorSummary::Canceled,
                   ErrorLevel::Status);

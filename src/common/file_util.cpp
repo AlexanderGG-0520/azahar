@@ -25,6 +25,7 @@
 #include "common/file_util.h"
 #include "common/logging/log.h"
 #include "common/scope_exit.h"
+#include "common/settings.h"
 #include "common/string_util.h"
 
 #ifdef _WIN32
@@ -1083,11 +1084,22 @@ void UpdateUserPath(UserPath path, const std::string& filename) {
         return;
     }
     if (!FileUtil::IsDirectory(filename)) {
+        if (Settings::values.level256_registration_diagnostics_enabled.GetValue()) {
+            LOG_INFO(Common_Filesystem,
+                     "[L256-REG] op=config.update_user_path kind={} directory=false "
+                     "result=unchanged",
+                     path);
+        }
         LOG_ERROR(Common_Filesystem, "Path is not a directory. UserPath: {}  filename: {}", path,
                   filename);
         return;
     }
     g_paths[path] = SanitizePath(filename) + DIR_SEP;
+    if (Settings::values.level256_registration_diagnostics_enabled.GetValue()) {
+        LOG_INFO(Common_Filesystem,
+                 "[L256-REG] op=config.update_user_path kind={} directory=true result=updated",
+                 path);
+    }
 }
 
 std::size_t WriteStringToFile(bool text_file, const std::string& filename, std::string_view str) {

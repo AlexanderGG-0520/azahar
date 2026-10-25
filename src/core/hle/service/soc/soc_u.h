@@ -21,6 +21,13 @@ class RequestParser;
 
 namespace Service::SOC {
 
+namespace Detail {
+using SocketErrorTranslator = int (*)(int);
+
+int TranslateConnectError(int host_error, bool blocking_socket, int would_block_error,
+                          int in_progress_error, SocketErrorTranslator translate_error);
+} // namespace Detail
+
 /// Holds information about a particular socket
 struct SocketHolder {
 #ifdef _WIN32

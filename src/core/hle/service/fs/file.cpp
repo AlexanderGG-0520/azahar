@@ -4,6 +4,7 @@
 
 #include <boost/serialization/unique_ptr.hpp>
 #include "common/archives.h"
+#include "common/error.h"
 #include "common/logging/log.h"
 #include "core/core.h"
 #include "core/file_sys/errors.h"
@@ -14,6 +15,7 @@
 #include "core/hle/kernel/event.h"
 #include "core/hle/kernel/server_session.h"
 #include "core/hle/service/fs/file.h"
+#include "core/hle/service/level256_registration_diagnostics.h"
 
 SERIALIZE_EXPORT_IMPL(Service::FS::File)
 SERIALIZE_EXPORT_IMPL(Service::FS::FileSessionSlot)
@@ -34,6 +36,18 @@ File::File(Kernel::KernelSystem& kernel, std::unique_ptr<FileSys::FileBackend>&&
     : File(kernel) {
     this->backend = std::move(backend);
     this->path = path;
+    const std::string guest_path = this->path.DebugStr();
+    diagnostics_open_tracked = Level256RegistrationDiagnostics::IsEnabled() &&
+                               Level256RegistrationDiagnostics::IsAccountPath(guest_path);
+    if (diagnostics_open_tracked) {
+        Level256RegistrationDiagnostics::TrackOpenFile(guest_path);
+    }
+}
+
+File::~File() {
+    if (diagnostics_open_tracked) {
+        Level256RegistrationDiagnostics::UntrackOpenFile(path.DebugStr());
+    }
 }
 
 File::File(Kernel::KernelSystem& kernel)
@@ -176,6 +190,23 @@ void File::Write(Kernel::HLERequestContext& ctx) {
     u32 length = rp.Pop<u32>();
     u32 flags = rp.Pop<u32>();
     auto& buffer = rp.PopMappedBuffer();
+    const std::string guest_path = path.DebugStr();
+    const u32 diagnostic_event = Level256RegistrationDiagnostics::IsAccountPath(guest_path)
+                                     ? Level256RegistrationDiagnostics::NextEventId()
+                                     : 0;
+    const auto caller_thread = ctx.ClientThread();
+    const auto caller_process = caller_thread ? caller_thread->owner_process.lock() : nullptr;
+    const u32 caller_pid = caller_process ? caller_process->process_id : 0;
+    const u64 caller_title =
+        caller_process && caller_process->codeset ? caller_process->codeset->program_id : 0;
+    if (diagnostic_event != 0) {
+        LOG_INFO(Service_FS,
+                 "[L256-REG] event={} op=fs.write.begin pid={} title_id=0x{:016X} path={} "
+                 "offset={} requested={} flush={} ",
+                 diagnostic_event, caller_pid, caller_title,
+                 Level256RegistrationDiagnostics::SafePathLabel(guest_path), offset, length,
+                 (flags & 0xFF) != 0);
+    }
     LOG_TRACE(Service_FS, "Write {}: offset=0x{:x} length={}, flags=0x{:x}", GetName(), offset,
               length, flags);
 
@@ -198,14 +229,43 @@ void File::Write(Kernel::HLERequestContext& ctx) {
         buffer.Read(data.data(), 0, data.size());
         ResultVal<std::size_t> written =
             backend->Write(offset, data.size(), flush, update_timestamp, data.data());
+        const int host_error_code = Common::GetLastErrorCode();
+        const std::string host_error =
+            written.Failed() || (written.Succeeded() && *written != length)
+                ? Common::NativeErrorToString(host_error_code)
+                : std::string{"none"};
 
         // Update file size
         file->size = backend->GetSize();
 
         if (written.Failed()) {
+            if (diagnostic_event != 0) {
+                const u32 end_event = Level256RegistrationDiagnostics::NextEventId();
+                if (end_event != 0) {
+                    LOG_INFO(Service_FS,
+                             "[L256-REG] event={} op=fs.write.end pid={} title_id=0x{:016X} "
+                             "path={} requested={} written=0 result=0x{:08X} host_error_code={} "
+                             "host_error={}",
+                             end_event, caller_pid, caller_title,
+                             Level256RegistrationDiagnostics::SafePathLabel(guest_path), length,
+                             written.Code().raw, host_error_code, host_error);
+                }
+            }
             rb.Push(written.Code());
             rb.Push<u32>(0);
         } else {
+            if (diagnostic_event != 0) {
+                const u32 end_event = Level256RegistrationDiagnostics::NextEventId();
+                if (end_event != 0) {
+                    LOG_INFO(Service_FS,
+                             "[L256-REG] event={} op=fs.write.end pid={} title_id=0x{:016X} "
+                             "path={} requested={} written={} result=0x{:08X} host_error_code={} "
+                             "host_error={}",
+                             end_event, caller_pid, caller_title,
+                             Level256RegistrationDiagnostics::SafePathLabel(guest_path), length,
+                             *written, ResultSuccess.raw, host_error_code, host_error);
+                }
+            }
             rb.Push(ResultSuccess);
             rb.Push<u32>(static_cast<u32>(*written));
         }
@@ -219,6 +279,12 @@ void File::Write(Kernel::HLERequestContext& ctx) {
         u64 offset;
         bool flush;
         bool update_timestamp;
+        u32 caller_pid;
+        u64 caller_title;
+        u32 diagnostic_event;
+        std::string guest_path;
+        int host_error_code{};
+        std::string host_error;
         Kernel::MappedBuffer* buffer;
         FileSessionSlot* file;
 
@@ -230,6 +296,10 @@ void File::Write(Kernel::HLERequestContext& ctx) {
     async_data->offset = offset;
     async_data->flush = flush;
     async_data->update_timestamp = update_timestamp;
+    async_data->caller_pid = caller_pid;
+    async_data->caller_title = caller_title;
+    async_data->diagnostic_event = diagnostic_event;
+    async_data->guest_path = guest_path;
     async_data->buffer = &buffer;
     async_data->file = file;
 
@@ -239,6 +309,12 @@ void File::Write(Kernel::HLERequestContext& ctx) {
             async_data->buffer->Read(data.data(), 0, data.size());
             async_data->written = backend->Write(async_data->offset, data.size(), async_data->flush,
                                                  async_data->update_timestamp, data.data());
+            async_data->host_error_code = Common::GetLastErrorCode();
+            async_data->host_error =
+                async_data->written.Failed() ||
+                        (async_data->written.Succeeded() && *async_data->written != data.size())
+                    ? Common::NativeErrorToString(async_data->host_error_code)
+                    : std::string{"none"};
 
             // Update file size
             async_data->file->size = backend->GetSize();
@@ -246,6 +322,21 @@ void File::Write(Kernel::HLERequestContext& ctx) {
         },
         [async_data](Kernel::HLERequestContext& ctx) {
             IPC::RequestBuilder rb(ctx, 2, 2);
+            if (async_data->diagnostic_event != 0) {
+                const u32 end_event = Level256RegistrationDiagnostics::NextEventId();
+                if (end_event != 0) {
+                    LOG_INFO(Service_FS,
+                             "[L256-REG] event={} op=fs.write.end pid={} title_id=0x{:016X} "
+                             "path={} requested={} written={} result=0x{:08X} host_error_code={} "
+                             "host_error={}",
+                             end_event, async_data->caller_pid, async_data->caller_title,
+                             Level256RegistrationDiagnostics::SafePathLabel(async_data->guest_path),
+                             async_data->length,
+                             async_data->written.Succeeded() ? *async_data->written : 0,
+                             async_data->written.Code().raw, async_data->host_error_code,
+                             async_data->host_error);
+                }
+            }
             if (async_data->written.Failed()) {
                 rb.Push(async_data->written.Code());
                 rb.Push<u32>(0);
@@ -304,6 +395,15 @@ void File::SetSize(Kernel::HLERequestContext& ctx) {
 
 void File::Close(Kernel::HLERequestContext& ctx) {
     IPC::RequestParser rp(ctx);
+    const std::string guest_path = path.DebugStr();
+    const u32 diagnostic_event = Level256RegistrationDiagnostics::IsAccountPath(guest_path)
+                                     ? Level256RegistrationDiagnostics::NextEventId()
+                                     : 0;
+    const auto caller_thread = ctx.ClientThread();
+    const auto caller_process = caller_thread ? caller_thread->owner_process.lock() : nullptr;
+    const u32 caller_pid = caller_process ? caller_process->process_id : 0;
+    const u64 caller_title =
+        caller_process && caller_process->codeset ? caller_process->codeset->program_id : 0;
 
     // TODO(Subv): Only close the backend if this client is the only one left.
     if (connected_sessions.size() > 1)
@@ -311,15 +411,46 @@ void File::Close(Kernel::HLERequestContext& ctx) {
                     connected_sessions.size());
 
     if (!backend->AllowsCachedReads() && !Settings::values.async_fs_operations) {
-        backend->Close();
+        const bool backend_closed = backend->Close();
+        if (backend_closed && diagnostics_open_tracked) {
+            Level256RegistrationDiagnostics::UntrackOpenFile(guest_path);
+            diagnostics_open_tracked = false;
+        }
+        if (diagnostic_event != 0) {
+            const u32 end_event = Level256RegistrationDiagnostics::NextEventId();
+            if (end_event != 0) {
+                LOG_INFO(Service_FS,
+                         "[L256-REG] event={} op=fs.close pid={} title_id=0x{:016X} path={} "
+                         "backend_closed={} ipc_result=0x{:08X}",
+                         end_event, caller_pid, caller_title,
+                         Level256RegistrationDiagnostics::SafePathLabel(guest_path), backend_closed,
+                         ResultSuccess.raw);
+            }
+        }
         IPC::RequestBuilder rb = rp.MakeBuilder(1, 0);
         rb.Push(ResultSuccess);
         return;
     }
 
     ctx.RunAsync(
-        [this](Kernel::HLERequestContext& ctx) {
-            backend->Close();
+        [this, guest_path, diagnostic_event, caller_pid,
+         caller_title](Kernel::HLERequestContext& ctx) {
+            const bool backend_closed = backend->Close();
+            if (backend_closed && diagnostics_open_tracked) {
+                Level256RegistrationDiagnostics::UntrackOpenFile(guest_path);
+                diagnostics_open_tracked = false;
+            }
+            if (diagnostic_event != 0) {
+                const u32 end_event = Level256RegistrationDiagnostics::NextEventId();
+                if (end_event != 0) {
+                    LOG_INFO(Service_FS,
+                             "[L256-REG] event={} op=fs.close pid={} title_id=0x{:016X} path={} "
+                             "backend_closed={} ipc_result=0x{:08X}",
+                             end_event, caller_pid, caller_title,
+                             Level256RegistrationDiagnostics::SafePathLabel(guest_path),
+                             backend_closed, ResultSuccess.raw);
+                }
+            }
             return 0;
         },
         [](Kernel::HLERequestContext& ctx) {
@@ -331,6 +462,15 @@ void File::Close(Kernel::HLERequestContext& ctx) {
 
 void File::Flush(Kernel::HLERequestContext& ctx) {
     IPC::RequestParser rp(ctx);
+    const std::string guest_path = path.DebugStr();
+    const u32 diagnostic_event = Level256RegistrationDiagnostics::IsAccountPath(guest_path)
+                                     ? Level256RegistrationDiagnostics::NextEventId()
+                                     : 0;
+    const auto caller_thread = ctx.ClientThread();
+    const auto caller_process = caller_thread ? caller_thread->owner_process.lock() : nullptr;
+    const u32 caller_pid = caller_process ? caller_process->process_id : 0;
+    const u64 caller_title =
+        caller_process && caller_process->codeset ? caller_process->codeset->program_id : 0;
 
     const FileSessionSlot* file = GetSessionData(ctx.Session());
 
@@ -344,12 +484,35 @@ void File::Flush(Kernel::HLERequestContext& ctx) {
     if (!backend->AllowsCachedReads() && !Settings::values.async_fs_operations) {
         IPC::RequestBuilder rb = rp.MakeBuilder(1, 0);
         backend->Flush();
+        if (diagnostic_event != 0) {
+            const u32 end_event = Level256RegistrationDiagnostics::NextEventId();
+            if (end_event != 0) {
+                LOG_INFO(Service_FS,
+                         "[L256-REG] event={} op=fs.flush pid={} title_id=0x{:016X} path={} "
+                         "backend_status=not_exposed ipc_result=0x{:08X}",
+                         end_event, caller_pid, caller_title,
+                         Level256RegistrationDiagnostics::SafePathLabel(guest_path),
+                         ResultSuccess.raw);
+            }
+        }
         rb.Push(ResultSuccess);
     }
 
     ctx.RunAsync(
-        [this](Kernel::HLERequestContext& ctx) {
+        [this, guest_path, diagnostic_event, caller_pid,
+         caller_title](Kernel::HLERequestContext& ctx) {
             backend->Flush();
+            if (diagnostic_event != 0) {
+                const u32 end_event = Level256RegistrationDiagnostics::NextEventId();
+                if (end_event != 0) {
+                    LOG_INFO(Service_FS,
+                             "[L256-REG] event={} op=fs.flush pid={} title_id=0x{:016X} path={} "
+                             "backend_status=not_exposed ipc_result=0x{:08X}",
+                             end_event, caller_pid, caller_title,
+                             Level256RegistrationDiagnostics::SafePathLabel(guest_path),
+                             ResultSuccess.raw);
+                }
+            }
             return 0;
         },
         [](Kernel::HLERequestContext& ctx) {

@@ -9,6 +9,7 @@
 #include "core/file_sys/directory_backend.h"
 #include "core/hle/ipc_helpers.h"
 #include "core/hle/service/fs/directory.h"
+#include "core/hle/service/level256_registration_diagnostics.h"
 
 SERIALIZE_EXPORT_IMPL(Service::FS::Directory)
 
@@ -42,6 +43,15 @@ Directory::~Directory() {}
 
 void Directory::Read(Kernel::HLERequestContext& ctx) {
     IPC::RequestParser rp(ctx);
+    const std::string guest_path = path.DebugStr();
+    const u32 diagnostic_event = Level256RegistrationDiagnostics::IsAccountPath(guest_path)
+                                     ? Level256RegistrationDiagnostics::NextEventId()
+                                     : 0;
+    const auto caller_thread = ctx.ClientThread();
+    const auto caller_process = caller_thread ? caller_thread->owner_process.lock() : nullptr;
+    const u32 caller_pid = caller_process ? caller_process->process_id : 0;
+    const u64 caller_title =
+        caller_process && caller_process->codeset ? caller_process->codeset->program_id : 0;
 
     struct AsyncData {
         // Input
@@ -56,6 +66,13 @@ void Directory::Read(Kernel::HLERequestContext& ctx) {
     auto async_data = std::make_shared<AsyncData>();
     async_data->count = rp.Pop<u32>();
     async_data->buffer = &rp.PopMappedBuffer();
+    if (diagnostic_event != 0) {
+        LOG_INFO(Service_FS,
+                 "[L256-REG] event={} op=fs.read_directory.begin pid={} "
+                 "title_id=0x{:016X} path={} requested_entries={}",
+                 diagnostic_event, caller_pid, caller_title,
+                 Level256RegistrationDiagnostics::SafePathLabel(guest_path), async_data->count);
+    }
 
     ctx.RunAsync(
         [this, async_data](Kernel::HLERequestContext& ctx) {
@@ -66,7 +83,19 @@ void Directory::Read(Kernel::HLERequestContext& ctx) {
             async_data->buffer->Write(entries.data(), 0, async_data->read * sizeof(FileSys::Entry));
             return 0;
         },
-        [async_data](Kernel::HLERequestContext& ctx) {
+        [async_data, diagnostic_event, caller_pid, caller_title,
+         guest_path](Kernel::HLERequestContext& ctx) {
+            if (diagnostic_event != 0) {
+                const u32 end_event = Level256RegistrationDiagnostics::NextEventId();
+                if (end_event != 0) {
+                    LOG_INFO(Service_FS,
+                             "[L256-REG] event={} op=fs.read_directory.end pid={} "
+                             "title_id=0x{:016X} path={} entries_read={} result=0x{:08X}",
+                             end_event, caller_pid, caller_title,
+                             Level256RegistrationDiagnostics::SafePathLabel(guest_path),
+                             async_data->read, ResultSuccess.raw);
+                }
+            }
             IPC::RequestBuilder rb(ctx, 2, 2);
 
             rb.Push(ResultSuccess);
@@ -78,11 +107,33 @@ void Directory::Read(Kernel::HLERequestContext& ctx) {
 
 void Directory::Close(Kernel::HLERequestContext& ctx) {
     IPC::RequestParser rp(ctx);
+    const std::string guest_path = path.DebugStr();
+    const u32 diagnostic_event = Level256RegistrationDiagnostics::IsAccountPath(guest_path)
+                                     ? Level256RegistrationDiagnostics::NextEventId()
+                                     : 0;
+    const auto caller_thread = ctx.ClientThread();
+    const auto caller_process = caller_thread ? caller_thread->owner_process.lock() : nullptr;
+    const u32 caller_pid = caller_process ? caller_process->process_id : 0;
+    const u64 caller_title =
+        caller_process && caller_process->codeset ? caller_process->codeset->program_id : 0;
     LOG_TRACE(Service_FS, "Close {}", GetName());
 
     ctx.RunAsync(
-        [this](Kernel::HLERequestContext& ctx) {
+        [this, diagnostic_event, caller_pid, caller_title,
+         guest_path](Kernel::HLERequestContext& ctx) {
             backend->Close();
+            if (diagnostic_event != 0) {
+                const u32 end_event = Level256RegistrationDiagnostics::NextEventId();
+                if (end_event != 0) {
+                    LOG_INFO(Service_FS,
+                             "[L256-REG] event={} op=fs.close_directory pid={} "
+                             "title_id=0x{:016X} path={} backend_status=not_exposed "
+                             "ipc_result=0x{:08X}",
+                             end_event, caller_pid, caller_title,
+                             Level256RegistrationDiagnostics::SafePathLabel(guest_path),
+                             ResultSuccess.raw);
+                }
+            }
             return 0;
         },
         [](Kernel::HLERequestContext& ctx) {

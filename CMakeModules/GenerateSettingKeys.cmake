@@ -28,6 +28,7 @@ foreach(KEY IN ITEMS
     "allow_plugin_loader"
     "level256_compatibility_enabled"
     "level256_bootloader_diagnostics_enabled"
+    "level256_registration_diagnostics_enabled"
     "steps_per_hour"
     "apply_region_free_patch"
     "graphics_api"

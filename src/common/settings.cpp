@@ -168,6 +168,8 @@ void LogSettings() {
                 values.level256_compatibility_enabled.GetValue());
     log_setting("System_Level256BootloaderDiagnosticsEnabled",
                 values.level256_bootloader_diagnostics_enabled.GetValue());
+    log_setting("System_Level256RegistrationDiagnosticsEnabled",
+                values.level256_registration_diagnostics_enabled.GetValue());
     log_setting("System_ApplyRegionFreePatch", values.apply_region_free_patch.GetValue());
     log_setting("Debugging_DelayStartForLLEModules", values.delay_start_for_lle_modules.GetValue());
     log_setting("Debugging_UseGdbstub", values.use_gdbstub.GetValue());

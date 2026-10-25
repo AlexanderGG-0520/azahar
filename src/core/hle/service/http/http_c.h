@@ -284,6 +284,8 @@ public:
 
     Handle handle;
     u32 session_id;
+    u32 client_process_id{};
+    u64 client_title_id{};
     std::string url;
     RequestMethod method;
     std::atomic<RequestState> state = RequestState::NotStarted;
