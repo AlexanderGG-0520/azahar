@@ -28,6 +28,7 @@ jobs:
     outputs:
       version: ${{ steps.version.outputs.version }}
       should_publish: ${{ steps.version.outputs.should_publish }}
+      tag_target: ${{ steps.version.outputs.tag_target }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -58,7 +59,14 @@ jobs:
                   "$REQUESTED_DRY_RUN" == "false" ]]; then
             should_publish=true
           fi
+          tag_target="$GITHUB_SHA"
+          if [[ "$GITHUB_EVENT_NAME" == "push" && "$should_publish" == "true" ]]; then
+            # The release-trigger marker is a dedicated commit on top of the tested source.
+            # Keep the tag on that tested source commit, not on the marker-only commit.
+            tag_target="$(git rev-parse HEAD^)"
+          fi
           echo "should_publish=$should_publish" >> "$GITHUB_OUTPUT"
+          echo "tag_target=$tag_target" >> "$GITHUB_OUTPUT"
           echo "Version: $version, publish: $should_publish"
 
   windows-msys2:
@@ -189,6 +197,7 @@ jobs:
       contents: write
     env:
       VERSION: ${{ needs.prepare.outputs.version }}
+      TAG_TARGET: ${{ needs.prepare.outputs.tag_target }}
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
     steps:
@@ -201,9 +210,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          title="Azahar YW Compatibility Fork ${VERSION#yw-}"
+          title="Azahar YW Compatibility Fork v${VERSION#yw-}"
           if ! gh release view "$VERSION" >/dev/null 2>&1; then
-            gh release create "$VERSION" --target "$GITHUB_SHA" \
+            gh release create "$VERSION" --target "$TAG_TARGET" \
               --title "$title" --notes-file "docs/releases/${VERSION}.md" \
               --prerelease
           fi
