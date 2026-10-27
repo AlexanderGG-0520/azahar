@@ -570,6 +570,37 @@ TEST_CASE("ServiceManager resolves SRV from its production named port",
     REQUIRE_FALSE(env.manager.GetSRV());
 }
 
+TEST_CASE("Clearing an exited process handle table releases its plg:ldr client session",
+          "[core][kernel][process][integration][level256]") {
+    TestEnvironment env;
+    auto [server_port, client_port] = env.kernel.CreatePortPair(1, "plg:ldr");
+    server_port->SetHleHandler(std::make_shared<MockNwmUds>());
+
+    const auto run_process = [&](u64 title_id) {
+        auto process = env.kernel.CreateProcess(env.kernel.CreateCodeSet("game", title_id));
+        process->resource_limit =
+            env.kernel.ResourceLimit().GetForCategory(Kernel::ResourceLimitCategory::Application);
+        process->status = Kernel::ProcessStatus::Running;
+
+        std::shared_ptr<Kernel::ClientSession> session;
+        REQUIRE(client_port->Connect(&session) == ResultSuccess);
+        Kernel::Handle handle{};
+        REQUIRE(process->handle_table.Create(&handle, session) == ResultSuccess);
+        session.reset();
+
+        REQUIRE(client_port->Connect(&session) == Kernel::ResultMaxConnectionsReached);
+        // TerminateProcess must do this even while another subsystem still owns `process`.
+        process->handle_table.Clear();
+        REQUIRE_FALSE(process->handle_table.IsValid(handle));
+        REQUIRE(client_port->Connect(&session) == ResultSuccess);
+        session.reset();
+    };
+
+    run_process(0x000400000016C700ULL);
+    run_process(0x000400000016C600ULL);
+    run_process(0x000400000016C700ULL);
+}
+
 TEST_CASE("SRV wakes every process-scoped delayed lookup when guest service registers",
           "[core][service][sm][integration]") {
     TestEnvironment env;
