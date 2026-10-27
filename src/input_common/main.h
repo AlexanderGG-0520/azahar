@@ -25,6 +25,11 @@ class Keyboard;
 /// Gets the keyboard button device factory.
 Keyboard* GetKeyboard();
 
+class Mouse;
+
+/// Gets the mouse button input factory.
+Mouse* GetMouse();
+
 class MotionEmu;
 
 /// Gets the motion emulation factory.

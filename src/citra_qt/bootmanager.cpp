@@ -2,10 +2,12 @@
 // Licensed under GPLv2 or any later version
 // Refer to the license.txt file included.
 
+#include <optional>
 #include <QApplication>
 #include <QHBoxLayout>
 #include <QKeyEvent>
 #include <QMessageBox>
+#include <QMouseEvent>
 #include <QPainter>
 #include <QWindow>
 #include "citra_qt/bootmanager.h"
@@ -13,6 +15,7 @@
 #include "citra_qt/util/util.h"
 #include "common/color.h"
 #include "common/microprofile.h"
+#include "common/param_package.h"
 #include "common/scm_rev.h"
 #include "common/settings.h"
 #include "core/3ds.h"
@@ -600,7 +603,9 @@ GRenderWindow::GRenderWindow(QWidget* parent_, EmuThread* emu_thread_, Core::Sys
     connect(this, &GRenderWindow::FirstFrameDisplayed, parent, &GMainWindow::OnLoadComplete);
 }
 
-GRenderWindow::~GRenderWindow() = default;
+GRenderWindow::~GRenderWindow() {
+    ReleaseMouseInput();
+}
 
 void GRenderWindow::MakeCurrent() {
     (void)TryMakeCurrent();
@@ -675,8 +680,54 @@ std::pair<u32, u32> GRenderWindow::ScaleTouch(const QPointF pos) const {
 }
 
 void GRenderWindow::closeEvent(QCloseEvent* event) {
+    ReleaseMouseInput();
     emit Closed();
     QWidget::closeEvent(event);
+}
+
+void GRenderWindow::ReleaseMouseInput() {
+    const auto released = mouse_button_routing.ReleaseAll();
+    auto* mouse = InputCommon::GetMouse();
+    for (std::size_t i = 0; i < released.size(); ++i) {
+        if (released[i] == InputCommon::MouseButtonTarget::Button && mouse) {
+            mouse->ReleaseButton(static_cast<InputCommon::MouseButton>(i));
+        }
+    }
+    TouchReleased();
+    if (auto* keyboard = InputCommon::GetKeyboard()) {
+        keyboard->ReleaseAllKeys();
+    }
+    if (auto* motion = InputCommon::GetMotionEmu()) {
+        motion->EndTilt();
+    }
+}
+
+static std::optional<InputCommon::MouseButton> ToInputMouseButton(Qt::MouseButton button) {
+    switch (button) {
+    case Qt::LeftButton:
+        return InputCommon::MouseButton::Left;
+    case Qt::RightButton:
+        return InputCommon::MouseButton::Right;
+    case Qt::MiddleButton:
+        return InputCommon::MouseButton::Middle;
+    case Qt::BackButton:
+        return InputCommon::MouseButton::Back;
+    case Qt::ForwardButton:
+        return InputCommon::MouseButton::Forward;
+    default:
+        return std::nullopt;
+    }
+}
+
+static bool IsMouseButtonMapped(InputCommon::MouseButton button) {
+    for (const auto& mapping : Settings::values.current_input_profile.buttons) {
+        const Common::ParamPackage params{mapping};
+        if (params.Get("engine", "") == "mouse" &&
+            params.Get("button", -1) == static_cast<int>(button)) {
+            return true;
+        }
+    }
+    return false;
 }
 
 void GRenderWindow::keyPressEvent(QKeyEvent* event) {
@@ -692,12 +743,32 @@ void GRenderWindow::mousePressEvent(QMouseEvent* event) {
         return; // touch input is handled in TouchBeginEvent
     }
 
-    auto pos = event->pos();
-    if (event->button() == Qt::LeftButton) {
-        const auto [x, y] = ScaleTouch(pos);
-        this->TouchPressed(x, y);
-    } else if (event->button() == Qt::RightButton) {
-        InputCommon::GetMotionEmu()->BeginTilt(pos.x(), pos.y());
+    const auto pos = event->pos();
+    const auto mapped_button = ToInputMouseButton(event->button());
+    if (mapped_button) {
+        const auto already_pressed = mouse_button_routing.GetTarget(*mapped_button);
+        if (already_pressed == InputCommon::MouseButtonTarget::None) {
+            const auto [x, y] = ScaleTouch(pos);
+            const bool inside_touchscreen = IsWithinTouchscreen(GetFramebufferLayout(), x, y);
+            const bool button_mapped = IsMouseButtonMapped(*mapped_button);
+            const bool prefer_touch =
+                Settings::values.current_input_profile.prefer_touchscreen_over_mouse_buttons;
+            const auto target = InputCommon::SelectMouseButtonTarget(
+                *mapped_button, inside_touchscreen, button_mapped, prefer_touch);
+            mouse_button_routing.Press(*mapped_button, target);
+            if (target == InputCommon::MouseButtonTarget::Touch) {
+                this->TouchPressed(x, y);
+            } else if (target == InputCommon::MouseButtonTarget::Button) {
+                if (auto* mouse = InputCommon::GetMouse()) {
+                    mouse->PressButton(*mapped_button);
+                }
+            }
+        }
+    }
+    if (event->button() == Qt::RightButton) {
+        if (auto* motion = InputCommon::GetMotionEmu()) {
+            motion->BeginTilt(pos.x(), pos.y());
+        }
     }
     emit MouseActivity();
 }
@@ -708,9 +779,14 @@ void GRenderWindow::mouseMoveEvent(QMouseEvent* event) {
     }
 
     auto pos = event->pos();
-    const auto [x, y] = ScaleTouch(pos);
-    this->TouchMoved(x, y);
-    InputCommon::GetMotionEmu()->Tilt(pos.x(), pos.y());
+    if (mouse_button_routing.GetTarget(InputCommon::MouseButton::Left) ==
+        InputCommon::MouseButtonTarget::Touch) {
+        const auto [x, y] = ScaleTouch(pos);
+        this->TouchMoved(x, y);
+    }
+    if (auto* motion = InputCommon::GetMotionEmu()) {
+        motion->Tilt(pos.x(), pos.y());
+    }
     emit MouseActivity();
 }
 
@@ -719,10 +795,21 @@ void GRenderWindow::mouseReleaseEvent(QMouseEvent* event) {
         return; // touch input is handled in TouchEndEvent
     }
 
-    if (event->button() == Qt::LeftButton)
-        this->TouchReleased();
-    else if (event->button() == Qt::RightButton)
-        InputCommon::GetMotionEmu()->EndTilt();
+    if (const auto button = ToInputMouseButton(event->button())) {
+        const auto target = mouse_button_routing.Release(*button);
+        if (target == InputCommon::MouseButtonTarget::Touch) {
+            this->TouchReleased();
+        } else if (target == InputCommon::MouseButtonTarget::Button) {
+            if (auto* mouse = InputCommon::GetMouse()) {
+                mouse->ReleaseButton(*button);
+            }
+        }
+    }
+    if (event->button() == Qt::RightButton) {
+        if (auto* motion = InputCommon::GetMotionEmu()) {
+            motion->EndTilt();
+        }
+    }
     emit MouseActivity();
 }
 
@@ -775,9 +862,7 @@ bool GRenderWindow::event(QEvent* event) {
 
 void GRenderWindow::focusOutEvent(QFocusEvent* event) {
     QWidget::focusOutEvent(event);
-    if (auto* keyboard = InputCommon::GetKeyboard(); keyboard) {
-        keyboard->ReleaseAllKeys();
-    }
+    ReleaseMouseInput();
     has_focus = false;
 }
 
@@ -988,6 +1073,7 @@ void GRenderWindow::OnEmulationStarting(EmuThread* emu_thread) {
 }
 
 void GRenderWindow::OnEmulationStopping() {
+    ReleaseMouseInput();
     emu_thread = nullptr;
 }
 

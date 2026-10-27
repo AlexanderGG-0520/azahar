@@ -424,6 +424,8 @@ void QtConfig::ReadControlValues() {
                 .toStdString();
         profile.use_touch_from_button =
             ReadSetting(Settings::QKeys::use_touch_from_button, false).toBool();
+        profile.prefer_touchscreen_over_mouse_buttons =
+            ReadSetting(QStringLiteral("prefer_touchscreen_over_mouse_buttons"), true).toBool();
         profile.touch_from_button_map_index =
             ReadSetting(Settings::QKeys::touch_from_button_map, 0).toInt();
         profile.touch_from_button_map_index =
@@ -1036,6 +1038,8 @@ void QtConfig::SaveControlValues() {
         WriteSetting(Settings::QKeys::controller_touch_device,
                      QString::fromStdString(profile.controller_touch_device), QStringLiteral(""));
         WriteSetting(Settings::QKeys::use_touch_from_button, profile.use_touch_from_button, false);
+        WriteSetting(QStringLiteral("prefer_touchscreen_over_mouse_buttons"),
+                     profile.prefer_touchscreen_over_mouse_buttons, true);
         WriteSetting(Settings::QKeys::touch_from_button_map, profile.touch_from_button_map_index,
                      0);
         WriteSetting(Settings::QKeys::udp_input_address,

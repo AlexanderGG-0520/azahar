@@ -14,6 +14,7 @@
 #include "input_common/keyboard.h"
 #include "input_common/main.h"
 #include "input_common/motion_emu.h"
+#include "input_common/mouse.h"
 #include "input_common/sdl/sdl.h"
 #include "input_common/sdl/sdl_impl.h"
 #include "input_common/touch_from_button.h"
@@ -27,6 +28,7 @@ std::shared_ptr<GCAnalogFactory> gcanalog;
 std::shared_ptr<GCAdapter::Adapter> gcadapter;
 #endif
 static std::shared_ptr<Keyboard> keyboard;
+static std::shared_ptr<Mouse> mouse;
 static std::shared_ptr<MotionEmu> motion_emu;
 static std::unique_ptr<CemuhookUDP::State> udp;
 static std::unique_ptr<SDL::State> sdl;
@@ -41,6 +43,8 @@ void Init() {
 #endif
     keyboard = std::make_shared<Keyboard>();
     Input::RegisterFactory<Input::ButtonDevice>("keyboard", keyboard);
+    mouse = std::make_shared<Mouse>();
+    Input::RegisterFactory<Input::ButtonDevice>("mouse", mouse);
     Input::RegisterFactory<Input::AnalogDevice>("analog_from_button",
                                                 std::make_shared<AnalogFromButton>());
     motion_emu = std::make_shared<MotionEmu>();
@@ -62,6 +66,8 @@ void Shutdown() {
 #endif
     Input::UnregisterFactory<Input::ButtonDevice>("keyboard");
     keyboard.reset();
+    Input::UnregisterFactory<Input::ButtonDevice>("mouse");
+    mouse.reset();
     Input::UnregisterFactory<Input::AnalogDevice>("analog_from_button");
     Input::UnregisterFactory<Input::MotionDevice>("motion_emu");
     motion_emu.reset();
@@ -80,6 +86,23 @@ std::string ButtonToText(const Common::ParamPackage& param) {
     // to be handled at the frontend
     if (engine_str == "keyboard") {
         return param.Serialize();
+    }
+
+    if (engine_str == "mouse") {
+        switch (param.Get("button", -1)) {
+        case static_cast<int>(MouseButton::Left):
+            return "Mouse Left";
+        case static_cast<int>(MouseButton::Right):
+            return "Mouse Right";
+        case static_cast<int>(MouseButton::Middle):
+            return "Mouse Middle";
+        case static_cast<int>(MouseButton::Back):
+            return "Mouse Back";
+        case static_cast<int>(MouseButton::Forward):
+            return "Mouse Forward";
+        default:
+            return {};
+        }
     }
 
     if (engine_str == "sdl") {
@@ -172,6 +195,10 @@ std::string AnalogToText(const Common::ParamPackage& param, const std::string& d
 
 Keyboard* GetKeyboard() {
     return keyboard.get();
+}
+
+Mouse* GetMouse() {
+    return mouse.get();
 }
 
 MotionEmu* GetMotionEmu() {

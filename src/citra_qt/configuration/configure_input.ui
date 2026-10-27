@@ -1164,6 +1164,13 @@
        </property>
       </widget>
      </item>
+     <item>
+      <widget class="QCheckBox" name="prefer_touchscreen_over_mouse_buttons">
+       <property name="text">
+        <string>Prioritize touchscreen input over mouse button mappings on the bottom screen</string>
+       </property>
+      </widget>
+     </item>
     </layout>
    </item>
   </layout>
