@@ -914,37 +914,7 @@ void PLG_LDR::OnProcessExit(Kernel::Process& process, Kernel::KernelSystem& kern
                 ->Free(plgldr_context.memory_block.first, plgldr_context.memory_block.second);
             plgldr_context.memory_region = static_cast<Kernel::MemoryRegion>(0);
         }
-        plgldr_context.plugin_loaded = false;
-        plgldr_context.plugin_process_id = UINT32_MAX;
-        plgldr_context.ResetTransientLevel256Authorization();
-        plgldr_context.ctrpf_osd_scan = {};
-        plgldr_context.ctrpf_osd_candidate_initial_words = {};
-        plgldr_context.ctrpf_osd_post_init_compared = false;
-        plgldr_context.ctrpf_arbiter_watch_started = false;
-        plgldr_context.ctrpf_arbiter_watch_handle = 0;
-        plgldr_context.ctrpf_arbiter_watch_address = 0;
-        plgldr_context.ctrpf_arbiter_watch_object = 0;
-        plgldr_context.ctrpf_arbiter_trace_count = 0;
-        plgldr_context.ctrpf_startup_watch_counts = {};
-        plgldr_context.ctrpf_osd_candidate_execution_seen = false;
-        plgldr_context.plugin_code_reached = false;
-        plgldr_context.plugin_code_begin = 0;
-        plgldr_context.plugin_code_end = 0;
-        plgldr_context.plugin_data_begin = 0;
-        plgldr_context.plugin_data_end = 0;
-        plgldr_context.plugin_bootloader_begin = 0;
-        plgldr_context.plugin_bootloader_end = 0;
-        plgldr_context.plugin_trace_count = 0;
-        plgldr_context.plugin_get_system_info_seen = false;
-        plgldr_context.plugin_trace_thread_id = UINT32_MAX;
-        plgldr_context.plugin_followup_trace_count = 0;
-        plgldr_context.plugin_last_return_pc = 0;
-        plgldr_context.plugin_instruction_trace_started = false;
-        plgldr_context.plugin_service_trace_count = 0;
-        plgldr_context.plugin_query_process_memory_failures = 0;
-        plgldr_context.level256_open_process_trace_started = false;
-        plgldr_context.level256_thread_create_log_count = 0;
-        plgldr_context.memory_changed_handle = 0;
+        plgldr_context.ResetProcessState();
         LOG_INFO(Service_PLGLDR, "Plugin unloaded successfully.");
     }
 }

@@ -194,6 +194,15 @@ public:
             level256_lfcs_request_count = 0;
         }
 
+        /// Discard state owned by the current guest process while retaining loader preferences.
+        void ResetProcessState() {
+            const bool was_enabled = is_enabled;
+            const bool was_game_change_allowed = allow_game_change;
+            *this = PluginLoaderContext{};
+            is_enabled = was_enabled;
+            allow_game_change = was_game_change_allowed;
+        }
+
         bool use_user_load_parameters = false;
         PluginLoadParameters user_load_parameters;
 

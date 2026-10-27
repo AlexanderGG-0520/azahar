@@ -1,8 +1,8 @@
 // Copyright 2026 Azahar Emulator Project
 // Licensed under GPLv2 or any later version
 
-#include "core/hle/service/plgldr/plugin_path.h"
 #include <catch2/catch_test_macros.hpp>
+#include "core/hle/service/plgldr/plugin_path.h"
 
 TEST_CASE("Level256 plugin path is preferred only for supported titles", "[core][plgldr]") {
     using Service::PLGLDR::ChoosePluginPathSource;
@@ -27,10 +27,28 @@ TEST_CASE("Level256 plugin path is preferred only for supported titles", "[core]
 }
 
 TEST_CASE("GetPluginPath exposes the selected SDMC path to the guest", "[core][plgldr]") {
-    REQUIRE(Service::PLGLDR::MakeGuestPluginPath(
-                "/emulator/sdmc/Level256/plugin/Level256.3gx", "/emulator/sdmc/") ==
+    REQUIRE(Service::PLGLDR::MakeGuestPluginPath("/emulator/sdmc/Level256/plugin/Level256.3gx",
+                                                 "/emulator/sdmc/") ==
             "/Level256/plugin/Level256.3gx");
-    REQUIRE(Service::PLGLDR::MakeGuestPluginPath(
-                "\\emulator\\sdmc\\luma\\plugins\\default.3gx", "/emulator/sdmc/") ==
-            "/luma/plugins/default.3gx");
+    REQUIRE(Service::PLGLDR::MakeGuestPluginPath("\\emulator\\sdmc\\luma\\plugins\\default.3gx",
+                                                 "/emulator/sdmc/") == "/luma/plugins/default.3gx");
+}
+
+TEST_CASE("Level256 selection stays on its install path across title changes",
+          "[core][plgldr][level256][lifecycle]") {
+    using Service::PLGLDR::ChoosePluginPathSource;
+    using Service::PLGLDR::PluginPathSource;
+
+    constexpr u64 title_a = 0x000400000016C700ULL;
+    constexpr u64 title_b = 0x000400000016C600ULL;
+    constexpr u64 unsupported_title = 0x0004000000999900ULL;
+    const std::string level256_path = "/Level256/plugin/Level256.3gx";
+
+    REQUIRE(ChoosePluginPathSource(title_a, true, false, true, true) == PluginPathSource::Level256);
+    REQUIRE(ChoosePluginPathSource(title_b, true, false, true, true) == PluginPathSource::Level256);
+    REQUIRE(ChoosePluginPathSource(unsupported_title, true, false, true, true) ==
+            PluginPathSource::TitleSpecific);
+    REQUIRE(ChoosePluginPathSource(title_a, true, false, true, true) == PluginPathSource::Level256);
+    REQUIRE(MakeGuestPluginPath("/emulator/sdmc" + level256_path, "/emulator/sdmc") ==
+            level256_path);
 }
