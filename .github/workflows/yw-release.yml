@@ -624,7 +624,7 @@ jobs:
           path: site
 
   deploy-pacman-repository:
-    if: needs.prepare.outputs.publish_pacman == 'true'
+    if: always() && needs.prepare.outputs.publish_pacman == 'true' && needs.pacman-repository.result == 'success'
     needs: [prepare, pacman-repository]
     runs-on: ubuntu-latest
     permissions:
