@@ -8,6 +8,7 @@ on:
     paths:
       - ".github/release-trigger/**"
       - ".github/release-cleanup/**"
+      - ".github/pacman-repo-trigger/**"
       - ".github/release-dry-run/**"
       - ".github/workflows/yw-release.yml"
       - ".ci/android.sh"
@@ -16,19 +17,21 @@ on:
       - "CMakeLists.txt"
       - ".gitmodules"
       - "packaging/aur/**"
+      - "packaging/pacman-repo/**"
       - "dist/azahar.desktop"
       - "dist/azahar.svg"
       - "dist/azahar.png"
   workflow_dispatch:
     inputs:
       build_target:
-        description: Build all release targets or Android only
+        description: Build all release targets, Android only, or the pacman repository
         type: choice
         required: true
         default: all
         options:
           - all
           - android
+          - pacman
       dry_run:
         description: Build and check artifacts without publishing a GitHub Release
         type: boolean
@@ -51,6 +54,7 @@ jobs:
       require_release_signing: ${{ steps.version.outputs.require_release_signing }}
       tag_target: ${{ steps.version.outputs.tag_target }}
       build_target: ${{ steps.version.outputs.build_target }}
+      publish_pacman: ${{ steps.version.outputs.publish_pacman }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -64,19 +68,22 @@ jobs:
           ANDROID_KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEYSTORE_PASS: ${{ secrets.ANDROID_KEYSTORE_PASS }}
+          PACMAN_REPO_GPG_PRIVATE_KEY: ${{ secrets.PACMAN_REPO_GPG_PRIVATE_KEY }}
+          PACMAN_REPO_GPG_PASSPHRASE: ${{ secrets.PACMAN_REPO_GPG_PASSPHRASE }}
         run: |
           set -euo pipefail
           build_target="${REQUESTED_BUILD_TARGET:-all}"
           # workflow_dispatch always supplies its boolean; push events have no
           # dry_run input and require an explicit release marker instead.
           dry_run="${REQUESTED_DRY_RUN:-false}"
+          publish_pacman=false
           if [[ "$GITHUB_EVENT_NAME" == "push" && "$GITHUB_REF_NAME" == "integration/yw" ]]; then
             # Integration pushes that touch this workflow or build inputs are always
             # non-publishing Android validation runs.
             build_target=android
             dry_run=true
           fi
-          if [[ "$build_target" != "all" && "$build_target" != "android" ]]; then
+          if [[ "$build_target" != "all" && "$build_target" != "android" && "$build_target" != "pacman" ]]; then
             echo "::error::Unsupported build_target: $build_target"
             exit 1
           fi
@@ -95,29 +102,43 @@ jobs:
           elif [[ "$GITHUB_REF_NAME" =~ ^release/yw-v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             version="${GITHUB_REF_NAME#release/}"
 
+            pacman_marker=".github/pacman-repo-trigger/$version"
             cleanup_marker=".github/release-cleanup/$version"
-            if [[ "$GITHUB_EVENT_NAME" == "push" && -f "$cleanup_marker" ]] &&
-               git diff --name-only HEAD^ HEAD | grep -Fxq "$cleanup_marker"; then
+            if [[ "$GITHUB_EVENT_NAME" == "push" && -f "$pacman_marker" ]] &&
+               git diff --name-only HEAD^ HEAD | grep -Fxq "$pacman_marker"; then
+              build_target=pacman
+              should_publish=false
+              publish_pacman=true
+              require_release_signing=false
+              tag_target="$GITHUB_SHA"
+            elif [[ "$GITHUB_EVENT_NAME" == "push" && -f "$cleanup_marker" ]] &&
+                 git diff --name-only HEAD^ HEAD | grep -Fxq "$cleanup_marker"; then
               # Release-asset cleanup operates on an existing release and does
               # not build or publish new binaries.
               build_target=cleanup
               should_publish=false
+              publish_pacman=false
               require_release_signing=false
               tag_target="$GITHUB_SHA"
             else
             # Every release-branch build must be promotable. Do this check in
             # prepare so a missing signing key cannot waste the desktop builds
             # or produce a successful dry-run with a debug-only APK.
-            require_release_signing=true
-            if [[ -z "${ANDROID_KEYSTORE_B64:-}" ||
+            require_release_signing=false
+            if [[ "$build_target" != "pacman" ]]; then
+              require_release_signing=true
+            fi
+            if [[ "$require_release_signing" == "true" &&
+                  ( -z "${ANDROID_KEYSTORE_B64:-}" ||
                   -z "${ANDROID_KEY_ALIAS:-}" ||
-                  -z "${ANDROID_KEYSTORE_PASS:-}" ]]; then
+                  -z "${ANDROID_KEYSTORE_PASS:-}" ) ]]; then
               echo "::error::Release-branch builds require the fixed Android release signing secrets, including dry-runs."
               exit 1
             fi
 
             # Fail closed. A dry-run marker must never publish a release.
             should_publish=false
+            publish_pacman=false
             if [[ "$GITHUB_EVENT_NAME" == "push" ]]; then
               # Only an explicitly changed release-trigger marker may publish.
               # Full history keeps the marker commit's parent available for validation.
@@ -127,11 +148,14 @@ jobs:
                 should_publish=true
               fi
             elif [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" && "$dry_run" == "false" ]]; then
-              if [[ "$build_target" != "all" ]]; then
+              if [[ "$build_target" == "all" ]]; then
+                should_publish=true
+              elif [[ "$build_target" == "pacman" ]]; then
+                publish_pacman=true
+              else
                 echo "::error::Android-only runs cannot publish a GitHub Release."
                 exit 1
               fi
-              should_publish=true
             fi
 
             tag_target="$GITHUB_SHA"
@@ -146,8 +170,16 @@ jobs:
             exit 1
           fi
 
+          if [[ "$publish_pacman" == "true" &&
+                ( -z "${PACMAN_REPO_GPG_PRIVATE_KEY:-}" ||
+                  -z "${PACMAN_REPO_GPG_PASSPHRASE:-}" ) ]]; then
+            echo "::error::Publishing the pacman repository requires the configured GPG signing key and passphrase secrets."
+            exit 1
+          fi
+
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "should_publish=$should_publish" >> "$GITHUB_OUTPUT"
+          echo "publish_pacman=$publish_pacman" >> "$GITHUB_OUTPUT"
           echo "require_release_signing=$require_release_signing" >> "$GITHUB_OUTPUT"
           echo "build_target=$build_target" >> "$GITHUB_OUTPUT"
           echo "tag_target=$tag_target" >> "$GITHUB_OUTPUT"
@@ -434,7 +466,7 @@ jobs:
 
   aur-validation:
     needs: prepare
-    if: needs.prepare.outputs.build_target == 'all'
+    if: needs.prepare.outputs.build_target == 'all' || needs.prepare.outputs.build_target == 'pacman'
     runs-on: ubuntu-latest
     container:
       image: archlinux:base-devel
@@ -456,7 +488,7 @@ jobs:
             ${{ runner.os }}-yw-aur-
       - name: Install AUR validation tools and create unprivileged builder
         run: |
-          pacman -S --noconfirm --needed namcap sudo
+          pacman -S --noconfirm --needed namcap sudo gnupg pacman-contrib
           useradd --create-home --shell /bin/bash builder
           printf 'builder ALL=(ALL) NOPASSWD: ALL\n' > /etc/sudoers.d/aur-builder
           chmod 0440 /etc/sudoers.d/aur-builder
@@ -493,6 +525,78 @@ jobs:
           ! grep -Fq '/usr/share/applications/org.azahar_emu.Azahar.desktop' package-files.txt
           ! grep -Fq '/usr/share/icons/hicolor/scalable/apps/org.azahar_emu.Azahar.svg' package-files.txt
           cat package-files.txt
+      - name: Upload pacman package for repository publication
+        uses: actions/upload-artifact@v7
+        with:
+          name: azahar-yw-pacman-package
+          path: packaging/aur/azahar-yw-git-*.pkg.tar.zst
+          if-no-files-found: error
+      - name: Validate signed repository layout with an ephemeral test key
+        if: needs.prepare.outputs.build_target == 'pacman' && needs.prepare.outputs.publish_pacman != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          export GNUPGHOME="$RUNNER_TEMP/azahar-yw-test-gnupg"
+          install -d -m 700 "$GNUPGHOME"
+          gpg --batch --pinentry-mode loopback --passphrase 'ci-only-test-key' \
+            --quick-generate-key 'Azahar YW CI Test' rsa2048 sign 1d
+          package="$(find packaging/aur -maxdepth 1 -type f -name 'azahar-yw-git-*.pkg.tar.zst' -print -quit)"
+          site="$RUNNER_TEMP/azahar-yw-test-site"
+          PACMAN_REPO_GPG_PASSPHRASE='ci-only-test-key' \
+            bash packaging/pacman-repo/create-repository.sh "$package" "$site"
+          pacman -Qp "$package" | grep -Fq 'azahar-yw-git '
+          bsdtar -tf "$site/pacman/x86_64/azahar-yw.db" >/dev/null
+          test -s "$site/pacman/x86_64/azahar-yw.db.sig"
+          test -s "$site/pacman-repo-key.asc"
+          test -z "$(find "$site" -type l -print -quit)"
+
+  pacman-repository:
+    if: needs.prepare.outputs.publish_pacman == 'true'
+    needs: [prepare, aur-validation]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    container:
+      image: archlinux:base-devel
+    steps:
+      - name: Install repository and signing tools
+        run: pacman -Syu --noconfirm --needed git pacman-contrib gnupg
+      - uses: actions/checkout@v6
+      - uses: actions/download-artifact@v7
+        with:
+          name: azahar-yw-pacman-package
+          path: package
+      - name: Sign package and repository database
+        shell: bash
+        env:
+          PACMAN_REPO_GPG_PRIVATE_KEY: ${{ secrets.PACMAN_REPO_GPG_PRIVATE_KEY }}
+          PACMAN_REPO_GPG_PASSPHRASE: ${{ secrets.PACMAN_REPO_GPG_PASSPHRASE }}
+        run: |
+          set -euo pipefail
+          export GNUPGHOME="$RUNNER_TEMP/azahar-yw-gnupg"
+          install -d -m 700 "$GNUPGHOME"
+          printf '%s' "$PACMAN_REPO_GPG_PRIVATE_KEY" | gpg --batch --import
+          package="$(find package -maxdepth 1 -type f -name 'azahar-yw-git-*.pkg.tar.zst' -print -quit)"
+          test -n "$package"
+          bash packaging/pacman-repo/create-repository.sh "$package" "$GITHUB_WORKSPACE/site"
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: site
+
+  deploy-pacman-repository:
+    if: needs.prepare.outputs.publish_pacman == 'true'
+    needs: [prepare, pacman-repository]
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy signed pacman repository
+        id: deployment
+        uses: actions/deploy-pages@v4
 
   verify-assets:
     if: needs.prepare.outputs.build_target == 'all'

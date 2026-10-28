@@ -69,9 +69,9 @@ Maintained by **[AlexanderGG](https://github.com/AlexanderGG-0520)**.
 
 APKの上書き更新には同じPackage IDとリリース署名鍵が必要です。開発用のdebug署名APKから正式署名APKへは通常の上書き更新ができない場合があります。アンインストール前にAzaharの **Settings → Select User Folder** で使用中のユーザーデータフォルダーを確認し、Androidのファイルアプリでフォルダー全体を別の保存先へコピーしてください。コピーが確認できてからdebug版を削除し、正式APKをインストールします。初回設定でバックアップしたユーザーフォルダーを選び直してください。Androidのアプリ専用領域を使っている場合、アンインストールで消える可能性があるため、必ずアプリ領域外へコピーします。Package IDまたは署名鍵を変更した場合も同様に、再インストール前のバックアップが必要です。検証用debug署名APKは本番更新に使用しないでください。
 
-### Arch Linux / CachyOS（AUR）
+### Arch Linux / CachyOS（pacman）
 
-`azahar-yw-git` は `integration/yw` を追従する非公式VCSパッケージです。AURに投稿された後は、AUR helperで `yay -S azahar-yw-git` を実行するか、PKGBUILDを取得して `makepkg -si` でビルド・インストールできます。パッケージは `/usr/bin/azahar-yw` を使い、公式版と異なるdesktop ID・アイコンを使用します。設定、セーブ、NAND、SDMCは `azahar-yw` 専用のXDGディレクトリに保存され、公式版のデータを自動移行しません。
+`azahar-yw-git` は `integration/yw` を追従する非公式VCSパッケージです。署名付きpacmanリポジトリの初回公開には、署名SecretsとGitHub Pagesの有効化が必要です。公開後はpacmanでインストール・更新でき、公開前は同じPKGBUILDを使って `makepkg -si` でビルドできます。設定、セーブ、NAND、SDMCは `azahar-yw` 専用のXDGディレクトリに保存され、公式版のデータを自動移行しません。[リポジトリ設定と導入手順](docs/pacman-repository.md)
 
 ### Linux（ソースからビルド）
 
@@ -147,10 +147,10 @@ CMake、Ninja、Qt 6 と Azahar のビルド依存関係が必要です。具体
 
 ### Get started
 
-- **Latest prerelease v0.3.2:** [GitHub Release](https://github.com/AlexanderGG-0520/azahar/releases/tag/yw-v0.3.2). Future workflow-enabled releases will include signed Android arm64 APKs.
+- **Latest prerelease v0.4.0:** [GitHub Release](https://github.com/AlexanderGG-0520/azahar/releases/tag/yw-v0.4.0). It includes the signed Android arm64 APK.
 - **Current development:** [`integration/yw`](https://github.com/AlexanderGG-0520/azahar/tree/integration/yw)
 - **Android updates:** Add the GitHub repository to [Obtainium](https://github.com/ImranR98/Obtainium/releases), enable prereleases, and filter APK assets with `^azahar-yw-v[0-9]+\.[0-9]+\.[0-9]+-android-arm64\.apk$`.
-- **Arch Linux / CachyOS:** Install `azahar-yw-git` from AUR after it is published; it stores user data separately from official Azahar.
+- **Arch Linux / CachyOS:** Install `azahar-yw-git` through the signed pacman repository after its first deployment, or build it locally with `makepkg -si`.
 - **Linux:** Build from source; see the [installation and camera guide](https://github.com/AlexanderGG-0520/azahar/blob/integration/yw/docs/yw-fork-install.md).
 - **Original projects:** [Azahar](https://github.com/azahar-emu/azahar) and [utosa123's YW2 local-play fork](https://github.com/utosa123/azahar).
 

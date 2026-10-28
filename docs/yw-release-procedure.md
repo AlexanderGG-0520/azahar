@@ -38,6 +38,7 @@ GitHub permits `workflow_dispatch` only when that workflow file exists on the re
 
 - `build_target: all` runs Windows, macOS, Android, and AUR validation.
 - `build_target: android` runs only the Android APK job and uploads the APK as a GitHub Actions Artifact. It skips desktop and AUR jobs and can never publish.
+- `build_target: pacman` builds and validates the Arch package only. With `dry_run: true` it uploads a validation package artifact without deploying. With `dry_run: false` on a release branch, it publishes the signed repository to GitHub Pages without creating or changing a GitHub Release.
 - macOS arm64 and x86_64 builds run in parallel. Windows, macOS, Android, and AUR compiler caches are restored across release-branch runs, so a cold first build remains slower while later builds can reuse unchanged C++ compilation results.
 - `verify-assets` waits for Windows, macOS, Android, and AUR validation. On release branches it also requires the canonical fixed-key-signed arm64 APK name, so a debug APK cannot make a release dry-run pass. It verifies the installer, portable ZIP, Universal ZIP, APK structure/package/version/signature, and release notes; then it writes a `SHA256SUMS.txt` covering all four distributable files.
 - `publish` requires the explicit release gate and the successful verified payload. Any missing artifact or failed validation prevents publication.
@@ -54,11 +55,15 @@ Install Obtainium from its [official GitHub Releases](https://github.com/ImranR9
 
 This selects only the canonical signed arm64 release APK, excluding Windows, macOS, debug validation APKs, and other artifacts. Obtainium's GitHub source reads Releases and supports filtering APK assets; runtime update installation has not been verified on every Android device. Keep the package ID and signing key unchanged so Android can install updates over the existing app.
 
-## AUR validation and submission
+## Arch package validation
 
-`packaging/aur/PKGBUILD` tracks `integration/yw`, initializes submodules, and builds with CMake/Ninja. The AUR validation job checks `.SRCINFO`, runs namcap, and builds the package as an unprivileged user in an Arch container. It inspects the package file list to ensure the fork's command, desktop file, icon, and separate XDG data directories do not overwrite official Azahar. The workflow does not publish to AUR; AUR submission is a manual maintainer action.
+`packaging/aur/PKGBUILD` tracks `integration/yw`, initializes submodules, and builds with CMake/Ninja. The Arch validation job checks `.SRCINFO`, runs namcap, and builds the package as an unprivileged user in an Arch container. It inspects the package file list to ensure the fork's command, desktop file, icon, and separate XDG data directories do not overwrite official Azahar. The workflow does not submit to AUR.
 
-Once `azahar-yw-git` has been submitted to AUR, CachyOS/Arch users can install it with `yay -S azahar-yw-git`, or clone its AUR repository and run `makepkg -si`. The package uses `azahar-yw`, `azahar-yw.desktop`, and `azahar-yw` icon names; it does not claim to provide or conflict with official `azahar`.
+## Self-hosted pacman repository
+
+The `azahar-yw-git` package can be distributed through a signed pacman repository hosted on GitHub Pages. The initial repository bootstrap is associated with the existing `yw-v0.4.0` release line and does not create a new application version. Its stable URL is `https://alexandergg0520.github.io/azahar/pacman/$arch`.
+
+Publishing requires `PACMAN_REPO_GPG_PRIVATE_KEY` and `PACMAN_REPO_GPG_PASSPHRASE` Actions secrets plus Pages configured with **GitHub Actions** as the deployment source. The workflow signs both the package and repository database; clients must import and locally trust the public key before enabling the repository. See [pacman repository setup](pacman-repository.md) for owner setup, key verification, pacman.conf, install, and update instructions.
 
 ## After a release
 
