@@ -258,7 +258,6 @@ jobs:
             "build-tools;35.0.0" \
             "ndk;27.3.13750724" \
             "cmake;3.30.3"
-          yes | sdkmanager --licenses >/dev/null
           sudo apt-get update -y
           sudo apt-get install --no-install-recommends -y ccache unzip
       - name: Build Vanilla Release APK
