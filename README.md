@@ -67,7 +67,7 @@ Maintained by **[AlexanderGG](https://github.com/AlexanderGG-0520)**.
 4. **Filter APKs by Regular Expression** に `^azahar-yw-v[0-9]+\.[0-9]+\.[0-9]+-android-arm64\.apk$` を設定します。
 5. `azahar-yw-vX.Y.Z-android-arm64.apk` をインストールし、以後Obtainiumの更新確認から新しいGitHub Releaseへ更新します。
 
-APKの上書き更新には同じPackage IDとリリース署名鍵が必要です。Package IDまたは署名鍵を変更した場合、通常の更新として認識されず、アプリを削除して再インストールする必要があります。削除前にアプリ内データをバックアップしてください。検証用debug署名APKは本番更新に使用しないでください。
+APKの上書き更新には同じPackage IDとリリース署名鍵が必要です。開発用のdebug署名APKから正式署名APKへは通常の上書き更新ができない場合があります。アンインストール前にAzaharの **Settings → Select User Folder** で使用中のユーザーデータフォルダーを確認し、Androidのファイルアプリでフォルダー全体を別の保存先へコピーしてください。コピーが確認できてからdebug版を削除し、正式APKをインストールします。初回設定でバックアップしたユーザーフォルダーを選び直してください。Androidのアプリ専用領域を使っている場合、アンインストールで消える可能性があるため、必ずアプリ領域外へコピーします。Package IDまたは署名鍵を変更した場合も同様に、再インストール前のバックアップが必要です。検証用debug署名APKは本番更新に使用しないでください。
 
 ### Arch Linux / CachyOS（AUR）
 
