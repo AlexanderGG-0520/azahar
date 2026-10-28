@@ -12,7 +12,7 @@ Create and retain one long-lived Android release keystore outside the repository
 
 The workflow decodes the keystore into a temporary runner file and removes it on exit. A publishable release fails closed if any secret is missing or if the resulting APK is debug-signed. Do not regenerate or replace this key after distribution begins: Android will reject updates signed by another certificate. Dry-run APKs may use the Android debug key and receive a `-debug.apk` suffix; they are validation artifacts and cannot update the signed release app.
 
-Vanilla release APKs use package ID `io.github.alexandergg0520.azaharyw`. Their release `versionName` matches the `yw-vX.Y.Z` tag plus the `-vanilla` flavor suffix. `versionCode` is encoded from release semver (`major * 1,000,000 + minor * 1,000 + patch`) for monotonic release ordering; minor and patch must each be below 1000. Development APKs without a release tag use the existing time-based version code and a `yw-dev-<sha>` version name.
+Vanilla release APKs use package ID `io.github.alexandergg0520.azaharyw`. Their release `versionName` matches the `yw-vX.Y.Z` tag plus the `-vanilla` flavor suffix. `versionCode` is encoded from release semver (`major * 1,000,000,000 + minor * 1,000,000 + patch * 1,000`) for monotonic release ordering; minor and patch must each be below 1000. Development APKs without a release tag use the existing time-based version code and a `yw-dev-<sha>` version name.
 
 ## Release branch and dry-run
 

@@ -288,7 +288,7 @@ fun computeReleaseVersionCode(): Int? {
     require(minor < 1000 && patch < 1000) {
         "Android release versionCode supports minor and patch components below 1000."
     }
-    val versionCode = major * 1_000_000L + minor * 1_000L + patch
+    val versionCode = major * 1_000_000_000L + minor * 1_000_000L + patch * 1_000L
     require(versionCode in 1L..2_100_000_000L) {
         "Release version is outside Android's supported versionCode range."
     }

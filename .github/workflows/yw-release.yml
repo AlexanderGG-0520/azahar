@@ -299,7 +299,7 @@ jobs:
             major="${BASH_REMATCH[1]}"
             minor="${BASH_REMATCH[2]}"
             patch="${BASH_REMATCH[3]}"
-            expected_version_code="$((major * 1000000 + minor * 1000 + patch))"
+            expected_version_code="$((major * 1000000000 + minor * 1000000 + patch * 1000))"
             [[ "$version_code" == "$expected_version_code" ]] || {
               echo "::error::APK versionCode $version_code does not match release semver ($expected_version_code)."; exit 1;
             }
