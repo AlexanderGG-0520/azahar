@@ -61,7 +61,7 @@ This selects only the canonical signed arm64 release APK, excluding Windows, mac
 
 ## Self-hosted pacman repository
 
-The `azahar-yw-git` package can be distributed through a signed pacman repository hosted on GitHub Pages. The initial repository bootstrap is associated with the existing `yw-v0.4.0` release line and does not create a new application version. Its stable URL is `https://alexandergg0520.github.io/azahar/pacman/$arch`.
+The `azahar-yw-git` package can be distributed through a signed pacman repository hosted on GitHub Pages. The initial repository bootstrap is associated with the existing `yw-v0.4.0` release line and does not create a new application version. Its stable URL is `https://alexandergg-0520.github.io/azahar/pacman/$arch`.
 
 Publishing requires `PACMAN_REPO_GPG_PRIVATE_KEY` and `PACMAN_REPO_GPG_PASSPHRASE` Actions secrets plus Pages configured with **GitHub Actions** as the deployment source. The workflow signs both the package and repository database; clients must import and locally trust the public key before enabling the repository. See [pacman repository setup](pacman-repository.md) for owner setup, key verification, pacman.conf, install, and update instructions.
 

@@ -5,7 +5,7 @@ This repository is intended to provide `azahar-yw-git` to Arch Linux and CachyOS
 The stable repository URL is:
 
 ```text
-https://alexandergg0520.github.io/azahar/pacman/$arch
+https://alexandergg-0520.github.io/azahar/pacman/$arch
 ```
 
 The package database and package files are signed with a dedicated OpenPGP key. Do not disable pacman signature checking for this repository.
@@ -45,7 +45,7 @@ After the first successful repository deployment, download its public key and in
 
 ```sh
 curl --fail --location \
-  https://alexandergg0520.github.io/azahar/pacman-repo-key.asc \
+  https://alexandergg-0520.github.io/azahar/pacman-repo-key.asc \
   --output /tmp/azahar-yw-repo-key.asc
 gpg --show-keys --with-fingerprint /tmp/azahar-yw-repo-key.asc
 ```
@@ -62,7 +62,7 @@ Add this repository section to `/etc/pacman.conf`:
 ```ini
 [azahar-yw]
 SigLevel = Required DatabaseRequired TrustedOnly
-Server = https://alexandergg0520.github.io/azahar/pacman/$arch
+Server = https://alexandergg-0520.github.io/azahar/pacman/$arch
 ```
 
 Install and update through pacman:
