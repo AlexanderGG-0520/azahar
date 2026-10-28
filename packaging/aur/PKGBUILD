@@ -1,0 +1,84 @@
+# Maintainer: AlexanderGG <https://github.com/AlexanderGG-0520>
+pkgname=azahar-yw-git
+pkgver=0.r1.g0000000
+pkgrel=1
+pkgdesc='Unofficial Azahar YW compatibility fork (development branch)'
+arch=('x86_64' 'aarch64')
+url='https://github.com/AlexanderGG-0520/azahar'
+license=('GPL-2.0-or-later')
+depends=(
+  alsa-lib
+  ffmpeg
+  gcc-libs
+  glibc
+  libglvnd
+  libusb
+  libxkbcommon
+  openal
+  qt6-base
+  qt6-multimedia
+  qt6-svg
+  sdl2
+  vulkan-icd-loader
+  wayland
+  zstd
+)
+makedepends=(
+  cmake
+  git
+  ninja
+  pkgconf
+  qt6-tools
+)
+provides=('azahar-yw')
+source=(
+  "$pkgname::git+$url.git#branch=integration/yw"
+  'azahar-yw-launcher'
+  'azahar-yw.desktop'
+)
+sha256sums=(
+  'SKIP'
+  '66e8a1b17b13e97a16b7a3e56124cc79130e0d0e1e7f72783c9b995649208573'
+  'e09fdb4cc674daec259135fcb8030060175db082d677fa6e14525a527cbd8ad9'
+)
+
+prepare() {
+  git -C "$srcdir/$pkgname" submodule update --init --recursive
+}
+
+pkgver() {
+  cd "$srcdir/$pkgname"
+  local described
+  described=$(git describe --long --tags --match 'yw-v[0-9]*' 2>/dev/null || true)
+  if [[ -n "$described" ]]; then
+    printf '%s\n' "$described" | sed -E 's/^yw-v//; s/-([0-9]+)-g/.r\1.g/; s/-dirty$//'
+  else
+    printf '0.r%s.g%s\n' "$(git rev-list --count HEAD)" "$(git rev-parse --short=7 HEAD)"
+  fi
+}
+
+build() {
+  cd "$srcdir/$pkgname"
+  cmake -S . -B build -G Ninja \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DENABLE_QT=ON \
+    -DENABLE_SDL2=ON \
+    -DENABLE_ROOM_STANDALONE=OFF \
+    -DENABLE_DISCORD_RPC=ON
+  cmake --build build --target citra_meta --parallel
+}
+
+package() {
+  cd "$srcdir/$pkgname"
+
+  install -Dm755 build/bin/Release/azahar "$pkgdir/usr/lib/azahar-yw/azahar"
+  install -Dm755 "$srcdir/azahar-yw-launcher" "$pkgdir/usr/bin/azahar-yw"
+  install -Dm644 "$srcdir/azahar-yw.desktop" \
+    "$pkgdir/usr/share/applications/azahar-yw.desktop"
+  install -Dm644 dist/azahar.svg \
+    "$pkgdir/usr/share/icons/hicolor/scalable/apps/azahar-yw.svg"
+  install -Dm644 dist/azahar.png \
+    "$pkgdir/usr/share/icons/hicolor/512x512/apps/azahar-yw.png"
+  install -Dm644 license.txt \
+    "$pkgdir/usr/share/licenses/$pkgname/license.txt"
+}

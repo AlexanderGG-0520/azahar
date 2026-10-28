@@ -9,7 +9,7 @@ Maintained by **[AlexanderGG](https://github.com/AlexanderGG-0520)**.
 >
 > **`integration/yw` には実験的な開発が含まれます。** 配布済みビルドと開発ブランチの違いを確認してください。
 
-[**Windows向け v0.2.1 プレリリース**](https://github.com/AlexanderGG-0520/azahar/releases/tag/yw-v0.2.1) · [**開発ブランチ**](https://github.com/AlexanderGG-0520/azahar/tree/integration/yw) · [**インストールガイド**](https://github.com/AlexanderGG-0520/azahar/blob/integration/yw/docs/yw-fork-install.md) · [**English**](#english)
+[**最新プレリリース v0.3.2**](https://github.com/AlexanderGG-0520/azahar/releases/tag/yw-v0.3.2) · [**開発ブランチ**](https://github.com/AlexanderGG-0520/azahar/tree/integration/yw) · [**配布・実行ガイド**](https://github.com/AlexanderGG-0520/azahar/blob/integration/yw/docs/yw-release-procedure.md) · [**English**](#english)
 
 ## このフォークについて
 
@@ -56,6 +56,22 @@ Maintained by **[AlexanderGG](https://github.com/AlexanderGG-0520)**.
 ポータブル版は ZIP を任意のフォルダーに展開して `azahar.exe` を起動してください。OneDrive 管理下などの複雑なパスは問題切り分けのため避けると無難です。
 
 **注意:** v0.2.1はすれちがい通信の実験機能と[PR #17](https://github.com/AlexanderGG-0520/azahar/pull/17)の汎用DSP音声IRQ破棄競合回避策を含みます。**最終コードの実機能テストは未完了**です。使用前にセーブ/NANDをバックアップしてください。Linux／macOS／Android用の同バージョンのバイナリは配布しません。旧版は[v0.2.0](https://github.com/AlexanderGG-0520/azahar/releases/tag/yw-v0.2.0)から入手できます。
+
+### Android（GitHub Releases / Obtainium）
+
+次回の対応Releaseから、Google Playを使用せずGitHub ReleasesにVanilla APKを添付する予定です。APKは `io.github.alexandergg0520.azaharyw` として署名し、公式Azaharと別アプリとして共存します。Android実機でのLevel256、Pretendo、HOME復帰などの動作は個別に確認されていない場合があります。
+
+1. [Obtainiumの公式リリース](https://github.com/ImranR98/Obtainium/releases)からObtainiumをインストールします。
+2. Obtainiumで `https://github.com/AlexanderGG-0520/azahar` を追加します（GitHubソース）。
+3. GitHubソースの **Include prereleases** を有効にします。本フォークの配布はPrereleaseです。
+4. **Filter APKs by Regular Expression** に `^azahar-yw-v[0-9]+\.[0-9]+\.[0-9]+-android-arm64\.apk$` を設定します。
+5. `azahar-yw-vX.Y.Z-android-arm64.apk` をインストールし、以後Obtainiumの更新確認から新しいGitHub Releaseへ更新します。
+
+APKの上書き更新には同じPackage IDとリリース署名鍵が必要です。Package IDまたは署名鍵を変更した場合、通常の更新として認識されず、アプリを削除して再インストールする必要があります。削除前にアプリ内データをバックアップしてください。検証用debug署名APKは本番更新に使用しないでください。
+
+### Arch Linux / CachyOS（AUR）
+
+`azahar-yw-git` は `integration/yw` を追従する非公式VCSパッケージです。AURに投稿された後は、AUR helperで `yay -S azahar-yw-git` を実行するか、PKGBUILDを取得して `makepkg -si` でビルド・インストールできます。パッケージは `/usr/bin/azahar-yw` を使い、公式版と異なるdesktop ID・アイコンを使用します。設定、セーブ、NAND、SDMCは `azahar-yw` 専用のXDGディレクトリに保存され、公式版のデータを自動移行しません。
 
 ### Linux（ソースからビルド）
 
@@ -131,9 +147,11 @@ CMake、Ninja、Qt 6 と Azahar のビルド依存関係が必要です。具体
 
 ### Get started
 
-- **Windows v0.2.1 prerelease (installer and portable ZIP):** [Release assets](https://github.com/AlexanderGG-0520/azahar/releases/tag/yw-v0.2.1) · [Previous v0.2.0](https://github.com/AlexanderGG-0520/azahar/releases/tag/yw-v0.2.0)
+- **Latest prerelease v0.3.2:** [GitHub Release](https://github.com/AlexanderGG-0520/azahar/releases/tag/yw-v0.3.2). Future workflow-enabled releases will include signed Android arm64 APKs.
 - **Current development:** [`integration/yw`](https://github.com/AlexanderGG-0520/azahar/tree/integration/yw)
-- **Linux:** Build from source; see the [installation and camera guide](https://github.com/AlexanderGG-0520/azahar/blob/integration/yw/docs/yw-fork-install.md). No Linux binary is provided with v0.2.1.
+- **Android updates:** Add the GitHub repository to [Obtainium](https://github.com/ImranR98/Obtainium/releases), enable prereleases, and filter APK assets with `^azahar-yw-v[0-9]+\.[0-9]+\.[0-9]+-android-arm64\.apk$`.
+- **Arch Linux / CachyOS:** Install `azahar-yw-git` from AUR after it is published; it stores user data separately from official Azahar.
+- **Linux:** Build from source; see the [installation and camera guide](https://github.com/AlexanderGG-0520/azahar/blob/integration/yw/docs/yw-fork-install.md).
 - **Original projects:** [Azahar](https://github.com/azahar-emu/azahar) and [utosa123's YW2 local-play fork](https://github.com/utosa123/azahar).
 
 Join the same Azahar multiplayer room with non-duplicated console identities for local play. For experimental StreetPass, run the current development build on both peers, ensure StreetPass is registered in the games, and back up save/NAND data first.

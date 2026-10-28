@@ -4,11 +4,30 @@ on:
   push:
     branches:
       - "release/**"
+      - "integration/yw"
     paths:
       - ".github/release-trigger/**"
       - ".github/release-dry-run/**"
+      - ".github/workflows/yw-release.yml"
+      - ".ci/android.sh"
+      - "src/android/**"
+      - "src/**"
+      - "CMakeLists.txt"
+      - ".gitmodules"
+      - "packaging/aur/**"
+      - "dist/azahar.desktop"
+      - "dist/azahar.svg"
+      - "dist/azahar.png"
   workflow_dispatch:
     inputs:
+      build_target:
+        description: Build all release targets or Android only
+        type: choice
+        required: true
+        default: all
+        options:
+          - all
+          - android
       dry_run:
         description: Build and check artifacts without publishing a GitHub Release
         type: boolean
@@ -29,47 +48,82 @@ jobs:
       version: ${{ steps.version.outputs.version }}
       should_publish: ${{ steps.version.outputs.should_publish }}
       tag_target: ${{ steps.version.outputs.tag_target }}
+      build_target: ${{ steps.version.outputs.build_target }}
     steps:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 2
-      - name: Validate release branch and version
+      - name: Validate target, branch, and release policy
         id: version
         shell: bash
         env:
+          REQUESTED_BUILD_TARGET: ${{ inputs.build_target }}
           REQUESTED_DRY_RUN: ${{ inputs.dry_run }}
         run: |
           set -euo pipefail
-          if [[ ! "$GITHUB_REF_NAME" =~ ^release/yw-v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "::error::Run from a release/yw-vX.Y.Z branch."
+          build_target="${REQUESTED_BUILD_TARGET:-all}"
+          # workflow_dispatch always supplies its boolean; push events have no
+          # dry_run input and require an explicit release marker instead.
+          dry_run="${REQUESTED_DRY_RUN:-false}"
+          if [[ "$GITHUB_EVENT_NAME" == "push" && "$GITHUB_REF_NAME" == "integration/yw" ]]; then
+            # Integration pushes that touch this workflow or build inputs are always
+            # non-publishing Android validation runs.
+            build_target=android
+            dry_run=true
+          fi
+          if [[ "$build_target" != "all" && "$build_target" != "android" ]]; then
+            echo "::error::Unsupported build_target: $build_target"
             exit 1
           fi
-          version="${GITHUB_REF_NAME#release/}"
-          echo "version=$version" >> "$GITHUB_OUTPUT"
 
-          # Fail closed. A dry-run marker must never publish a release.
-          should_publish=false
-          if [[ "$GITHUB_EVENT_NAME" == "push" ]]; then
-            # Only an explicitly changed release-trigger marker may publish.
-            # Checkout depth 2 is needed to compare with the parent commit.
-            if git diff --name-only HEAD^ HEAD | grep -Fxq ".github/release-trigger/$version"; then
+          if [[ "$GITHUB_REF_NAME" == "integration/yw" &&
+                ( "$GITHUB_EVENT_NAME" == "workflow_dispatch" || "$GITHUB_EVENT_NAME" == "push" ) ]]; then
+            if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" &&
+                  ( "$build_target" != "android" || "$dry_run" != "true" ) ]]; then
+              echo "::error::integration/yw is allowed only for an Android dry-run."
+              exit 1
+            fi
+            version="yw-dev-${GITHUB_SHA:0:7}"
+            should_publish=false
+            tag_target="$GITHUB_SHA"
+          elif [[ "$GITHUB_REF_NAME" =~ ^release/yw-v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            version="${GITHUB_REF_NAME#release/}"
+
+            # Fail closed. A dry-run marker must never publish a release.
+            should_publish=false
+            if [[ "$GITHUB_EVENT_NAME" == "push" ]]; then
+              # Only an explicitly changed release-trigger marker may publish.
+              # Full history keeps the marker commit's parent available for validation.
+              if git diff --name-only HEAD^ HEAD | grep -Fxq ".github/release-trigger/$version"; then
+                should_publish=true
+              fi
+            elif [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" && "$dry_run" == "false" ]]; then
+              if [[ "$build_target" != "all" ]]; then
+                echo "::error::Android-only runs cannot publish a GitHub Release."
+                exit 1
+              fi
               should_publish=true
             fi
-          elif [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" &&
-                  "$REQUESTED_DRY_RUN" == "false" ]]; then
-            should_publish=true
+
+            tag_target="$GITHUB_SHA"
+            if [[ "$GITHUB_EVENT_NAME" == "push" && "$should_publish" == "true" ]]; then
+              # The release-trigger marker is a dedicated commit on top of the tested source.
+              # Keep the tag on that tested source commit, not on the marker-only commit.
+              tag_target="$(git rev-parse HEAD^)"
+            fi
+          else
+            echo "::error::Use release/yw-vX.Y.Z, or integration/yw for an Android dry-run."
+            exit 1
           fi
-          tag_target="$GITHUB_SHA"
-          if [[ "$GITHUB_EVENT_NAME" == "push" && "$should_publish" == "true" ]]; then
-            # The release-trigger marker is a dedicated commit on top of the tested source.
-            # Keep the tag on that tested source commit, not on the marker-only commit.
-            tag_target="$(git rev-parse HEAD^)"
-          fi
+
+          echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "should_publish=$should_publish" >> "$GITHUB_OUTPUT"
+          echo "build_target=$build_target" >> "$GITHUB_OUTPUT"
           echo "tag_target=$tag_target" >> "$GITHUB_OUTPUT"
-          echo "Version: $version, publish: $should_publish"
+          echo "Version: $version, target: $build_target, publish: $should_publish"
 
   windows-msys2:
+    if: needs.prepare.outputs.build_target == 'all'
     needs: prepare
     runs-on: windows-latest
     env:
@@ -126,6 +180,7 @@ jobs:
           if-no-files-found: error
 
   macos-universal:
+    if: needs.prepare.outputs.build_target == 'all'
     needs: prepare
     runs-on: macos-26
     env:
@@ -158,11 +213,186 @@ jobs:
           path: artifacts/azahar-*.zip
           if-no-files-found: error
 
+  android:
+    needs: prepare
+    if: needs.prepare.outputs.build_target == 'all' || needs.prepare.outputs.build_target == 'android'
+    runs-on: ubuntu-latest
+    outputs:
+      asset_name: ${{ steps.validate.outputs.asset_name }}
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+      TARGET: vanilla
+      OS: android
+      ANDROID_REQUIRE_RELEASE_SIGNING: ${{ needs.prepare.outputs.should_publish }}
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_COMPILERCHECK: content
+      CCACHE_SLOPPINESS: time_macros
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: recursive
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - name: Restore Gradle and native build caches
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+            ${{ env.CCACHE_DIR }}
+          key: ${{ runner.os }}-android-${{ hashFiles('src/android/**/*.gradle.kts', 'src/android/gradle/wrapper/gradle-wrapper.properties', 'src/android/app/src/main/jni/CMakeLists.txt') }}-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-android-${{ hashFiles('src/android/**/*.gradle.kts', 'src/android/gradle/wrapper/gradle-wrapper.properties', 'src/android/app/src/main/jni/CMakeLists.txt') }}-
+            ${{ runner.os }}-android-
+      - name: Install Android SDK, NDK, and CMake versions used by this project
+        shell: bash
+        run: |
+          set -euo pipefail
+          sdkmanager --install \
+            "platforms;android-35" \
+            "build-tools;35.0.0" \
+            "ndk;27.3.13750724" \
+            "cmake;3.30.3"
+          yes | sdkmanager --licenses >/dev/null
+          sudo apt-get update -y
+          sudo apt-get install --no-install-recommends -y ccache unzip
+      - name: Build Vanilla Release APK
+        id: build-apk
+        run: ./.ci/android.sh
+        env:
+          GIT_TAG_NAME: ${{ needs.prepare.outputs.version }}
+          ANDROID_APK_ONLY: 'true'
+          ANDROID_REQUIRE_RELEASE_SIGNING: ${{ needs.prepare.outputs.should_publish }}
+          ANDROID_KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEYSTORE_PASS: ${{ secrets.ANDROID_KEYSTORE_PASS }}
+      - name: Validate package, version, ABI, and signature
+        id: validate
+        shell: bash
+        env:
+          RELEASE_PUBLISH: ${{ needs.prepare.outputs.should_publish }}
+          EXPECTED_CERT_SHA256: ${{ steps.build-apk.outputs.certificate_sha256 }}
+        run: |
+          set -euo pipefail
+          apk="src/android/app/build/outputs/apk/vanilla/release/app-vanilla-release.apk"
+          test -s "$apk" || { echo "::error::Vanilla Release APK is missing."; exit 1; }
+
+          apkanalyzer="$ANDROID_HOME/cmdline-tools/latest/bin/apkanalyzer"
+          apksigner="$ANDROID_HOME/build-tools/35.0.0/apksigner"
+          package_id="$("$apkanalyzer" manifest application-id "$apk")"
+          version_name="$("$apkanalyzer" manifest version-name "$apk")"
+          version_code="$("$apkanalyzer" manifest version-code "$apk")"
+          [[ "$package_id" == "io.github.alexandergg0520.azaharyw" ]] || {
+            echo "::error::Unexpected Android package id: $package_id"; exit 1;
+          }
+          [[ "$version_name" == "${VERSION}-vanilla" ]] || {
+            echo "::error::Unexpected APK version name: $version_name"; exit 1;
+          }
+          [[ "$version_code" =~ ^[1-9][0-9]*$ ]] || {
+            echo "::error::APK versionCode is not a positive integer: $version_code"; exit 1;
+          }
+          if [[ "$VERSION" =~ ^yw-v([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+            major="${BASH_REMATCH[1]}"
+            minor="${BASH_REMATCH[2]}"
+            patch="${BASH_REMATCH[3]}"
+            expected_version_code="$((major * 1000000 + minor * 1000 + patch))"
+            [[ "$version_code" == "$expected_version_code" ]] || {
+              echo "::error::APK versionCode $version_code does not match release semver ($expected_version_code)."; exit 1;
+            }
+          fi
+          unzip -Z1 "$apk" | grep -Eq '^lib/arm64-v8a/[^/]+\.so$' || {
+            echo "::error::APK does not contain arm64-v8a native libraries."; exit 1;
+          }
+          unzip -Z1 "$apk" | grep -Eq '^lib/arm64-v8a/libcitra-android\.so$' || {
+            echo "::error::Android emulator native library is missing for arm64-v8a."; exit 1;
+          }
+          signature_report="$("$apksigner" verify --verbose --print-certs "$apk")"
+          printf '%s\n' "$signature_report"
+          [[ "$signature_report" == *"Signer #1 certificate SHA-256 digest"* ]] || {
+            echo "::error::APK signing certificate could not be verified."; exit 1;
+          }
+          actual_cert_sha256="$(sed -n 's/^Signer #1 certificate SHA-256 digest: //p' <<< "$signature_report" | tr '[:lower:]' '[:upper:]')"
+          [[ "$actual_cert_sha256" =~ ^[0-9A-F]{64}$ ]] || {
+            echo "::error::Could not read the APK signing certificate fingerprint."; exit 1;
+          }
+          if [[ "$RELEASE_PUBLISH" == "true" && -z "$EXPECTED_CERT_SHA256" ]]; then
+            echo "::error::A publishable release must use the configured private release key."; exit 1;
+          fi
+          if [[ -n "$EXPECTED_CERT_SHA256" && "$actual_cert_sha256" != "$EXPECTED_CERT_SHA256" ]]; then
+            echo "::error::APK signer does not match the configured release keystore."; exit 1;
+          fi
+
+          mkdir -p artifacts
+          if [[ -z "$EXPECTED_CERT_SHA256" ]]; then
+            asset_name="azahar-${VERSION}-android-arm64-debug.apk"
+            echo "::warning::Debug-signed validation APK; it is not suitable for release updates."
+          else
+            asset_name="azahar-${VERSION}-android-arm64.apk"
+          fi
+          cp "$apk" "artifacts/$asset_name"
+          echo "asset_name=$asset_name" >> "$GITHUB_OUTPUT"
+          echo "Verified $asset_name: package=$package_id versionName=$version_name versionCode=$version_code"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: azahar-${{ env.VERSION }}-android
+          path: artifacts/*.apk
+          if-no-files-found: error
+
+  aur-validation:
+    needs: prepare
+    if: needs.prepare.outputs.build_target == 'all'
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:base-devel
+    steps:
+      - name: Install Git for checkout
+        run: |
+          pacman -Syu --noconfirm --needed git
+      - uses: actions/checkout@v6
+      - name: Install AUR validation tools and create unprivileged builder
+        run: |
+          pacman -S --noconfirm --needed namcap sudo
+          useradd --create-home --shell /bin/bash builder
+          printf 'builder ALL=(ALL) NOPASSWD: ALL\n' > /etc/sudoers.d/aur-builder
+          chmod 0440 /etc/sudoers.d/aur-builder
+          chown -R builder:builder "$GITHUB_WORKSPACE"
+      - name: Validate PKGBUILD and generated source metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE/packaging/aur"
+          namcap PKGBUILD
+          sudo -u builder bash -c 'cd "$1" && makepkg --printsrcinfo > /tmp/azahar-yw-srcinfo' _ "$PWD"
+          diff -u .SRCINFO /tmp/azahar-yw-srcinfo
+      - name: Build package without running makepkg as root
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE/packaging/aur"
+          sudo -u builder makepkg --syncdeps --noconfirm --cleanbuild
+          package="$(find . -maxdepth 1 -name 'azahar-yw-git-*.pkg.tar.zst' -print -quit)"
+          test -n "$package"
+          namcap "$package"
+          pacman -Qlp "$package" > package-files.txt
+          grep -Fq '/usr/bin/azahar-yw' package-files.txt
+          grep -Fq '/usr/share/applications/azahar-yw.desktop' package-files.txt
+          grep -Fq '/usr/share/icons/hicolor/scalable/apps/azahar-yw.svg' package-files.txt
+          ! grep -Fq '/usr/bin/azahar ' package-files.txt
+          ! grep -Fq '/usr/share/applications/org.azahar_emu.Azahar.desktop' package-files.txt
+          ! grep -Fq '/usr/share/icons/hicolor/scalable/apps/org.azahar_emu.Azahar.svg' package-files.txt
+          cat package-files.txt
+
   verify-assets:
-    needs: [prepare, windows-msys2, macos-universal]
+    if: needs.prepare.outputs.build_target == 'all'
+    needs: [prepare, windows-msys2, macos-universal, android, aur-validation]
     runs-on: ubuntu-latest
     env:
       VERSION: ${{ needs.prepare.outputs.version }}
+      APK_ASSET_NAME: ${{ needs.android.outputs.asset_name }}
+      SHOULD_PUBLISH: ${{ needs.prepare.outputs.should_publish }}
     steps:
       - uses: actions/checkout@v6
       - uses: actions/download-artifact@v7
@@ -177,11 +407,16 @@ jobs:
           for asset in \
             "azahar-${VERSION}-windows-msys2-installer.exe" \
             "azahar-${VERSION}-windows-msys2.zip" \
-            "azahar-${VERSION}-macos-universal.zip"; do
+            "azahar-${VERSION}-macos-universal.zip" \
+            "$APK_ASSET_NAME"; do
             test -s "release-assets/${asset}" || { echo "::error::Missing ${asset}"; exit 1; }
           done
+          if [[ "$SHOULD_PUBLISH" == "true" && "$APK_ASSET_NAME" != "azahar-${VERSION}-android-arm64.apk" ]]; then
+            echo "::error::Publishable release is missing the canonically named arm64 APK."
+            exit 1
+          fi
           test -s "docs/releases/${VERSION}.md" || { echo "::error::Missing release notes"; exit 1; }
-          (cd release-assets && sha256sum *.exe *.zip > SHA256SUMS.txt)
+          (cd release-assets && sha256sum *.exe *.zip *.apk > SHA256SUMS.txt)
           cat release-assets/SHA256SUMS.txt
       - uses: actions/upload-artifact@v7
         with:
@@ -190,7 +425,7 @@ jobs:
           if-no-files-found: error
 
   publish:
-    if: ${{ needs.prepare.outputs.should_publish == 'true' }}
+    if: ${{ needs.prepare.outputs.should_publish == 'true' && needs.prepare.outputs.build_target == 'all' }}
     needs: [prepare, verify-assets]
     runs-on: ubuntu-latest
     permissions:
