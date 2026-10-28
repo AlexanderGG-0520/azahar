@@ -110,7 +110,9 @@ jobs:
             if [[ "$GITHUB_EVENT_NAME" == "push" ]]; then
               # Only an explicitly changed release-trigger marker may publish.
               # Full history keeps the marker commit's parent available for validation.
-              if git diff --name-only HEAD^ HEAD | grep -Fxq ".github/release-trigger/$version"; then
+              marker_path=".github/release-trigger/$version"
+              if [[ -f "$marker_path" ]] &&
+                 git diff --name-only HEAD^ HEAD | grep -Fxq "$marker_path"; then
                 should_publish=true
               fi
             elif [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" && "$dry_run" == "false" ]]; then
@@ -235,10 +237,17 @@ jobs:
         run: brew install ccache ninja spirv-tools
       - name: Build architecture
         run: ./.ci/macos.sh
+      - name: Preserve app bundle for universal assembly
+        run: |
+          mkdir -p artifacts
+          ditto -c -k --sequesterRsrc --keepParent \
+            "build/${BUILD_ARCH}/bundle/Azahar.app" \
+            "artifacts/${BUILD_ARCH}-bundle.zip"
       - uses: actions/upload-artifact@v7
         with:
           name: azahar-${{ env.VERSION }}-macos-${{ matrix.arch }}
-          path: build/${{ matrix.arch }}/bundle/Azahar.app
+          path: artifacts/${{ matrix.arch }}-bundle.zip
+          compression-level: 0
           if-no-files-found: error
 
   macos-universal:
@@ -254,12 +263,17 @@ jobs:
         uses: actions/download-artifact@v7
         with:
           name: azahar-${{ env.VERSION }}-macos-arm64
-          path: build/arm64/bundle
+          path: artifacts/arm64
       - name: Download x86_64 app bundle
         uses: actions/download-artifact@v7
         with:
           name: azahar-${{ env.VERSION }}-macos-x86_64
-          path: build/x86_64/bundle
+          path: artifacts/x86_64
+      - name: Restore app bundles
+        run: |
+          mkdir -p build/arm64/bundle build/x86_64/bundle
+          ditto -x -k artifacts/arm64/arm64-bundle.zip build/arm64/bundle
+          ditto -x -k artifacts/x86_64/x86_64-bundle.zip build/x86_64/bundle
       - name: Create universal app
         run: ./.ci/macos-universal.sh
       - name: Pack universal app
