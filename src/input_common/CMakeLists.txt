@@ -3,6 +3,8 @@ add_library(input_common STATIC EXCLUDE_FROM_ALL
     analog_from_button.h
     keyboard.cpp
     keyboard.h
+    mouse.cpp
+    mouse.h
     main.cpp
     main.h
     motion_emu.cpp

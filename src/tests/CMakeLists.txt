@@ -2,6 +2,8 @@ add_executable(tests
     common/bit_field.cpp
     common/file_util.cpp
     common/param_package.cpp
+    input_common/mouse.cpp
+    ../input_common/mouse.cpp
     core/core_timing.cpp
     core/file_sys/path_parser.cpp
     core/file_sys/ywb_save_date.cpp
