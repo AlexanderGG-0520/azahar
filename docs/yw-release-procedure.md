@@ -10,7 +10,7 @@ Create and retain one long-lived Android release keystore outside the repository
 - `ANDROID_KEY_ALIAS`
 - `ANDROID_KEYSTORE_PASS`
 
-The workflow decodes the keystore into a temporary runner file and removes it on exit. A publishable release fails closed if any secret is missing or if the resulting APK is debug-signed. Do not regenerate or replace this key after distribution begins: Android will reject updates signed by another certificate. Dry-run APKs may use the Android debug key and receive a `-debug.apk` suffix; they are validation artifacts and cannot update the signed release app.
+The workflow decodes the keystore into a temporary runner file and removes it on exit. Every run on a `release/yw-vX.Y.Z` branch, including a dry-run, requires these secrets and fails in `prepare` before any platform build if one is missing. Release-branch dry-runs therefore generate the same fixed-key-signed, canonically named APK intended for publication; only the explicit publish gate controls whether a GitHub Release is created. Debug-signed `-debug.apk` files are restricted to development Android validation on `integration/yw` and are never considered release candidates. Do not regenerate or replace this key after distribution begins: Android will reject updates signed by another certificate.
 
 Vanilla release APKs use package ID `io.github.alexandergg0520.azaharyw`. Their release `versionName` matches the `yw-vX.Y.Z` tag plus the `-vanilla` flavor suffix. `versionCode` is encoded from release semver (`major * 1,000,000,000 + minor * 1,000,000 + patch * 1,000`) for monotonic release ordering; minor and patch must each be below 1000. Development APKs without a release tag use the existing time-based version code and a `yw-dev-<sha>` version name.
 
@@ -28,7 +28,7 @@ git push -u origin release/yw-vX.Y.Z
 
 Create `docs/releases/yw-vX.Y.Z.md` with accurate release and platform-testing notes. The workflow validates the notes together with the four release assets before publishing.
 
-For manual execution, choose the release branch, select `build_target: all`, and leave `dry_run: true` first. This builds and verifies all platforms without publishing. An actual manual publish requires `build_target: all` and an explicit `dry_run: false`; it is accepted only on a `release/yw-vX.Y.Z` branch and requires the signing secrets above. Alternatively, the existing Release Trigger Marker on a release branch triggers the all-target publish path. Marker-only commits tag their parent source commit.
+For manual execution, choose the release branch, select `build_target: all`, and leave `dry_run: true` first. This builds and verifies publication-ready assets, including the fixed-key-signed Android APK, without publishing. The signing secrets must already be configured or `prepare` fails before the desktop builds start. An actual manual publish requires `build_target: all` and an explicit `dry_run: false`; it is accepted only on a `release/yw-vX.Y.Z` branch and requires the same signing secrets. Alternatively, the existing Release Trigger Marker on a release branch triggers the all-target publish path. Marker-only commits tag their parent source commit.
 
 `integration/yw` accepts only Android validation: an integration push touching build inputs runs an Android-only, non-publishing build; a manual integration run must select `build_target: android` and `dry_run: true`. The workflow rejects other branches and any Android-only publish attempt. No development branch push can create or update a GitHub Release.
 
@@ -38,10 +38,11 @@ GitHub permits `workflow_dispatch` only when that workflow file exists on the re
 
 - `build_target: all` runs Windows, macOS, Android, and AUR validation.
 - `build_target: android` runs only the Android APK job and uploads the APK as a GitHub Actions Artifact. It skips desktop and AUR jobs and can never publish.
-- `verify-assets` waits for Windows, macOS, Android, and AUR validation. It verifies the installer, portable ZIP, Universal ZIP, arm64 APK structure/package/version/signature, and release notes; then it writes a `SHA256SUMS.txt` covering all four distributable files.
+- macOS arm64 and x86_64 builds run in parallel. Windows, macOS, Android, and AUR compiler caches are restored across release-branch runs, so a cold first build remains slower while later builds can reuse unchanged C++ compilation results.
+- `verify-assets` waits for Windows, macOS, Android, and AUR validation. On release branches it also requires the canonical fixed-key-signed arm64 APK name, so a debug APK cannot make a release dry-run pass. It verifies the installer, portable ZIP, Universal ZIP, APK structure/package/version/signature, and release notes; then it writes a `SHA256SUMS.txt` covering all four distributable files.
 - `publish` requires the explicit release gate and the successful verified payload. Any missing artifact or failed validation prevents publication.
 
-The canonical release APK is `azahar-yw-vX.Y.Z-android-arm64.apk`. The release is a GitHub prerelease; the same APK is attached directly as a release asset so Obtainium can discover it. Android-only dry-runs and integration builds appear only as Actions Artifacts.
+The canonical release APK is `azahar-yw-vX.Y.Z-android-arm64.apk`. The release is a GitHub prerelease; the same APK is attached directly as a release asset so Obtainium can discover it. Android-only development dry-runs on `integration/yw` appear only as Actions Artifacts and may use a debug signature; they are not release candidates.
 
 ## Obtainium
 

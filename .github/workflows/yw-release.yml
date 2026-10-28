@@ -47,6 +47,7 @@ jobs:
     outputs:
       version: ${{ steps.version.outputs.version }}
       should_publish: ${{ steps.version.outputs.should_publish }}
+      require_release_signing: ${{ steps.version.outputs.require_release_signing }}
       tag_target: ${{ steps.version.outputs.tag_target }}
       build_target: ${{ steps.version.outputs.build_target }}
     steps:
@@ -59,6 +60,9 @@ jobs:
         env:
           REQUESTED_BUILD_TARGET: ${{ inputs.build_target }}
           REQUESTED_DRY_RUN: ${{ inputs.dry_run }}
+          ANDROID_KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEYSTORE_PASS: ${{ secrets.ANDROID_KEYSTORE_PASS }}
         run: |
           set -euo pipefail
           build_target="${REQUESTED_BUILD_TARGET:-all}"
@@ -86,8 +90,20 @@ jobs:
             version="yw-dev-${GITHUB_SHA:0:7}"
             should_publish=false
             tag_target="$GITHUB_SHA"
+            require_release_signing=false
           elif [[ "$GITHUB_REF_NAME" =~ ^release/yw-v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             version="${GITHUB_REF_NAME#release/}"
+
+            # Every release-branch build must be promotable. Do this check in
+            # prepare so a missing signing key cannot waste the desktop builds
+            # or produce a successful dry-run with a debug-only APK.
+            require_release_signing=true
+            if [[ -z "${ANDROID_KEYSTORE_B64:-}" ||
+                  -z "${ANDROID_KEY_ALIAS:-}" ||
+                  -z "${ANDROID_KEYSTORE_PASS:-}" ]]; then
+              echo "::error::Release-branch builds require the fixed Android release signing secrets, including dry-runs."
+              exit 1
+            fi
 
             # Fail closed. A dry-run marker must never publish a release.
             should_publish=false
@@ -118,6 +134,7 @@ jobs:
 
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "should_publish=$should_publish" >> "$GITHUB_OUTPUT"
+          echo "require_release_signing=$require_release_signing" >> "$GITHUB_OUTPUT"
           echo "build_target=$build_target" >> "$GITHUB_OUTPUT"
           echo "tag_target=$tag_target" >> "$GITHUB_OUTPUT"
           echo "Version: $version, target: $build_target, publish: $should_publish"
@@ -130,6 +147,9 @@ jobs:
       OS: windows
       TARGET: msys2
       VERSION: ${{ needs.prepare.outputs.version }}
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_COMPILERCHECK: content
+      CCACHE_SLOPPINESS: time_macros
     defaults:
       run:
         shell: msys2 {0}
@@ -137,6 +157,13 @@ jobs:
       - uses: actions/checkout@v6
         with:
           submodules: recursive
+      - name: Restore compiler cache
+        uses: actions/cache@v5
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ${{ runner.os }}-yw-msys2-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-yw-msys2-
       - uses: msys2/setup-msys2@v2
         with:
           msystem: clang64
@@ -179,23 +206,60 @@ jobs:
             artifacts/azahar-*.exe
           if-no-files-found: error
 
-  macos-universal:
+  macos-arch:
     if: needs.prepare.outputs.build_target == 'all'
     needs: prepare
+    runs-on: macos-26
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [arm64, x86_64]
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+      BUILD_ARCH: ${{ matrix.arch }}
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_COMPILERCHECK: content
+      CCACHE_SLOPPINESS: time_macros
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: recursive
+      - name: Restore compiler cache
+        uses: actions/cache@v5
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ${{ runner.os }}-yw-macos-${{ matrix.arch }}-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-yw-macos-${{ matrix.arch }}-
+      - name: Install tools
+        run: brew install ccache ninja spirv-tools
+      - name: Build architecture
+        run: ./.ci/macos.sh
+      - uses: actions/upload-artifact@v7
+        with:
+          name: azahar-${{ env.VERSION }}-macos-${{ matrix.arch }}
+          path: build/${{ matrix.arch }}/bundle/Azahar.app
+          if-no-files-found: error
+
+  macos-universal:
+    if: needs.prepare.outputs.build_target == 'all'
+    needs: [prepare, macos-arch]
     runs-on: macos-26
     env:
       VERSION: ${{ needs.prepare.outputs.version }}
       OS: macos
     steps:
       - uses: actions/checkout@v6
+      - name: Download arm64 app bundle
+        uses: actions/download-artifact@v7
         with:
-          submodules: recursive
-      - name: Install tools
-        run: brew install ccache ninja spirv-tools
-      - name: Build arm64
-        run: BUILD_ARCH=arm64 ./.ci/macos.sh
-      - name: Build x86_64
-        run: BUILD_ARCH=x86_64 ./.ci/macos.sh
+          name: azahar-${{ env.VERSION }}-macos-arm64
+          path: build/arm64/bundle
+      - name: Download x86_64 app bundle
+        uses: actions/download-artifact@v7
+        with:
+          name: azahar-${{ env.VERSION }}-macos-x86_64
+          path: build/x86_64/bundle
       - name: Create universal app
         run: ./.ci/macos-universal.sh
       - name: Pack universal app
@@ -223,7 +287,7 @@ jobs:
       VERSION: ${{ needs.prepare.outputs.version }}
       TARGET: vanilla
       OS: android
-      ANDROID_REQUIRE_RELEASE_SIGNING: ${{ needs.prepare.outputs.should_publish }}
+      ANDROID_REQUIRE_RELEASE_SIGNING: ${{ needs.prepare.outputs.require_release_signing }}
       CCACHE_DIR: ${{ github.workspace }}/.ccache
       CCACHE_COMPILERCHECK: content
       CCACHE_SLOPPINESS: time_macros
@@ -266,7 +330,7 @@ jobs:
         env:
           GIT_TAG_NAME: ${{ needs.prepare.outputs.version }}
           ANDROID_APK_ONLY: 'true'
-          ANDROID_REQUIRE_RELEASE_SIGNING: ${{ needs.prepare.outputs.should_publish }}
+          ANDROID_REQUIRE_RELEASE_SIGNING: ${{ needs.prepare.outputs.require_release_signing }}
           ANDROID_KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEYSTORE_PASS: ${{ secrets.ANDROID_KEYSTORE_PASS }}
@@ -274,7 +338,7 @@ jobs:
         id: validate
         shell: bash
         env:
-          RELEASE_PUBLISH: ${{ needs.prepare.outputs.should_publish }}
+          REQUIRE_RELEASE_SIGNING: ${{ needs.prepare.outputs.require_release_signing }}
           EXPECTED_CERT_SHA256: ${{ steps.build-apk.outputs.certificate_sha256 }}
         run: |
           set -euo pipefail
@@ -319,15 +383,15 @@ jobs:
           [[ "$actual_cert_sha256" =~ ^[0-9A-F]{64}$ ]] || {
             echo "::error::Could not read the APK signing certificate fingerprint."; exit 1;
           }
-          if [[ "$RELEASE_PUBLISH" == "true" && -z "$EXPECTED_CERT_SHA256" ]]; then
-            echo "::error::A publishable release must use the configured private release key."; exit 1;
+          if [[ "$REQUIRE_RELEASE_SIGNING" == "true" && -z "$EXPECTED_CERT_SHA256" ]]; then
+            echo "::error::A release-branch build must use the configured private release key."; exit 1;
           fi
           if [[ -n "$EXPECTED_CERT_SHA256" && "$actual_cert_sha256" != "$EXPECTED_CERT_SHA256" ]]; then
             echo "::error::APK signer does not match the configured release keystore."; exit 1;
           fi
 
           mkdir -p artifacts
-          if [[ -z "$EXPECTED_CERT_SHA256" ]]; then
+          if [[ "$REQUIRE_RELEASE_SIGNING" != "true" && -z "$EXPECTED_CERT_SHA256" ]]; then
             asset_name="azahar-${VERSION}-android-arm64-debug.apk"
             echo "::warning::Debug-signed validation APK; it is not suitable for release updates."
           else
@@ -348,11 +412,22 @@ jobs:
     runs-on: ubuntu-latest
     container:
       image: archlinux:base-devel
+    env:
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_COMPILERCHECK: content
+      CCACHE_SLOPPINESS: time_macros
     steps:
       - name: Install Git for checkout
         run: |
-          pacman -Syu --noconfirm --needed git
+          pacman -Syu --noconfirm --needed git ccache
       - uses: actions/checkout@v6
+      - name: Restore compiler cache
+        uses: actions/cache@v5
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ${{ runner.os }}-yw-aur-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-yw-aur-
       - name: Install AUR validation tools and create unprivileged builder
         run: |
           pacman -S --noconfirm --needed namcap sudo
@@ -373,7 +448,12 @@ jobs:
         run: |
           set -euo pipefail
           cd "$GITHUB_WORKSPACE/packaging/aur"
-          sudo -u builder makepkg --syncdeps --noconfirm --cleanbuild
+          sudo -u builder env \
+            CCACHE_DIR="$CCACHE_DIR" \
+            CCACHE_COMPILERCHECK="$CCACHE_COMPILERCHECK" \
+            CCACHE_SLOPPINESS="$CCACHE_SLOPPINESS" \
+            makepkg --syncdeps --noconfirm --cleanbuild
+          ccache --show-stats
           # makepkg may also emit an automatic -debug split package. Select the
           # primary package; the debug package's build-id symlink targets it.
           package="$(find . -maxdepth 1 -name 'azahar-yw-git-[0-9]*.pkg.tar.zst' -print -quit)"
@@ -396,6 +476,7 @@ jobs:
       VERSION: ${{ needs.prepare.outputs.version }}
       APK_ASSET_NAME: ${{ needs.android.outputs.asset_name }}
       SHOULD_PUBLISH: ${{ needs.prepare.outputs.should_publish }}
+      REQUIRE_RELEASE_SIGNING: ${{ needs.prepare.outputs.require_release_signing }}
     steps:
       - uses: actions/checkout@v6
       - uses: actions/download-artifact@v7
@@ -416,6 +497,10 @@ jobs:
           done
           if [[ "$SHOULD_PUBLISH" == "true" && "$APK_ASSET_NAME" != "azahar-${VERSION}-android-arm64.apk" ]]; then
             echo "::error::Publishable release is missing the canonically named arm64 APK."
+            exit 1
+          fi
+          if [[ "$REQUIRE_RELEASE_SIGNING" == "true" && "$APK_ASSET_NAME" != "azahar-${VERSION}-android-arm64.apk" ]]; then
+            echo "::error::Release-branch dry-runs must produce the same canonical APK as a publishable release."
             exit 1
           fi
           test -s "docs/releases/${VERSION}.md" || { echo "::error::Missing release notes"; exit 1; }

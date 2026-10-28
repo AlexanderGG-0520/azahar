@@ -10,7 +10,7 @@ has_password="${ANDROID_KEYSTORE_PASS:-}"
 release_signing_required="${ANDROID_REQUIRE_RELEASE_SIGNING:-false}"
 
 if [[ "$release_signing_required" == "true" && ( -z "$has_keystore" || -z "$has_alias" || -z "$has_password" ) ]]; then
-    echo "A publishable Android release requires ANDROID_KEYSTORE_B64, ANDROID_KEY_ALIAS, and ANDROID_KEYSTORE_PASS." >&2
+    echo "A release-branch Android build requires ANDROID_KEYSTORE_B64, ANDROID_KEY_ALIAS, and ANDROID_KEYSTORE_PASS." >&2
     exit 1
 fi
 
