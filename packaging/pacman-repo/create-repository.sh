@@ -36,25 +36,30 @@ gpg --batch --yes --pinentry-mode loopback --passphrase-file "$passphrase_file" 
   --local-user "$fingerprint" --detach-sign --output "$package.sig" "$package"
 repo-add --include-sigs "$repo_dir/azahar-yw.db.tar.zst" "$package"
 
-# repo-add creates a symlink at the conventional database URL. Pages artifacts
-# cannot contain links, so materialize that URL as a regular copy of the DB.
-database="$repo_dir/azahar-yw.db"
-if [[ -L "$database" ]]; then
-  database_copy="$repo_dir/azahar-yw.db.tmp"
-  cp -L "$database" "$database_copy"
-  mv "$database_copy" "$database"
-fi
-[[ -f "$database" && ! -L "$database" ]] || {
-  echo "Pacman database URL is not a regular file." >&2
-  exit 1
-}
+for database_kind in db files; do
+  database="$repo_dir/azahar-yw.$database_kind"
+  # repo-add creates symlinks for both conventional database URLs. Pages
+  # artifacts cannot contain links, so materialize each URL as a regular copy.
+  if [[ -L "$database" ]]; then
+    database_copy="$repo_dir/azahar-yw.$database_kind.tmp"
+    cp -L "$database" "$database_copy"
+    mv "$database_copy" "$database"
+  fi
+  [[ -f "$database" && ! -L "$database" ]] || {
+    echo "Pacman $database_kind database URL is not a regular file." >&2
+    exit 1
+  }
 
-gpg --batch --yes --pinentry-mode loopback --passphrase-file "$passphrase_file" \
-  --local-user "$fingerprint" --detach-sign --output "$database.sig" "$database"
+  gpg --batch --yes --pinentry-mode loopback --passphrase-file "$passphrase_file" \
+    --local-user "$fingerprint" --detach-sign --output "$database.sig" "$database"
+done
 gpg --batch --yes --armor --export "$fingerprint" > "$site_root/pacman-repo-key.asc"
 
 gpg --batch --verify "$package.sig" "$package"
-gpg --batch --verify "$database.sig" "$database"
+for database_kind in db files; do
+  database="$repo_dir/azahar-yw.$database_kind"
+  gpg --batch --verify "$database.sig" "$database"
+done
 remaining_links="$(find "$site_root" -type l -print)"
 if [[ -n "$remaining_links" ]]; then
   printf 'Pacman repository contains unsupported symbolic links:\n%s\n' "$remaining_links" >&2

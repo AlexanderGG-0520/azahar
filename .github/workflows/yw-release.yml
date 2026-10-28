@@ -55,6 +55,7 @@ jobs:
       tag_target: ${{ steps.version.outputs.tag_target }}
       build_target: ${{ steps.version.outputs.build_target }}
       publish_pacman: ${{ steps.version.outputs.publish_pacman }}
+      pacman_artifact_run_id: ${{ steps.version.outputs.pacman_artifact_run_id }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -77,6 +78,7 @@ jobs:
           # dry_run input and require an explicit release marker instead.
           dry_run="${REQUESTED_DRY_RUN:-false}"
           publish_pacman=false
+          pacman_artifact_run_id=""
           if [[ "$GITHUB_EVENT_NAME" == "push" && "$GITHUB_REF_NAME" == "integration/yw" ]]; then
             # Integration pushes that touch this workflow or build inputs are always
             # non-publishing Android validation runs.
@@ -111,6 +113,11 @@ jobs:
               publish_pacman=true
               require_release_signing=false
               tag_target="$GITHUB_SHA"
+              pacman_artifact_run_id="$(sed -n 's/^artifact-run-id=//p' "$pacman_marker" | head -n 1)"
+              if [[ -n "$pacman_artifact_run_id" && ! "$pacman_artifact_run_id" =~ ^[0-9]+$ ]]; then
+                echo "::error::Pacman artifact run ID must be numeric."
+                exit 1
+              fi
             elif [[ "$GITHUB_EVENT_NAME" == "push" && -f "$cleanup_marker" ]] &&
                  git diff --name-only HEAD^ HEAD | grep -Fxq "$cleanup_marker"; then
               # Release-asset cleanup operates on an existing release and does
@@ -180,6 +187,7 @@ jobs:
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "should_publish=$should_publish" >> "$GITHUB_OUTPUT"
           echo "publish_pacman=$publish_pacman" >> "$GITHUB_OUTPUT"
+          echo "pacman_artifact_run_id=$pacman_artifact_run_id" >> "$GITHUB_OUTPUT"
           echo "require_release_signing=$require_release_signing" >> "$GITHUB_OUTPUT"
           echo "build_target=$build_target" >> "$GITHUB_OUTPUT"
           echo "tag_target=$tag_target" >> "$GITHUB_OUTPUT"
@@ -466,7 +474,7 @@ jobs:
 
   aur-validation:
     needs: prepare
-    if: needs.prepare.outputs.build_target == 'all' || needs.prepare.outputs.build_target == 'pacman'
+    if: needs.prepare.outputs.build_target == 'all' || (needs.prepare.outputs.build_target == 'pacman' && needs.prepare.outputs.pacman_artifact_run_id == '')
     runs-on: ubuntu-latest
     container:
       image: archlinux:base-devel
@@ -540,21 +548,24 @@ jobs:
           install -d -m 700 "$GNUPGHOME"
           gpg --batch --pinentry-mode loopback --passphrase 'ci-only-test-key' \
             --quick-generate-key 'Azahar YW CI Test' rsa2048 sign 1d
-          package="$(find packaging/aur -maxdepth 1 -type f -name 'azahar-yw-git-*.pkg.tar.zst' -print -quit)"
+          package="$(find packaging/aur -maxdepth 1 -type f -name 'azahar-yw-git-*.pkg.tar.zst' ! -name '*-debug-*' -print -quit)"
           site="$RUNNER_TEMP/azahar-yw-test-site"
           PACMAN_REPO_GPG_PASSPHRASE='ci-only-test-key' \
             bash packaging/pacman-repo/create-repository.sh "$package" "$site"
           pacman -Qp "$package" | grep -Fq 'azahar-yw-git '
           bsdtar -tf "$site/pacman/x86_64/azahar-yw.db" >/dev/null
+          bsdtar -tf "$site/pacman/x86_64/azahar-yw.files" >/dev/null
           test -s "$site/pacman/x86_64/azahar-yw.db.sig"
+          test -s "$site/pacman/x86_64/azahar-yw.files.sig"
           test -s "$site/pacman-repo-key.asc"
           test -z "$(find "$site" -type l -print -quit)"
 
   pacman-repository:
-    if: needs.prepare.outputs.publish_pacman == 'true'
+    if: always() && needs.prepare.outputs.publish_pacman == 'true' && (needs.aur-validation.result == 'success' || needs.aur-validation.result == 'skipped')
     needs: [prepare, aur-validation]
     runs-on: ubuntu-latest
     permissions:
+      actions: read
       contents: read
     container:
       image: archlinux:base-devel
@@ -562,10 +573,39 @@ jobs:
       - name: Install repository and signing tools
         run: pacman -Syu --noconfirm --needed git pacman-contrib gnupg
       - uses: actions/checkout@v6
-      - uses: actions/download-artifact@v7
+      - name: Download package from this run
+        if: needs.prepare.outputs.pacman_artifact_run_id == ''
+        uses: actions/download-artifact@v7
         with:
           name: azahar-yw-pacman-package
           path: package
+      - uses: actions/download-artifact@v7
+        if: needs.prepare.outputs.pacman_artifact_run_id != ''
+        with:
+          name: azahar-yw-pacman-package
+          run-id: ${{ needs.prepare.outputs.pacman_artifact_run_id }}
+          github-token: ${{ github.token }}
+          path: package
+      - name: Validate repository layout using an ephemeral key
+        shell: bash
+        run: |
+          set -euo pipefail
+          export GNUPGHOME="$RUNNER_TEMP/azahar-yw-layout-gnupg"
+          install -d -m 700 "$GNUPGHOME"
+          gpg --batch --pinentry-mode loopback --passphrase 'ci-only-test-key' \
+            --quick-generate-key 'Azahar YW CI Layout Test' rsa2048 sign 1d
+          package="$(find package -maxdepth 1 -type f -name 'azahar-yw-git-*.pkg.tar.zst' ! -name '*-debug-*' -print -quit)"
+          test -n "$package"
+          pacman -Qp "$package" | grep -Fq 'azahar-yw-git '
+          site="$RUNNER_TEMP/azahar-yw-layout-site"
+          PACMAN_REPO_GPG_PASSPHRASE='ci-only-test-key' \
+            bash packaging/pacman-repo/create-repository.sh "$package" "$site"
+          bsdtar -tf "$site/pacman/x86_64/azahar-yw.db" >/dev/null
+          bsdtar -tf "$site/pacman/x86_64/azahar-yw.files" >/dev/null
+          test -s "$site/pacman/x86_64/azahar-yw.db.sig"
+          test -s "$site/pacman/x86_64/azahar-yw.files.sig"
+          test -s "$site/pacman-repo-key.asc"
+          test -z "$(find "$site" -type l -print -quit)"
       - name: Sign package and repository database
         shell: bash
         env:
