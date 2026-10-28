@@ -7,6 +7,7 @@ on:
       - "integration/yw"
     paths:
       - ".github/release-trigger/**"
+      - ".github/release-cleanup/**"
       - ".github/release-dry-run/**"
       - ".github/workflows/yw-release.yml"
       - ".ci/android.sh"
@@ -94,6 +95,16 @@ jobs:
           elif [[ "$GITHUB_REF_NAME" =~ ^release/yw-v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             version="${GITHUB_REF_NAME#release/}"
 
+            cleanup_marker=".github/release-cleanup/$version"
+            if [[ "$GITHUB_EVENT_NAME" == "push" && -f "$cleanup_marker" ]] &&
+               git diff --name-only HEAD^ HEAD | grep -Fxq "$cleanup_marker"; then
+              # Release-asset cleanup operates on an existing release and does
+              # not build or publish new binaries.
+              build_target=cleanup
+              should_publish=false
+              require_release_signing=false
+              tag_target="$GITHUB_SHA"
+            else
             # Every release-branch build must be promotable. Do this check in
             # prepare so a missing signing key cannot waste the desktop builds
             # or produce a successful dry-run with a debug-only APK.
@@ -128,6 +139,7 @@ jobs:
               # The release-trigger marker is a dedicated commit on top of the tested source.
               # Keep the tag on that tested source commit, not on the marker-only commit.
               tag_target="$(git rev-parse HEAD^)"
+            fi
             fi
           else
             echo "::error::Use release/yw-vX.Y.Z, or integration/yw for an Android dry-run."
@@ -245,7 +257,7 @@ jobs:
             "artifacts/${BUILD_ARCH}-bundle.zip"
       - uses: actions/upload-artifact@v7
         with:
-          name: azahar-${{ env.VERSION }}-macos-${{ matrix.arch }}
+          name: macos-bundle-${{ env.VERSION }}-${{ matrix.arch }}
           path: artifacts/${{ matrix.arch }}-bundle.zip
           compression-level: 0
           if-no-files-found: error
@@ -262,12 +274,12 @@ jobs:
       - name: Download arm64 app bundle
         uses: actions/download-artifact@v7
         with:
-          name: azahar-${{ env.VERSION }}-macos-arm64
+          name: macos-bundle-${{ env.VERSION }}-arm64
           path: artifacts/arm64
       - name: Download x86_64 app bundle
         uses: actions/download-artifact@v7
         with:
-          name: azahar-${{ env.VERSION }}-macos-x86_64
+          name: macos-bundle-${{ env.VERSION }}-x86_64
           path: artifacts/x86_64
       - name: Restore app bundles
         run: |
@@ -554,3 +566,62 @@ jobs:
               --prerelease
           fi
           gh release upload "$VERSION" release-assets/* --clobber
+
+  cleanup-release-assets:
+    if: needs.prepare.outputs.build_target == 'cleanup'
+    needs: prepare
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v6
+      - name: Remove intermediate assets and repair release checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          release_id="$(gh api "repos/$GH_REPO/releases/tags/$VERSION" --jq .id)"
+          asset_rows="$(gh api "repos/$GH_REPO/releases/$release_id/assets" --jq '.[] | [.id, .name, .digest] | @tsv')"
+
+          installer="azahar-${VERSION}-windows-msys2-installer.exe"
+          windows_zip="azahar-${VERSION}-windows-msys2.zip"
+          macos_zip="azahar-${VERSION}-macos-universal.zip"
+          android_apk="azahar-${VERSION}-android-arm64.apk"
+          checksums="SHA256SUMS.txt"
+          expected_assets=("$installer" "$windows_zip" "$macos_zip" "$android_apk" "$checksums")
+
+          for name in "$installer" "$windows_zip" "$macos_zip" "$android_apk"; do
+            row="$(awk -F '\t' -v name="$name" '$2 == name { print $3 }' <<< "$asset_rows")"
+            [[ "$row" =~ ^sha256:[0-9a-f]{64}$ ]] || {
+              echo "::error::Missing expected release asset or SHA-256 digest: $name"; exit 1;
+            }
+          done
+
+          checksums_file="$(mktemp)"
+          trap 'rm -f "$checksums_file"' EXIT
+          for name in "$installer" "$macos_zip" "$windows_zip" "$android_apk"; do
+            digest="$(awk -F '\t' -v name="$name" '$2 == name { print $3 }' <<< "$asset_rows")"
+            printf '%s  %s\n' "${digest#sha256:}" "$name" >> "$checksums_file"
+          done
+
+          while IFS=$'\t' read -r asset_id name digest; do
+            keep=false
+            for expected in "${expected_assets[@]}"; do
+              [[ "$name" == "$expected" ]] && keep=true && break
+            done
+            if [[ "$keep" != true ]]; then
+              gh api --method DELETE "repos/$GH_REPO/releases/assets/$asset_id"
+            fi
+          done <<< "$asset_rows"
+
+          gh release upload "$VERSION" "$checksums_file#$checksums" --clobber
+          gh release edit "$VERSION" --title "Azahar YW Compatibility Fork v${VERSION#yw-v}"
+
+          final_assets="$(gh release view "$VERSION" --json assets --jq '.assets[].name' | sort)"
+          expected_sorted="$(printf '%s\n' "${expected_assets[@]}" | sort)"
+          [[ "$final_assets" == "$expected_sorted" ]] || {
+            echo "::error::Release asset list does not match the required set."; exit 1;
+          }
