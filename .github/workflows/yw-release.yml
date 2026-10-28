@@ -600,8 +600,9 @@ jobs:
             }
           done
 
-          checksums_file="$(mktemp)"
-          trap 'rm -f "$checksums_file"' EXIT
+          checksums_dir="$(mktemp -d)"
+          checksums_file="$checksums_dir/$checksums"
+          trap 'rm -rf "$checksums_dir"' EXIT
           for name in "$installer" "$macos_zip" "$windows_zip" "$android_apk"; do
             digest="$(awk -F '\t' -v name="$name" '$2 == name { print $3 }' <<< "$asset_rows")"
             printf '%s  %s\n' "${digest#sha256:}" "$name" >> "$checksums_file"
@@ -617,7 +618,7 @@ jobs:
             fi
           done <<< "$asset_rows"
 
-          gh release upload "$VERSION" "$checksums_file#$checksums" --clobber
+          gh release upload "$VERSION" "$checksums_file" --clobber
           gh release edit "$VERSION" --title "Azahar YW Compatibility Fork v${VERSION#yw-v}"
 
           final_assets="$(gh release view "$VERSION" --json assets --jq '.assets[].name' | sort)"
