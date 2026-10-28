@@ -12,6 +12,7 @@
 #include <QWidget>
 #include "core/core.h"
 #include "core/frontend/emu_window.h"
+#include "input_common/mouse.h"
 
 class QKeyEvent;
 class QTouchEvent;
@@ -218,6 +219,9 @@ private:
     QByteArray geometry;
     bool first_frame = false;
     bool has_focus = false;
+    InputCommon::MouseButtonRoutingState mouse_button_routing;
+
+    void ReleaseMouseInput();
 
 protected:
     void showEvent(QShowEvent* event) override;

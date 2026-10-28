@@ -457,6 +457,7 @@ struct InputProfile {
     bool use_touchpad;
     bool use_touch_from_button;
     int touch_from_button_map_index;
+    bool prefer_touchscreen_over_mouse_buttons = true;
     std::string udp_input_address;
     u16 udp_input_port;
     u8 udp_pad_index;

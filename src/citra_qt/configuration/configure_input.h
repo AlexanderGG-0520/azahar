@@ -95,6 +95,7 @@ private:
     /// A flag to indicate if keyboard keys are okay when configuring an input. If this is false,
     /// keyboard events are ignored.
     bool want_keyboard_keys = false;
+    bool want_mouse_buttons = false;
 
     /// Generates list of all used keys
     QList<QKeySequence> GetUsedKeyboardKeys();
@@ -123,6 +124,7 @@ private:
 
     /// Handle key press events.
     void keyPressEvent(QKeyEvent* event) override;
+    bool eventFilter(QObject* object, QEvent* event) override;
 
     /// input profiles
     void NewProfile();

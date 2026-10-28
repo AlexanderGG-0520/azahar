@@ -5,11 +5,15 @@
 #include <algorithm>
 #include <memory>
 #include <utility>
+#include <QApplication>
+#include <QCheckBox>
+#include <QEvent>
 #include <QInputDialog>
 #include <QKeyEvent>
 #include <QLabel>
 #include <QMenu>
 #include <QMessageBox>
+#include <QMouseEvent>
 #include <QSlider>
 #include <QTimer>
 #include "citra_qt/configuration/config.h"
@@ -17,6 +21,7 @@
 #include "citra_qt/configuration/configure_motion_touch.h"
 #include "common/param_package.h"
 #include "core/core.h"
+#include "input_common/mouse.h"
 #include "ui_configure_input.h"
 
 const std::array<std::string, ConfigureInput::ANALOG_SUB_BUTTONS_NUM>
@@ -308,6 +313,8 @@ ConfigureInput::ConfigureInput(Core::System& _system, QWidget* parent)
         motion_touch_dialog->exec();
         ui->buttonMotionTouch->setEnabled(true);
     });
+    connect(ui->prefer_touchscreen_over_mouse_buttons, &QCheckBox::toggled, this,
+            [this](bool) { ApplyConfiguration(); });
 
     ui->buttonDelete->setEnabled(ui->profile->count() > 1);
 
@@ -348,6 +355,8 @@ ConfigureInput::~ConfigureInput() = default;
 void ConfigureInput::ApplyConfiguration() {
 
     Settings::values.use_artic_base_controller = ui->use_artic_controller->isChecked();
+    Settings::values.current_input_profile.prefer_touchscreen_over_mouse_buttons =
+        ui->prefer_touchscreen_over_mouse_buttons->isChecked();
 
     Settings::values.current_input_profile.maptype =
         static_cast<Settings::InputMappingType>(ui->comboBoxMappingType->currentIndex());
@@ -445,6 +454,8 @@ QList<QKeySequence> ConfigureInput::GetUsedKeyboardKeys() {
 
 void ConfigureInput::LoadConfiguration() {
     ui->use_artic_controller->setChecked(Settings::values.use_artic_base_controller.GetValue());
+    ui->prefer_touchscreen_over_mouse_buttons->setChecked(
+        Settings::values.current_input_profile.prefer_touchscreen_over_mouse_buttons);
     ui->comboBoxMappingType->setCurrentIndex(
         static_cast<int>(Settings::values.current_input_profile.maptype));
     ui->use_artic_controller->setEnabled(!system.IsPoweredOn());
@@ -577,6 +588,8 @@ void ConfigureInput::AutoMap() {
     };
     device_pollers = InputCommon::Polling::GetPollers(InputCommon::Polling::DeviceType::Button);
     want_keyboard_keys = false;
+    want_mouse_buttons = true;
+    qApp->installEventFilter(this);
     for (auto& poller : device_pollers) {
         poller->Start();
     }
@@ -598,6 +611,7 @@ void ConfigureInput::HandleClick(QPushButton* button,
 
     // Keyboard keys can only be used as button devices
     want_keyboard_keys = type == InputCommon::Polling::DeviceType::Button;
+    want_mouse_buttons = type == InputCommon::Polling::DeviceType::Button;
 
     for (auto& poller : device_pollers) {
         poller->Start();
@@ -605,11 +619,15 @@ void ConfigureInput::HandleClick(QPushButton* button,
 
     grabKeyboard();
     grabMouse();
+    if (want_mouse_buttons) {
+        qApp->installEventFilter(this);
+    }
     timeout_timer->start(5000); // Cancel after 5 seconds
     poll_timer->start(200);     // Check for new inputs every 200ms
 }
 
 void ConfigureInput::SetPollingResult(const Common::ParamPackage& params, bool abort) {
+    qApp->removeEventFilter(this);
     releaseKeyboard();
     releaseMouse();
     timeout_timer->stop();
@@ -624,6 +642,7 @@ void ConfigureInput::SetPollingResult(const Common::ParamPackage& params, bool a
 
     UpdateButtonLabels();
     input_setter.reset();
+    want_mouse_buttons = false;
 }
 
 void ConfigureInput::keyPressEvent(QKeyEvent* event) {
@@ -650,6 +669,45 @@ void ConfigureInput::keyPressEvent(QKeyEvent* event) {
     }
     SetPollingResult({}, true);
     previous_key_code = 0;
+}
+
+bool ConfigureInput::eventFilter(QObject* object, QEvent* event) {
+    if (!input_setter || !want_mouse_buttons || !event ||
+        event->type() != QEvent::MouseButtonPress) {
+        return QWidget::eventFilter(object, event);
+    }
+
+    const auto mouse_event = static_cast<QMouseEvent*>(event);
+    std::optional<InputCommon::MouseButton> button;
+    switch (mouse_event->button()) {
+    case Qt::LeftButton:
+        button = InputCommon::MouseButton::Left;
+        break;
+    case Qt::RightButton:
+        button = InputCommon::MouseButton::Right;
+        break;
+    case Qt::MiddleButton:
+        button = InputCommon::MouseButton::Middle;
+        break;
+    case Qt::BackButton:
+        button = InputCommon::MouseButton::Back;
+        break;
+    case Qt::ForwardButton:
+        button = InputCommon::MouseButton::Forward;
+        break;
+    default:
+        break;
+    }
+    if (!button) {
+        return QWidget::eventFilter(object, event);
+    }
+
+    Common::ParamPackage params{
+        {"engine", "mouse"},
+        {"button", std::to_string(static_cast<unsigned>(*button))},
+    };
+    SetPollingResult(params, false);
+    return true;
 }
 
 void ConfigureInput::RetranslateUI() {
