@@ -374,7 +374,9 @@ jobs:
           set -euo pipefail
           cd "$GITHUB_WORKSPACE/packaging/aur"
           sudo -u builder makepkg --syncdeps --noconfirm --cleanbuild
-          package="$(find . -maxdepth 1 -name 'azahar-yw-git-*.pkg.tar.zst' -print -quit)"
+          # makepkg may also emit an automatic -debug split package. Select the
+          # primary package; the debug package's build-id symlink targets it.
+          package="$(find . -maxdepth 1 -name 'azahar-yw-git-[0-9]*.pkg.tar.zst' -print -quit)"
           test -n "$package"
           namcap "$package"
           pacman -Qlp "$package" > package-files.txt
