@@ -514,7 +514,7 @@ jobs:
           ccache --show-stats
           # makepkg may also emit an automatic -debug split package. Select the
           # primary package; the debug package's build-id symlink targets it.
-          package="$(find . -maxdepth 1 -name 'azahar-yw-git-[0-9]*.pkg.tar.zst' -print -quit)"
+          package="$(find . -maxdepth 1 -type f -name 'azahar-yw-git-[0-9]*.pkg.tar.zst' ! -name '*-debug-*' -print -quit)"
           test -n "$package"
           namcap "$package"
           pacman -Qlp "$package" > package-files.txt
@@ -576,7 +576,7 @@ jobs:
           export GNUPGHOME="$RUNNER_TEMP/azahar-yw-gnupg"
           install -d -m 700 "$GNUPGHOME"
           printf '%s' "$PACMAN_REPO_GPG_PRIVATE_KEY" | gpg --batch --import
-          package="$(find package -maxdepth 1 -type f -name 'azahar-yw-git-*.pkg.tar.zst' -print -quit)"
+          package="$(find package -maxdepth 1 -type f -name 'azahar-yw-git-*.pkg.tar.zst' ! -name '*-debug-*' -print -quit)"
           test -n "$package"
           bash packaging/pacman-repo/create-repository.sh "$package" "$GITHUB_WORKSPACE/site"
       - uses: actions/upload-pages-artifact@v5

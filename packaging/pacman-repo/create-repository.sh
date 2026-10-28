@@ -55,6 +55,10 @@ gpg --batch --yes --armor --export "$fingerprint" > "$site_root/pacman-repo-key.
 
 gpg --batch --verify "$package.sig" "$package"
 gpg --batch --verify "$database.sig" "$database"
-test -z "$(find "$site_root" -type l -print -quit)"
+remaining_links="$(find "$site_root" -type l -print)"
+if [[ -n "$remaining_links" ]]; then
+  printf 'Pacman repository contains unsupported symbolic links:\n%s\n' "$remaining_links" >&2
+  exit 1
+fi
 
 echo "Pacman repository signing fingerprint: $fingerprint"
