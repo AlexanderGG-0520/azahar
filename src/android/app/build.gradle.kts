@@ -21,6 +21,7 @@ plugins {
  * next 680 years.
  */
 val autoVersion = (((System.currentTimeMillis() / 1000) - 1451606400) / 10).toInt()
+val releaseVersionCode = computeReleaseVersionCode()
 val abiFilter = listOf("arm64-v8a", "x86_64")
 
 val downloadedJniLibsPath = "${layout.buildDirectory.get().asFile.path}/downloadedJniLibs"
@@ -61,12 +62,12 @@ android {
     }
 
     defaultConfig {
-        // The application ID refers to Lime3DS to allow for
-        // the Play Store listing, which was originally set up for Lime3DS, to still be used.
-        applicationId = "org.azahar_emu.azahar"
+        // Keep the vanilla fork build installable alongside the official Azahar app.
+        // The Google Play flavor retains its separate application ID below.
+        applicationId = "io.github.alexandergg0520.azaharyw"
         minSdk = 29
         targetSdk = 37
-        versionCode = autoVersion
+        versionCode = releaseVersionCode ?: autoVersion
         versionName = getGitVersion()
 
         ndk {
@@ -271,6 +272,27 @@ fun getGitVersion(): String {
     }
 
     return versionName
+}
+
+/**
+ * Encode release semver into a stable, strictly increasing Android versionCode.
+ * The existing time-based value remains in use for development builds without a release tag.
+ */
+fun computeReleaseVersionCode(): Int? {
+    val releaseTag = System.getenv("GIT_TAG_NAME") ?: return null
+    val version = Regex("^yw-v([0-9]+)\\.([0-9]+)\\.([0-9]+)$").matchEntire(releaseTag) ?: return null
+    val (majorText, minorText, patchText) = version.destructured
+    val major = majorText.toLong()
+    val minor = minorText.toLong()
+    val patch = patchText.toLong()
+    require(minor < 1000 && patch < 1000) {
+        "Android release versionCode supports minor and patch components below 1000."
+    }
+    val versionCode = major * 1_000_000L + minor * 1_000L + patch
+    require(versionCode in 1L..2_100_000_000L) {
+        "Release version is outside Android's supported versionCode range."
+    }
+    return versionCode.toInt()
 }
 
 fun getGitHash(): String =

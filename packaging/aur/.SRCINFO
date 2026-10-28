@@ -1,0 +1,37 @@
+pkgbase = azahar-yw-git
+	pkgdesc = Unofficial Azahar YW compatibility fork (development branch)
+	pkgver = 0.r1.g0000000
+	pkgrel = 1
+	url = https://github.com/AlexanderGG-0520/azahar
+	arch = x86_64
+	arch = aarch64
+	license = GPL-2.0-or-later
+	makedepends = cmake
+	makedepends = git
+	makedepends = ninja
+	makedepends = pkgconf
+	makedepends = qt6-tools
+	depends = alsa-lib
+	depends = ffmpeg
+	depends = gcc-libs
+	depends = glibc
+	depends = libglvnd
+	depends = libusb
+	depends = libxkbcommon
+	depends = openal
+	depends = qt6-base
+	depends = qt6-multimedia
+	depends = qt6-svg
+	depends = sdl2
+	depends = vulkan-icd-loader
+	depends = wayland
+	depends = zstd
+	provides = azahar-yw
+	source = azahar-yw-git::git+https://github.com/AlexanderGG-0520/azahar.git#branch=integration/yw
+	source = azahar-yw-launcher
+	source = azahar-yw.desktop
+	sha256sums = SKIP
+	sha256sums = 66e8a1b17b13e97a16b7a3e56124cc79130e0d0e1e7f72783c9b995649208573
+	sha256sums = e09fdb4cc674daec259135fcb8030060175db082d677fa6e14525a527cbd8ad9
+
+pkgname = azahar-yw-git

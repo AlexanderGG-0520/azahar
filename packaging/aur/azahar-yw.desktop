@@ -1,0 +1,12 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Azahar YW
+GenericName=3DS Emulator
+Comment=Unofficial Azahar YW compatibility fork
+Icon=azahar-yw
+TryExec=azahar-yw
+Exec=azahar-yw %f
+Categories=Game;Emulator;
+MimeType=application/x-ctr-3dsx;application/x-ctr-cci;application/x-ctr-cia;application/x-ctr-cxi;
+Keywords=3DS;Nintendo;Azahar;Yo-kai Watch;
