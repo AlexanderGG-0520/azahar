@@ -132,6 +132,10 @@ void KernelSystem::TerminateProcess(std::shared_ptr<Process> process) {
     RestoreMemoryState(process->codeset->program_id);
 
     process->Exit();
+    // Process objects can remain referenced after termination (for example during an APT
+    // application handoff). Close their handles now instead of waiting for the destructor, so
+    // process-scoped client sessions release their server-port capacity immediately.
+    process->handle_table.Clear();
     std::erase(process_list, process);
 }
 
