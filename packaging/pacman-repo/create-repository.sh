@@ -36,18 +36,23 @@ gpg --batch --yes --pinentry-mode loopback --passphrase-file "$passphrase_file" 
   --local-user "$fingerprint" --detach-sign --output "$package.sig" "$package"
 repo-add --include-sigs "$repo_dir/azahar-yw.db.tar.zst" "$package"
 
-# repo-add creates a symlink at the conventional database URL. Pages artifacts
-# cannot contain links, so materialize that URL as a regular copy of the DB.
+# repo-add creates two conventional URL symlinks, .db and .files. GitHub
+# Pages artifacts reject ALL symlinks, even if the .db link was materialized.
+# Keep both URL paths as regular files, retaining their compressed originals.
+for name in azahar-yw.db azahar-yw.files; do
+  link="$repo_dir/$name"
+  if [[ -L "$link" ]]; then
+    regular_copy="$(mktemp "$repo_dir/.pacman-materialize.XXXXXXXX")"
+    cp -L -- "$link" "$regular_copy"
+    chmod 0644 "$regular_copy"
+    mv -f -- "$regular_copy" "$link"
+  fi
+  [[ -s "$link" && -f "$link" && ! -L "$link" ]] || {
+    echo "Pacman repository URL $name is not a nonempty regular file." >&2
+    exit 1
+  }
+done
 database="$repo_dir/azahar-yw.db"
-if [[ -L "$database" ]]; then
-  database_copy="$repo_dir/azahar-yw.db.tmp"
-  cp -L "$database" "$database_copy"
-  mv "$database_copy" "$database"
-fi
-[[ -f "$database" && ! -L "$database" ]] || {
-  echo "Pacman database URL is not a regular file." >&2
-  exit 1
-}
 
 gpg --batch --yes --pinentry-mode loopback --passphrase-file "$passphrase_file" \
   --local-user "$fingerprint" --detach-sign --output "$database.sig" "$database"

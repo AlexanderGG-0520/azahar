@@ -223,6 +223,8 @@ jobs:
         run: choco install nsis --yes --no-progress
       - name: Disable line ending translation
         run: git config --global core.autocrlf input
+      - name: Reset ccache statistics after restore (preserve compiled objects)
+        run: ccache --zero-stats
       - name: Build Windows MSYS2
         run: ./.ci/windows.sh
       - name: Generate installer
@@ -279,8 +281,13 @@ jobs:
             ${{ runner.os }}-yw-macos-${{ matrix.arch }}-
       - name: Install tools
         run: brew install ccache ninja spirv-tools
+      - name: Reset ccache statistics after restore (preserve compiled objects)
+        run: ccache --zero-stats
       - name: Build architecture
         run: ./.ci/macos.sh
+      - name: Report macOS compiler cache performance
+        if: always()
+        run: ccache --show-stats
       - name: Preserve app bundle for universal assembly
         run: |
           mkdir -p artifacts
@@ -382,6 +389,8 @@ jobs:
             "cmake;3.30.3"
           sudo apt-get update -y
           sudo apt-get install --no-install-recommends -y ccache unzip
+      - name: Reset ccache statistics after restore (preserve compiled objects)
+        run: ccache --zero-stats
       - name: Build Vanilla Release APK
         id: build-apk
         run: ./.ci/android.sh
@@ -493,6 +502,9 @@ jobs:
           printf 'builder ALL=(ALL) NOPASSWD: ALL\n' > /etc/sudoers.d/aur-builder
           chmod 0440 /etc/sudoers.d/aur-builder
           chown -R builder:builder "$GITHUB_WORKSPACE"
+      - name: Regression test signed pacman repository symlink handling
+        shell: bash
+        run: bash packaging/pacman-repo/test-create-repository.sh
       - name: Validate PKGBUILD and generated source metadata
         shell: bash
         run: |
@@ -506,12 +518,21 @@ jobs:
         run: |
           set -euo pipefail
           cd "$GITHUB_WORKSPACE/packaging/aur"
+          # The cache and its cumulative counters were restored from a prior
+          # workflow run. Reset counters only; keep the cached objects.
+          sudo -u builder env CCACHE_DIR="$CCACHE_DIR" ccache --zero-stats
           sudo -u builder env \
             CCACHE_DIR="$CCACHE_DIR" \
             CCACHE_COMPILERCHECK="$CCACHE_COMPILERCHECK" \
             CCACHE_SLOPPINESS="$CCACHE_SLOPPINESS" \
             makepkg --syncdeps --noconfirm --cleanbuild
-          ccache --show-stats
+          sudo -u builder env CCACHE_DIR="$CCACHE_DIR" ccache --show-stats
+          {
+            echo '### Arch Linux ccache (this run only)'
+            echo '```'
+            sudo -u builder env CCACHE_DIR="$CCACHE_DIR" ccache --show-stats
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
           # makepkg may also emit an automatic -debug split package. Select the
           # primary package; the debug package's build-id symlink targets it.
           package="$(find . -maxdepth 1 -name 'azahar-yw-git-[0-9]*.pkg.tar.zst' -print -quit)"
