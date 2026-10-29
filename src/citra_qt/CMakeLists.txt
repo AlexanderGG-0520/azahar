@@ -348,7 +348,8 @@ target_compile_definitions(citra_qt PRIVATE
 )
 
 if (ENABLE_DISCORD_RPC)
-    target_sources(citra_qt PUBLIC
+    # Keep these sources in citra_qt so Core::System uses citra_core's PUBLIC definitions.
+    target_sources(citra_qt PRIVATE
         discord_impl.cpp
         discord_impl.h
     )
