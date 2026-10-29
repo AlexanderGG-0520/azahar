@@ -663,7 +663,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          title="Azahar YW Compatibility Fork v${VERSION#yw-}"
+          title="Azahar YW Compatibility Fork ${VERSION#yw-}"
           if ! gh release view "$VERSION" >/dev/null 2>&1; then
             gh release create "$VERSION" --target "$TAG_TARGET" \
               --title "$title" --notes-file "docs/releases/${VERSION}.md" \
