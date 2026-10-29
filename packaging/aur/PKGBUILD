@@ -59,12 +59,20 @@ pkgver() {
 
 build() {
   cd "$srcdir/$pkgname"
+  local compiler_launcher=()
+  if command -v ccache >/dev/null 2>&1; then
+    compiler_launcher+=(
+      -DCMAKE_C_COMPILER_LAUNCHER=ccache
+      -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+    )
+  fi
   cmake -S . -B build -G Ninja \
     -DCMAKE_BUILD_TYPE=Release \
     -DENABLE_QT=ON \
     -DENABLE_SDL2=ON \
     -DENABLE_ROOM_STANDALONE=OFF \
-    -DENABLE_DISCORD_RPC=ON
+    -DENABLE_DISCORD_RPC=ON \
+    "${compiler_launcher[@]}"
   cmake --build build --target citra_meta --parallel
 }
 
