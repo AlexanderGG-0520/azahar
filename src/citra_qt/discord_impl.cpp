@@ -9,6 +9,7 @@
 #include "citra_qt/uisettings.h"
 #include "common/common_types.h"
 #include "core/core.h"
+#include "core/hle/service/am/am.h"
 #include "core/loader/loader.h"
 
 namespace DiscordRPC {
@@ -28,6 +29,7 @@ DiscordImpl::~DiscordImpl() {
 
 void DiscordImpl::Pause() {
     Discord_ClearPresence();
+    presence_state.Reset();
 }
 
 void DiscordImpl::Update(bool is_powered_on) {
@@ -42,10 +44,45 @@ void DiscordImpl::Update(bool is_powered_on) {
     };
 
     std::string title;
+    std::optional<u64> title_id;
     if (is_powered_on) {
-        system.GetAppLoader().ReadTitle(title);
+        const auto program_id = system.GetPresenceProgramId();
+        if (program_id != 0)
+            title_id = program_id;
+        if (!presence_state.NeedsTitleRefresh(is_powered_on, title_id)) {
+            return;
+        }
+
+        const auto metadata = system.GetPresenceMetadata();
+        const auto initial_title_id = metadata.initial_program_id;
+        const auto& initial_title = metadata.initial_title;
+
+        std::string running_title;
+        if (title_id && initial_title_id != *title_id) {
+            const auto media_type = Service::AM::GetTitleMediaType(*title_id);
+            const auto path = Service::AM::GetTitleContentPath(media_type, *title_id);
+            auto loader = Loader::GetLoader(path);
+            u64 loaded_id{};
+            if (loader && loader->ReadProgramId(loaded_id) == Loader::ResultStatus::Success &&
+                loaded_id == *title_id) {
+                loader->ReadTitle(running_title);
+            }
+            if (running_title.empty() && !metadata.cartridge_path.empty()) {
+                loader = Loader::GetLoader(metadata.cartridge_path);
+                if (loader && loader->ReadProgramId(loaded_id) == Loader::ResultStatus::Success &&
+                    loaded_id == *title_id) {
+                    loader->ReadTitle(running_title);
+                }
+            }
+        }
+        title = ResolvePresenceTitle(program_id, initial_title_id, initial_title, running_title);
         title = truncate("Playing: " + title);
     }
+
+    if (!presence_state.NeedsUpdate(is_powered_on, title_id, title)) {
+        return;
+    }
+    presence_state.Set(is_powered_on, title_id, title);
 
     DiscordRichPresence presence{};
     presence.largeImageKey = "logo";

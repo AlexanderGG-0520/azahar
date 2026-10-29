@@ -15,17 +15,49 @@ macro(generate_build_info)
         string(STRIP "${GIT_REV_RAW}" GIT_REV)
         string(SUBSTRING "${GIT_REV_RAW}" 0 9 GIT_DESC)
         set(GIT_BRANCH "HEAD")
-    elseif (EXISTS "${CMAKE_SOURCE_DIR}/.git/objects")
-        # Find the package here with the known path so that the GetGit commands can find it as well
-        find_package(Git QUIET PATHS "${GIT_EXECUTABLE}")
+    elseif (EXISTS "${CMAKE_SOURCE_DIR}/.git")
+        # Query Git directly. GetGitRevisionDescription.cmake assumes a non-directory .git
+        # entry is a submodule pointer, but worktrees store a gitdir pointer there instead.
+        if (GIT_FOUND)
+            execute_process(COMMAND "${GIT_EXECUTABLE}" rev-parse HEAD
+                WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+                RESULT_VARIABLE GIT_REV_RESULT
+                OUTPUT_VARIABLE GIT_REV
+                OUTPUT_STRIP_TRAILING_WHITESPACE
+                ERROR_QUIET)
+            execute_process(COMMAND "${GIT_EXECUTABLE}" describe --always --long --dirty
+                WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+                RESULT_VARIABLE GIT_DESC_RESULT
+                OUTPUT_VARIABLE GIT_DESC
+                OUTPUT_STRIP_TRAILING_WHITESPACE
+                ERROR_QUIET)
+            execute_process(COMMAND "${GIT_EXECUTABLE}" rev-parse --abbrev-ref HEAD
+                WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+                RESULT_VARIABLE GIT_BRANCH_RESULT
+                OUTPUT_VARIABLE GIT_BRANCH
+                OUTPUT_STRIP_TRAILING_WHITESPACE
+                ERROR_QUIET)
 
-        # only use Git to check revision info when source is obtained via Git
-        include(GetGitRevisionDescription)
-        get_git_head_revision(GIT_REF_SPEC GIT_REV)
-        git_describe(GIT_DESC --always --long --dirty)
-        git_branch_name(GIT_BRANCH)
-        if (DEFINED ENV{CITRA_USE_TAG_AS_VERSION})
-            git_describe(GIT_TAG --tags --dirty)
+            if (NOT GIT_REV_RESULT EQUAL 0 OR NOT GIT_DESC_RESULT EQUAL 0 OR
+                NOT GIT_BRANCH_RESULT EQUAL 0)
+                set(GIT_REV "UNKNOWN")
+                set(GIT_DESC "UNKNOWN")
+                set(GIT_BRANCH "UNKNOWN")
+            elseif (DEFINED ENV{CITRA_USE_TAG_AS_VERSION})
+                execute_process(COMMAND "${GIT_EXECUTABLE}" describe --tags --dirty
+                    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+                    RESULT_VARIABLE GIT_TAG_RESULT
+                    OUTPUT_VARIABLE GIT_TAG
+                    OUTPUT_STRIP_TRAILING_WHITESPACE
+                    ERROR_QUIET)
+                if (NOT GIT_TAG_RESULT EQUAL 0)
+                    unset(GIT_TAG)
+                endif()
+            endif()
+        else()
+            set(GIT_REV "UNKNOWN")
+            set(GIT_DESC "UNKNOWN")
+            set(GIT_BRANCH "UNKNOWN")
         endif()
     else()
         # self-packed archive?

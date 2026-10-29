@@ -5,6 +5,7 @@
 
 #include <array>
 #include <memory>
+#include <optional>
 #include "core/frontend/input.h"
 
 namespace Common {
@@ -19,8 +20,19 @@ enum class MouseButton : unsigned {
     Middle,
     Back,
     Forward,
-    Count,
+    Count = 27,
 };
+
+// Qt exposes 27 single-bit buttons. Stored indices remain zero based.
+inline std::optional<MouseButton> MouseButtonFromBit(unsigned bit) {
+    if (!bit || (bit & (bit - 1)))
+        return std::nullopt;
+    for (unsigned index = 0; index < static_cast<unsigned>(MouseButton::Count); ++index) {
+        if (bit == (1U << index))
+            return static_cast<MouseButton>(index);
+    }
+    return std::nullopt;
+}
 
 enum class MouseButtonTarget : unsigned char {
     None,

@@ -236,6 +236,10 @@
     <string name="regenerate_mac_address">Regenerate MAC Address</string>
     <string name="regenerate_mac_address_description">This will replace your current MAC address with a new one. It is not recommended to do this if you got the MAC address from your real console using the setup tool. Continue?</string>
     <string name="plugin_loader">3GX Plugin Loader</string>
+    <string name="level256_compatibility">Enable Level256 kernel compatibility mode</string>
+    <string name="level256_compatibility_description">Enable kernel compatibility for Level256.</string>
+    <string name="level256_registration_diagnostics">Enable Level256 account registration diagnostics</string>
+    <string name="level256_registration_diagnostics_description">Enable diagnostics for Level256 account registration.</string>
     <string name="plugin_loader_description">Loads 3GX plugins from the emulated SD card if they are available.</string>
     <string name="allow_plugin_loader">Allow Applications to Change Plugin Loader State</string>
     <string name="allow_plugin_loader_description">Allows homebrew apps to enable the plugin loader even when it is disabled.</string>

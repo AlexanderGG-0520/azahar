@@ -14,6 +14,7 @@
 #include <QMenu>
 #include <QMessageBox>
 #include <QMouseEvent>
+#include <QSignalBlocker>
 #include <QSlider>
 #include <QTimer>
 #include "citra_qt/configuration/config.h"
@@ -360,58 +361,28 @@ void ConfigureInput::ApplyConfiguration() {
 
     Settings::values.current_input_profile.maptype =
         static_cast<Settings::InputMappingType>(ui->comboBoxMappingType->currentIndex());
+    std::string maptype;
+    if (Settings::values.current_input_profile.maptype ==
+        Settings::InputMappingType::AllControllers) {
+        maptype = "all";
+    } else if (Settings::values.current_input_profile.maptype == Settings::InputMappingType::Guid) {
+        maptype = "guid";
+    } else {
+        maptype = "guid+port";
+    }
 
     std::transform(buttons_param.begin(), buttons_param.end(),
                    Settings::values.current_input_profile.buttons.begin(),
-                   [](Common::ParamPackage& param) {
-                       if (param.Get("engine", "keyboard") == "sdl") {
-                           if (Settings::values.current_input_profile.maptype ==
-                               Settings::InputMappingType::AllControllers)
-                               param.Set("maptype", "all");
-                           else if (Settings::values.current_input_profile.maptype ==
-                                    Settings::InputMappingType::Guid)
-                               param.Set("maptype", "guid");
-                           else
-                               param.Set("maptype", "guid+port");
-                       } else {
-                           param.Erase("maptype");
-                       }
+                   [&maptype](Common::ParamPackage& param) {
+                       InputCommon::ApplyInputProfileMapType(param, maptype);
                        return param.Serialize();
                    });
     std::transform(analogs_param.begin(), analogs_param.end(),
                    Settings::values.current_input_profile.analogs.begin(),
-                   [](Common::ParamPackage& param) {
-                       if (param.Get("engine", "keyboard") == "sdl") {
-                           if (Settings::values.current_input_profile.maptype ==
-                               Settings::InputMappingType::AllControllers) {
-                               param.Set("maptype", "all");
-                           } else if (Settings::values.current_input_profile.maptype ==
-                                      Settings::InputMappingType::Guid) {
-                               param.Set("maptype", "guid");
-                           } else {
-                               param.Set("maptype", "guid+port");
-                           }
-                       } else if (param.Get("engine", "keyboard") == "analog_from_button") {
-                           for (int sub_button_id = 0; sub_button_id < ANALOG_SUB_BUTTONS_NUM - 1;
-                                ++sub_button_id) {
-                               auto dir = param.Get(analog_sub_buttons[sub_button_id], "");
-                               if (dir != "") {
-                                   auto dir_param = Common::ParamPackage(param.Get(dir, ""));
-                                   if (Settings::values.current_input_profile.maptype ==
-                                       Settings::InputMappingType::AllControllers) {
-                                       dir_param.Set("maptype", "all");
-                                   } else if (Settings::values.current_input_profile.maptype ==
-                                              Settings::InputMappingType::Guid) {
-                                       dir_param.Set("maptype", "guid");
-                                   } else {
-                                       dir_param.Set("maptype", "guid+port");
-                                   }
-                                   param.Set(dir, dir_param.Serialize());
-                               }
-                           }
-                       } else {
-                           param.Erase("maptype");
-                       }
+                   [&maptype](Common::ParamPackage& param) {
+                       InputCommon::ApplyInputProfileMapType(
+                           param, maptype,
+                           std::span{analog_sub_buttons.data(), ANALOG_SUB_BUTTONS_NUM - 1});
                        return param.Serialize();
                    });
     Settings::SaveProfile(Settings::values.current_input_profile_index);
@@ -453,6 +424,8 @@ QList<QKeySequence> ConfigureInput::GetUsedKeyboardKeys() {
 }
 
 void ConfigureInput::LoadConfiguration() {
+    // Loading a profile must not save partially initialized mappings through toggled().
+    const QSignalBlocker touch_priority_blocker{ui->prefer_touchscreen_over_mouse_buttons};
     ui->use_artic_controller->setChecked(Settings::values.use_artic_base_controller.GetValue());
     ui->prefer_touchscreen_over_mouse_buttons->setChecked(
         Settings::values.current_input_profile.prefer_touchscreen_over_mouse_buttons);
@@ -518,6 +491,7 @@ void ConfigureInput::UpdateButtonLabels() {
         auto* const analog_stick_slider = analog_map_deadzone_and_modifier_slider[analog_id];
         auto* const analog_stick_slider_label =
             analog_map_deadzone_and_modifier_slider_label[analog_id];
+        const QSignalBlocker slider_blocker{analog_stick_slider};
 
         if (param.Has("engine")) {
             const auto engine{param.Get("engine", "")};
@@ -678,26 +652,8 @@ bool ConfigureInput::eventFilter(QObject* object, QEvent* event) {
     }
 
     const auto mouse_event = static_cast<QMouseEvent*>(event);
-    std::optional<InputCommon::MouseButton> button;
-    switch (mouse_event->button()) {
-    case Qt::LeftButton:
-        button = InputCommon::MouseButton::Left;
-        break;
-    case Qt::RightButton:
-        button = InputCommon::MouseButton::Right;
-        break;
-    case Qt::MiddleButton:
-        button = InputCommon::MouseButton::Middle;
-        break;
-    case Qt::BackButton:
-        button = InputCommon::MouseButton::Back;
-        break;
-    case Qt::ForwardButton:
-        button = InputCommon::MouseButton::Forward;
-        break;
-    default:
-        break;
-    }
+    const auto button =
+        InputCommon::MouseButtonFromBit(static_cast<unsigned>(mouse_event->button()));
     if (!button) {
         return QWidget::eventFilter(object, event);
     }

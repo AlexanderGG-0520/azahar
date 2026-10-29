@@ -461,10 +461,18 @@ System::ResultStatus System::Load(Frontend::EmuWindow& emu_window, const std::st
         }
     }
     kernel->SetCurrentProcess(process);
+    SetPresenceProgramId(process->codeset ? process->codeset->program_id : 0);
     title_id = 0;
     if (app_loader->ReadProgramId(title_id) != Loader::ResultStatus::Success) {
         LOG_ERROR(Core, "Failed to find title id for ROM (Error {})",
                   static_cast<u32>(load_result));
+    }
+    std::string initial_title;
+    app_loader->ReadTitle(initial_title);
+    {
+        std::scoped_lock lock{presence_metadata_mutex};
+        presence_metadata.initial_program_id = title_id;
+        presence_metadata.initial_title = std::move(initial_title);
     }
 
     cheat_engine.LoadCheatFile(title_id);
@@ -865,11 +873,15 @@ void System::InsertCartridge(const std::string& path) {
     if (cartridge_container.LoadHeader() == Loader::ResultStatus::Success &&
         cartridge_container.IsNCSD()) {
         inserted_cartridge = path;
+        std::scoped_lock lock{presence_metadata_mutex};
+        presence_metadata.cartridge_path = path;
     }
 }
 
 void System::EjectCartridge() {
     inserted_cartridge.clear();
+    std::scoped_lock lock{presence_metadata_mutex};
+    presence_metadata.cartridge_path.clear();
 }
 
 bool System::IsInitialSetup() {

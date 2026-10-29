@@ -16,6 +16,7 @@
 #include "core/hle/service/apt/applet_manager.h"
 #include "core/hle/service/apt/errors.h"
 #include "core/hle/service/apt/ns.h"
+#include "core/hle/service/apt/presence.h"
 #include "core/hle/service/cfg/cfg.h"
 #include "core/hle/service/gsp/gsp_gpu.h"
 #include "video_core/utils.h"
@@ -416,6 +417,9 @@ ResultVal<AppletManager::InitializeResult> AppletManager::Initialize(AppletId ap
         next_app_mediatype = static_cast<FS::MediaType>(UINT32_MAX);
     }
     slot_data->attributes.raw = attributes.raw;
+    if (slot == AppletSlot::Application || slot == AppletSlot::HomeMenu) {
+        UpdatePresenceProgramId();
+    }
 
     // Applications need to receive a Wakeup signal to actually start up, this signal is usually
     // sent by the Home Menu after starting the app by way of APT::WakeupApplication. However,
@@ -479,6 +483,9 @@ Result AppletManager::Finalize(AppletId app_id) {
 
     auto slot_data = GetAppletSlot(slot);
     slot_data->Reset();
+    if (slot == AppletSlot::Application || slot == AppletSlot::HomeMenu) {
+        UpdatePresenceProgramId();
+    }
 
     auto inactive = active_slot == AppletSlot::Error;
     if (!inactive) {
@@ -1185,6 +1192,7 @@ Result AppletManager::CloseApplication(std::shared_ptr<Kernel::Object> object,
     application_cancelled = false;
 
     GetAppletSlot(AppletSlot::Application)->Reset();
+    UpdatePresenceProgramId();
 
     if (application_close_target != AppletSlot::Error) {
         // If exiting to the home menu and it is not loaded, exit to game list.
@@ -1373,6 +1381,7 @@ Result AppletManager::DoApplicationJump(const DeliverArg& arg) {
     auto application_slot_data = GetAppletSlot(AppletSlot::Application);
     auto title_id = application_slot_data->title_id;
     application_slot_data->Reset();
+    UpdatePresenceProgramId();
 
     // Set the delivery parameters.
     deliver_arg = arg;
@@ -1532,6 +1541,7 @@ Result AppletManager::StartApplication(const std::vector<u8>& parameter,
         LOG_CRITICAL(Service_APT, "Failed to launch title during application start, exiting.");
         system.RequestShutdown();
     } else {
+        system.SetPresenceProgramId(process->codeset->program_id);
         LOG_INFO(Service_APT,
                  "[HOME-HANDOFF] manager StartApplication launched pid={} title={:016X} "
                  "active_slot_now={:02X}",
@@ -1796,6 +1806,15 @@ void AppletManager::ButtonUpdateEvent(std::uintptr_t user_data, s64 cycles_late)
     // Reschedule recurrent event
     system.CoreTiming().ScheduleEvent(usToCycles(button_update_interval_us) - cycles_late,
                                       button_update_event);
+}
+
+void AppletManager::UpdatePresenceProgramId() {
+    const auto* app = GetAppletSlot(AppletSlot::Application);
+    const auto* home = GetAppletSlot(AppletSlot::HomeMenu);
+    const u64 app_id = app->applet_id != AppletId::None ? app->title_id : 0;
+    const u64 home_id = home->applet_id != AppletId::None ? home->title_id : 0;
+    system.SetPresenceProgramId(
+        SelectPresenceProgramId(app_id, home_id, system.GetPresenceProgramId()));
 }
 
 AppletManager::AppletManager(Core::System& system) : system(system) {

@@ -635,6 +635,24 @@ class SettingsFragmentPresenter(private val fragmentView: SettingsFragmentView) 
                     BooleanSetting.ALLOW_PLUGIN_LOADER.defaultValue
                 )
             )
+            add(
+                SwitchSetting(
+                    BooleanSetting.LEVEL256_COMPATIBILITY,
+                    R.string.level256_compatibility,
+                    R.string.level256_compatibility_description,
+                    BooleanSetting.LEVEL256_COMPATIBILITY.key,
+                    BooleanSetting.LEVEL256_COMPATIBILITY.defaultValue
+                )
+            )
+            add(
+                SwitchSetting(
+                    BooleanSetting.LEVEL256_REGISTRATION_DIAGNOSTICS,
+                    R.string.level256_registration_diagnostics,
+                    R.string.level256_registration_diagnostics_description,
+                    BooleanSetting.LEVEL256_REGISTRATION_DIAGNOSTICS.key,
+                    BooleanSetting.LEVEL256_REGISTRATION_DIAGNOSTICS.defaultValue
+                )
+            )
             add(HeaderSetting(R.string.storage))
             add(
                 SwitchSetting(
