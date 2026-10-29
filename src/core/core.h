@@ -321,6 +321,23 @@ public:
         return *app_loader;
     }
 
+    struct PresenceMetadata {
+        u64 initial_program_id{};
+        std::string initial_title;
+        std::string cartridge_path;
+    };
+
+    [[nodiscard]] PresenceMetadata GetPresenceMetadata() const {
+        std::scoped_lock lock{presence_metadata_mutex};
+        return presence_metadata;
+    }
+    [[nodiscard]] u64 GetPresenceProgramId() const {
+        return presence_program_id.load(std::memory_order_relaxed);
+    }
+    void SetPresenceProgramId(u64 program_id) {
+        presence_program_id.store(program_id, std::memory_order_relaxed);
+    }
+
     /// Frontend Applets
 
     void RegisterMiiSelector(std::shared_ptr<Frontend::MiiSelector> mii_selector);
@@ -506,6 +523,9 @@ private:
     static System s_instance;
 
     std::atomic_bool is_powered_on{};
+    std::atomic<u64> presence_program_id{};
+    mutable std::mutex presence_metadata_mutex;
+    PresenceMetadata presence_metadata;
 
     SaveStateStatus save_state_status = SaveStateStatus::NONE;
     SaveStateStatus save_state_request_status = SaveStateStatus::NONE;

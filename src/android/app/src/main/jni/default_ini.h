@@ -505,16 +505,13 @@ static const char* android_config_default_file_content = (BOOST_HANA_STRING(R"(
 # 0 (default): Disabled, 1: Enabled
 )") DECLARE_KEY(level256_compatibility_enabled) BOOST_HANA_STRING(R"(
 
-
 # Whether to log Level256 bootloader diagnostics
 # 0 (default): Disabled, 1: Enabled
 )") DECLARE_KEY(level256_bootloader_diagnostics_enabled) BOOST_HANA_STRING(R"(
 
-
 # Whether to log Level256 registration diagnostics
 # 0 (default): Disabled, 1: Enabled
 )") DECLARE_KEY(level256_registration_diagnostics_enabled) BOOST_HANA_STRING(R"(
-
 
 # Apply region free patch to installed applications
 # Patches the region of installed applications to be region free, so that they always appear on the home menu.

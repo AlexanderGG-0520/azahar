@@ -26,6 +26,8 @@ object SettingKeys {
     external fun init_ticks_override(): String
     external fun plugin_loader(): String
     external fun allow_plugin_loader(): String
+    external fun level256_compatibility_enabled(): String
+    external fun level256_registration_diagnostics_enabled(): String
     external fun steps_per_hour(): String
     external fun apply_region_free_patch(): String
     external fun graphics_api(): String

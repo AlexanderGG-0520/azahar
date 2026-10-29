@@ -89,20 +89,10 @@ std::string ButtonToText(const Common::ParamPackage& param) {
     }
 
     if (engine_str == "mouse") {
-        switch (param.Get("button", -1)) {
-        case static_cast<int>(MouseButton::Left):
-            return "Mouse Left";
-        case static_cast<int>(MouseButton::Right):
-            return "Mouse Right";
-        case static_cast<int>(MouseButton::Middle):
-            return "Mouse Middle";
-        case static_cast<int>(MouseButton::Back):
-            return "Mouse Back";
-        case static_cast<int>(MouseButton::Forward):
-            return "Mouse Forward";
-        default:
-            return {};
-        }
+        const int button = param.Get("button", -1);
+        return button >= 0 && button < static_cast<int>(MouseButton::Count)
+                   ? "MB" + std::to_string(button + 1)
+                   : "[not set]";
     }
 
     if (engine_str == "sdl") {
@@ -191,6 +181,32 @@ std::string AnalogToText(const Common::ParamPackage& param, const std::string& d
         return {};
     }
     return "[unknown]";
+}
+
+void ApplyInputProfileMapType(Common::ParamPackage& param, const std::string& maptype,
+                              std::span<const std::string> analog_sub_buttons) {
+    const auto apply_to_button = [&maptype](Common::ParamPackage& button) {
+        if (button.Get("engine", "keyboard") == "sdl") {
+            button.Set("maptype", maptype);
+        } else {
+            button.Erase("maptype");
+        }
+    };
+
+    if (param.Get("engine", "keyboard") == "analog_from_button") {
+        param.Erase("maptype");
+        for (const auto& direction : analog_sub_buttons) {
+            const auto mapping = param.Get(direction, "");
+            if (!mapping.empty()) {
+                Common::ParamPackage button{mapping};
+                apply_to_button(button);
+                param.Set(direction, button.Serialize());
+            }
+        }
+        return;
+    }
+
+    apply_to_button(param);
 }
 
 Keyboard* GetKeyboard() {

@@ -546,6 +546,8 @@ private:
         return slot != AppletSlot::Error ? GetAppletSlot(slot)->applet_id : AppletId::None;
     }
 
+    void UpdatePresenceProgramId();
+
     AppletSlot GetAppletSlotFromId(AppletId id);
     AppletSlot GetAppletSlotFromAttributes(AppletAttributes attributes);
     AppletSlot GetAppletSlotFromPos(AppletPos pos);
@@ -595,6 +597,7 @@ private:
         ar & next_app_mediatype;
 
         if (Archive::is_loading::value) {
+            UpdatePresenceProgramId();
             LoadInputDevices();
         }
     }

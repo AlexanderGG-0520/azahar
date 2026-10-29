@@ -3601,6 +3601,9 @@ void GMainWindow::OnStopVideoDumping() {
 }
 
 void GMainWindow::UpdateStatusBar() {
+#ifdef ENABLE_DISCORD_RPC
+    discord_rpc->Update(system.IsPoweredOn());
+#endif
     if (!emu_thread) [[unlikely]] {
         status_bar_update_timer.stop();
         return;
