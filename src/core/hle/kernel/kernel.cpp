@@ -68,12 +68,17 @@ std::shared_ptr<Process> KernelSystem::GetCurrentProcess() const {
 }
 
 void KernelSystem::SetCurrentProcess(std::shared_ptr<Process> process) {
+    current_process_program_id.store(process && process->codeset ? process->codeset->program_id : 0,
+                                     std::memory_order_relaxed);
     current_process = process;
     SetCurrentMemoryPageTable(process->vm_manager.page_table);
 }
 
 void KernelSystem::SetCurrentProcessForCPU(std::shared_ptr<Process> process, u32 core_id) {
     if (current_cpu->GetID() == core_id) {
+        current_process_program_id.store(process && process->codeset ? process->codeset->program_id
+                                                                     : 0,
+                                         std::memory_order_relaxed);
         current_process = process;
         SetCurrentMemoryPageTable(process->vm_manager.page_table);
     } else {
@@ -282,6 +287,11 @@ void KernelSystem::serialize(Archive& ar, const unsigned int) {
     ar & next_process_id;
     ar & process_list;
     ar & current_process;
+    if constexpr (Archive::is_loading::value) {
+        const u64 program_id =
+            current_process && current_process->codeset ? current_process->codeset->program_id : 0;
+        current_process_program_id.store(program_id, std::memory_order_relaxed);
+    }
     // NB: core count checked in 'core'
     for (auto& thread_manager : thread_managers) {
         ar&* thread_manager.get();

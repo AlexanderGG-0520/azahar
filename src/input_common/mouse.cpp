@@ -28,6 +28,8 @@ MouseButtonTarget SelectMouseButtonTarget(MouseButton button, bool inside_touchs
 }
 
 MouseButtonTarget MouseButtonRoutingState::Press(MouseButton button, MouseButtonTarget target) {
+    if (ButtonIndex(button) >= targets.size())
+        return MouseButtonTarget::None;
     auto& current = targets[ButtonIndex(button)];
     if (current == MouseButtonTarget::None) {
         current = target;
@@ -36,6 +38,8 @@ MouseButtonTarget MouseButtonRoutingState::Press(MouseButton button, MouseButton
 }
 
 MouseButtonTarget MouseButtonRoutingState::Release(MouseButton button) {
+    if (ButtonIndex(button) >= targets.size())
+        return MouseButtonTarget::None;
     auto& current = targets[ButtonIndex(button)];
     const auto target = current;
     current = MouseButtonTarget::None;
@@ -50,7 +54,8 @@ MouseButtonRoutingState::ReleaseAll() {
 }
 
 MouseButtonTarget MouseButtonRoutingState::GetTarget(MouseButton button) const {
-    return targets[ButtonIndex(button)];
+    return ButtonIndex(button) < targets.size() ? targets[ButtonIndex(button)]
+                                                : MouseButtonTarget::None;
 }
 
 class Mouse::ButtonList {

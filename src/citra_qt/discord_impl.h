@@ -5,6 +5,7 @@
 #pragma once
 
 #include "citra_qt/discord.h"
+#include "citra_qt/discord_presence.h"
 
 namespace Core {
 class System;
@@ -22,6 +23,7 @@ public:
 
 private:
     const Core::System& system;
+    PresenceState presence_state;
 };
 
 } // namespace DiscordRPC

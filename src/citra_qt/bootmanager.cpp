@@ -703,20 +703,7 @@ void GRenderWindow::ReleaseMouseInput() {
 }
 
 static std::optional<InputCommon::MouseButton> ToInputMouseButton(Qt::MouseButton button) {
-    switch (button) {
-    case Qt::LeftButton:
-        return InputCommon::MouseButton::Left;
-    case Qt::RightButton:
-        return InputCommon::MouseButton::Right;
-    case Qt::MiddleButton:
-        return InputCommon::MouseButton::Middle;
-    case Qt::BackButton:
-        return InputCommon::MouseButton::Back;
-    case Qt::ForwardButton:
-        return InputCommon::MouseButton::Forward;
-    default:
-        return std::nullopt;
-    }
+    return InputCommon::MouseButtonFromBit(static_cast<unsigned>(button));
 }
 
 static bool IsMouseButtonMapped(InputCommon::MouseButton button) {

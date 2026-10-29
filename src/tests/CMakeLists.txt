@@ -2,6 +2,8 @@ add_executable(tests
     common/bit_field.cpp
     common/file_util.cpp
     common/param_package.cpp
+    common/discord_presence.cpp
+    input_common/profile.cpp
     input_common/mouse.cpp
     ../input_common/mouse.cpp
     core/core_timing.cpp
@@ -56,7 +58,7 @@ if (BSD STREQUAL "NetBSD")
     disable_pax_mprotect(tests)
 endif()
 
-target_link_libraries(tests PRIVATE citra_common citra_core video_core audio_core)
+target_link_libraries(tests PRIVATE citra_common citra_core video_core audio_core input_common)
 target_link_libraries(tests PRIVATE ${PLATFORM_LIBRARIES} catch2 cryptopp nihstro-headers Threads::Threads)
 
 if (ENABLE_LIBRETRO)

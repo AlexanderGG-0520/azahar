@@ -5,6 +5,7 @@
 #pragma once
 
 #include <memory>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -44,6 +45,8 @@ std::string GenerateAnalogParamFromKeys(int key_up, int key_down, int key_left, 
 
 std::string AnalogToText(const Common::ParamPackage& param, const std::string& dir);
 std::string ButtonToText(const Common::ParamPackage& param);
+void ApplyInputProfileMapType(Common::ParamPackage& param, const std::string& maptype,
+                              std::span<const std::string> analog_sub_buttons = {});
 
 Common::ParamPackage GetControllerButtonBinds(const Common::ParamPackage& params, int button);
 Common::ParamPackage GetControllerAnalogBinds(const Common::ParamPackage& params, int analog);

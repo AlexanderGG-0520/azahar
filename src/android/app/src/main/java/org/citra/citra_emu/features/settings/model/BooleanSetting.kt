@@ -17,6 +17,12 @@ enum class BooleanSetting(
     DISABLE_SPIRV_OPTIMIZER(SettingKeys.disable_spirv_optimizer(), Settings.SECTION_RENDERER, true),
     PLUGIN_LOADER(SettingKeys.plugin_loader(), Settings.SECTION_SYSTEM, false),
     ALLOW_PLUGIN_LOADER(SettingKeys.allow_plugin_loader(), Settings.SECTION_SYSTEM, true),
+    LEVEL256_COMPATIBILITY(
+        SettingKeys.level256_compatibility_enabled(), Settings.SECTION_SYSTEM, false
+    ),
+    LEVEL256_REGISTRATION_DIAGNOSTICS(
+        SettingKeys.level256_registration_diagnostics_enabled(), Settings.SECTION_SYSTEM, false
+    ),
     SWAP_SCREEN(SettingKeys.swap_screen(), Settings.SECTION_LAYOUT, false),
     INSTANT_DEBUG_LOG(SettingKeys.instant_debug_log(), Settings.SECTION_DEBUG, false),
     ENABLE_RPC_SERVER(SettingKeys.enable_rpc_server(), Settings.SECTION_DEBUG, false),
@@ -151,6 +157,8 @@ enum class BooleanSetting(
         private val NOT_RUNTIME_EDITABLE = listOf(
             PLUGIN_LOADER,
             ALLOW_PLUGIN_LOADER,
+            LEVEL256_COMPATIBILITY,
+            LEVEL256_REGISTRATION_DIAGNOSTICS,
             ASYNC_SHADERS,
             DELAY_START_LLE_MODULES,
             DETERMINISTIC_ASYNC_OPERATIONS,
