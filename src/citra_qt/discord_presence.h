@@ -17,7 +17,7 @@ inline std::string ResolvePresenceTitle(u64 running_program_id, u64 initial_prog
                                         std::string_view initial_title,
                                         std::string_view running_title) {
     if (running_program_id == 0) {
-        return std::string{initial_title};
+        return initial_title.empty() ? "Nintendo 3DS" : std::string{initial_title};
     }
     if (running_program_id == initial_program_id && !initial_title.empty()) {
         return std::string{initial_title};

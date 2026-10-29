@@ -347,9 +347,6 @@ public:
     }
 
     std::shared_ptr<Process> GetCurrentProcess() const;
-    u64 GetCurrentProcessProgramId() const {
-        return current_process_program_id.load(std::memory_order_relaxed);
-    }
     void SetCurrentProcess(std::shared_ptr<Process> process);
     void SetCurrentProcessForCPU(std::shared_ptr<Process> process, u32 core_id);
 
@@ -495,7 +492,6 @@ private:
     std::vector<std::shared_ptr<Process>> process_list;
 
     std::shared_ptr<Process> current_process;
-    std::atomic<u64> current_process_program_id{};
     std::vector<std::shared_ptr<Process>> stored_processes;
 
     std::vector<std::unique_ptr<ThreadManager>> thread_managers;

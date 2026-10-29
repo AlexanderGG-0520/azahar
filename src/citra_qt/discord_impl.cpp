@@ -46,22 +46,16 @@ void DiscordImpl::Update(bool is_powered_on) {
     std::string title;
     std::optional<u64> title_id;
     if (is_powered_on) {
-        const auto program_id = system.Kernel().GetCurrentProcessProgramId();
+        const auto program_id = system.GetPresenceProgramId();
         if (program_id != 0)
             title_id = program_id;
         if (!presence_state.NeedsTitleRefresh(is_powered_on, title_id)) {
             return;
         }
 
-        std::string initial_title;
-        u64 initial_title_id{};
-        if (system.GetAppLoader().ReadProgramId(initial_title_id) !=
-            Loader::ResultStatus::Success) {
-            initial_title_id = 0;
-        }
-        if (initial_title_id == program_id) {
-            system.GetAppLoader().ReadTitle(initial_title);
-        }
+        const auto metadata = system.GetPresenceMetadata();
+        const auto initial_title_id = metadata.initial_program_id;
+        const auto& initial_title = metadata.initial_title;
 
         std::string running_title;
         if (title_id && initial_title_id != *title_id) {
@@ -73,8 +67,8 @@ void DiscordImpl::Update(bool is_powered_on) {
                 loaded_id == *title_id) {
                 loader->ReadTitle(running_title);
             }
-            if (running_title.empty() && !system.GetCartridge().empty()) {
-                loader = Loader::GetLoader(system.GetCartridge());
+            if (running_title.empty() && !metadata.cartridge_path.empty()) {
+                loader = Loader::GetLoader(metadata.cartridge_path);
                 if (loader && loader->ReadProgramId(loaded_id) == Loader::ResultStatus::Success &&
                     loaded_id == *title_id) {
                     loader->ReadTitle(running_title);
