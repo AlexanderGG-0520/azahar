@@ -1,159 +1,138 @@
 # Azahar YW Compatibility Fork
 
-**『妖怪ウォッチ2』を中心に、通信・すれちがい通信・カメラ互換性を改善する非公式 Azahar フォーク。**
+**『妖怪ウォッチ2』を中心に、ローカル通信・すれちがい通信・カメラ・HOMEメニューなどの互換性を改善する非公式 [Azahar](https://github.com/azahar-emu/azahar) フォークです。** 『妖怪ウォッチバスターズ』とLevel256関連の互換性改善も行っています。
 
-Maintained by **[AlexanderGG](https://github.com/AlexanderGG-0520)**.
+Maintained by [AlexanderGG](https://github.com/AlexanderGG-0520). Based in part on the YW2 local-play fixes from [utosa123/azahar](https://github.com/utosa123/azahar).
 
 > [!IMPORTANT]
-> このリポジトリは [Azahar 公式プロジェクト](https://github.com/azahar-emu/azahar) とは別の**非公式フォーク**です。公式 Azahar のリリース、サポート、動作保証を示すものではありません。
+> **Azahar公式とは別の非公式フォーク**です。各機能は実験的で、すべてのゲーム・OS・オンラインサービスに対する互換性や動作保証はありません。
 >
-> **`integration/yw` には実験的な開発が含まれます。** 配布済みビルドと開発ブランチの違いを確認してください。
+> **この `integration/yw` が主要開発ブランチです。** `master` には新しい互換性修正が原則未統合です。一方で、開発先端には未リリースのコードが含まれる場合があります。
+>
+> 使用・アップデートの前に**セーブデータ、NAND、SDMC、ユーザーデータ**をバックアップしてください。
 
-[**最新プレリリース v0.3.2**](https://github.com/AlexanderGG-0520/azahar/releases/tag/yw-v0.3.2) · [**開発ブランチ**](https://github.com/AlexanderGG-0520/azahar/tree/integration/yw) · [**配布・実行ガイド**](https://github.com/AlexanderGG-0520/azahar/blob/integration/yw/docs/yw-release-procedure.md) · [**English**](#english)
+[**Releases（ダウンロード）**](https://github.com/AlexanderGG-0520/azahar/releases) · [**v0.4.4 リリースノート**](https://github.com/AlexanderGG-0520/azahar/releases/tag/yw-v0.4.4) · [**開発ブランチ**](https://github.com/AlexanderGG-0520/azahar/tree/integration/yw) · [**English**](#english)
 
-## このフォークについて
+## ブランチとリリース
 
-このフォークは、[utosa123/azahar](https://github.com/utosa123/azahar) による『妖怪ウォッチ2』のローカル通信修正を土台として、独自の互換性改善・調査を進めています。
-
-主な対象は『妖怪ウォッチ2 元祖／本家／真打』です。『妖怪ウォッチ3』も関心のある対象ですが、**本フォークでの包括的な動作確認や互換性の保証はありません**。
-
-目標は単にゲームを起動させることではなく、実機に近い通信挙動を解析し、再現できる問題を一つずつ修正することです。
-
-## 機能と検証状況
-
-| 項目 | 状況 | 対象 |
-| --- | --- | --- |
-| YW2 ローカル通信（対戦・交換・バスターズ等） | **実装済み**。日本版の通信成功は元フォークで確認済み。各環境での再検証は必要 | 元フォーク由来の修正／`integration/yw` |
-| Linux のシステムカメラ（ふしぎなレンズで緑一色になる問題） | **修正・実機能確認済み** | `integration/yw`・`yw-v0.1.0` |
-| Azahar Multiplayer Room 経由のすれちがい通信 | **ローカル検証成功／実験機能**。2インスタンスで真打のツチノコパンダVIP出現を確認（Windows配布版では未検証） | `yw-v0.2.0`・`integration/yw` |
-| HOMEメニュー復帰（[PR #17](https://github.com/AlexanderGG-0520/azahar/pull/17)） | **従来のPC/タイトル限定回避策をDSP IRQ履歴に基づくワンショット処理へ変更**。初期版でHOME往復3回と音声正常をローカル確認。50ms期限・ステート対応を加えた最終版は再検証が必要 | `yw-v0.2.1`・`integration/yw` |
-| YW2 の高フレームレート化 | **別ブランチの実験**。つつく・おはらい等の副作用があり常用非推奨 | `yw2-120fps-v1-beta` |
-
-すれちがい通信は開発者がローカルで出現を確認しています。HOME復帰は**PR #17初期版で3回連続の往復と音声正常を確認**していますが、**50ms期限・セーブステート対応を追加した最終版では同じ実機能テストを再実施していません**。Windows配布版での動作と全タイトルでの互換性も未検証です。
-
-## ブランチの使い分け
-
-| ブランチ | 用途 |
+| 参照先 | 役割 |
 | --- | --- |
-| [`master`](https://github.com/AlexanderGG-0520/azahar/tree/master) | リポジトリのデフォルトブランチ。元フォーク由来の状態が中心で、最新の独自修正は未統合 |
-| [`integration/yw`](https://github.com/AlexanderGG-0520/azahar/tree/integration/yw) | **現在の主要開発ブランチ**。カメラ・CECDすれちがい・APT等の変更を統合 |
-| [`release/yw-v0.2.1`](https://github.com/AlexanderGG-0520/azahar/tree/release/yw-v0.2.1) | **最新v0.2.1 Windowsプレリリースのソース** |
-| [`release/yw-v0.2.0`](https://github.com/AlexanderGG-0520/azahar/tree/release/yw-v0.2.0) | 旧v0.2.0のリリース系列 |
-| [`release/yw-v0.1.0`](https://github.com/AlexanderGG-0520/azahar/tree/release/yw-v0.1.0) | 旧v0.1.0のリリース系列 |
-| [`yw2-120fps-v1-beta`](https://github.com/AlexanderGG-0520/azahar/tree/yw2-120fps-v1-beta) | フレームレート実験。通常の通信修正とは分離 |
+| [`master`](https://github.com/AlexanderGG-0520/azahar/tree/master) | デフォルトブランチ。**最新の独自機能は未統合**。READMEはフォーク全体の案内を兼ねています。 |
+| [`integration/yw`](https://github.com/AlexanderGG-0520/azahar/tree/integration/yw) | **現在の主要開発ブランチ**。リリース前の実験的な修正を含む場合があります。 |
+| [Releases / `yw-vX.Y.Z` タグ](https://github.com/AlexanderGG-0520/azahar/releases) | 各版の固定ソース・配布物・変更履歴。 |
+| [`yw2-120fps-v1-beta`](https://github.com/AlexanderGG-0520/azahar/tree/yw2-120fps-v1-beta) | 別系統の120 FPS実験。操作への副作用があり、常用非推奨。 |
 
-開発状況は **2026年10月9日時点** のものです。新しいコミットにより変わる場合があります。
+**2026年10月30日時点**で確認した最新の公開プレリリースは **[yw-v0.4.4](https://github.com/AlexanderGG-0520/azahar/releases/tag/yw-v0.4.4)**（10月29日公開）です。新しい版が出ている場合は[Releases一覧](https://github.com/AlexanderGG-0520/azahar/releases)を優先してください。**`master`、`integration/yw`、リリースタグは異なるコードの状態**を示します。
 
-## ダウンロードとインストール
+## 機能・検証状況
 
-### Windows
+以下は主に**`integration/yw` と該当リリース**での実装・検証状況です。`master` のコードに全機能が含まれるという意味ではありません。また、CIビルドの成功とゲーム上の動作確認は区別しています。
 
-[**Azahar YW Compatibility Fork v0.2.1（プレリリース）**](https://github.com/AlexanderGG-0520/azahar/releases/tag/yw-v0.2.1) はWindows向けに次の2形式を配布します。
+| 機能 | 確認できている範囲・制限 |
+| --- | --- |
+| **YW2ローカル通信** | [utosa123/azahar](https://github.com/utosa123/azahar)由来のNWM/UDS worker-polling修正を継承。日本版の通信成功は元フォークで確認。対戦・交換などの全環境での成功は未保証。 |
+| **Multiplayer Room経由のすれちがい通信（CECD）** | 実験的なメッセージ転送。ローカルの『妖怪ウォッチ2 真打』2インスタンスで**ツチノコパンダがVIPルームに出現**したことを確認。全OS・全タイトルは未検証。 |
+| **Qt / Linuxカメラ** | キャプチャ開始・停止と共有カメラの処理を改善。Linuxの『YW2 ふしぎなレンズ』で緑一色問題の改善を確認。 |
+| **HOME / DSP / APT** | HOME往復に関連するイベント・セマフォ競合への修正を含む。LinuxでYW2との往復成功履歴あり。**v0.4.4**ではDiscord有効時のHOME起動停止箇所を通過したが、同版での画面操作やHOMEからのゲーム起動は未検証。 |
+| **Level256 Network v2.0.1** | 署名付き3GXの確認・対象プロセス／Capability限定の互換処理をオプトインで実装。**Linuxの『バスターズ 赤猫団 月兎組』でSELECTメニュー表示、オンライン募集部屋表示・入室を確認**。他OS・全機能の保証ではない。 |
+| **Level256追加修正** | `FS_USER::GetMediaType`、乱数IPC、Windowsの非ブロッキング接続エラー変換、タイトル切替時の残存ハンドル／セッション解放など。**Windows MSYS2版をWineで実行したLevel256新規登録成功**は確認済みだが、Windowsネイティブの同等検証ではない。 |
+| **Qtデスクトップのマウスボタン割り当て** | v0.4.1で導入、v0.4.3でMB1表記・最大27ボタン対応、`[not set]`表示や入力プロファイル保存の修正。対応数はOS・マウスに依存。 |
+| **Discord Rich Presence** | v0.4.3でHOMEからのタイトル切り替え時の更新処理を変更。v0.4.4でDiscord有効時のHOME起動デッドロックを修正。ゲーム操作を含む完全な実機能確認は未完了。 |
+| **セーブ日時** | YW2・バスターズの本体Offset Time変更後に生じる将来日時への対応と回帰テスト。重要データのバックアップは必要。 |
 
-- **インストーラー:** `azahar-yw-v0.2.1-windows-msys2-installer.exe`
-- **ポータブル版:** `azahar-yw-v0.2.1-windows-msys2.zip`
+『妖怪ウォッチ3』も関心対象ですが、**網羅的な動作検証済みとは主張しません**。Pretendoなど外部サービスの常時利用や全機能の互換性も保証しません。
 
-ポータブル版は ZIP を任意のフォルダーに展開して `azahar.exe` を起動してください。OneDrive 管理下などの複雑なパスは問題切り分けのため避けると無難です。
+## ダウンロード・インストール
 
-**注意:** v0.2.1はすれちがい通信の実験機能と[PR #17](https://github.com/AlexanderGG-0520/azahar/pull/17)の汎用DSP音声IRQ破棄競合回避策を含みます。**最終コードの実機能テストは未完了**です。使用前にセーブ/NANDをバックアップしてください。Linux／macOS／Android用の同バージョンのバイナリは配布しません。旧版は[v0.2.0](https://github.com/AlexanderGG-0520/azahar/releases/tag/yw-v0.2.0)から入手できます。
+[GitHub Releases](https://github.com/AlexanderGG-0520/azahar/releases)から対象版を選んでください。以下は**v0.4.4に実際に添付されたアセット**です。
 
-### Android（GitHub Releases / Obtainium）
+| OS | ファイル | 補足 |
+| --- | --- | --- |
+| Windows | `azahar-yw-v0.4.4-windows-msys2-installer.exe` / `azahar-yw-v0.4.4-windows-msys2.zip` | インストーラー／ポータブルZIP（展開後`azahar.exe`を起動） |
+| macOS | `azahar-yw-v0.4.4-macos-universal.zip` | Universal版。実ゲーム動作の確認とは別 |
+| Android | `azahar-yw-v0.4.4-android-arm64.apk` | 署名付きVanilla APK。実機でのLevel256等は未検証 |
+| Linux | [ソース](https://github.com/AlexanderGG-0520/azahar/tree/integration/yw) / [Arch向けPKGBUILD](https://github.com/AlexanderGG-0520/azahar/tree/integration/yw/packaging/aur) | v0.4.4 Releaseにビルド済みLinuxバイナリなし |
+| 共通 | `SHA256SUMS.txt` | Releaseのファイル整合性を確認 |
 
-次回の対応Releaseから、Google Playを使用せずGitHub ReleasesにVanilla APKを添付する予定です。APKは `io.github.alexandergg0520.azaharyw` として署名し、公式Azaharと別アプリとして共存します。Android実機でのLevel256、Pretendo、HOME復帰などの動作は個別に確認されていない場合があります。
+### Android / Obtainium
 
-1. [Obtainiumの公式リリース](https://github.com/ImranR98/Obtainium/releases)からObtainiumをインストールします。
-2. Obtainiumで `https://github.com/AlexanderGG-0520/azahar` を追加します（GitHubソース）。
-3. GitHubソースの **Include prereleases** を有効にします。本フォークの配布はPrereleaseです。
-4. **Filter APKs by Regular Expression** に `^azahar-yw-v[0-9]+\.[0-9]+\.[0-9]+-android-arm64\.apk$` を設定します。
-5. `azahar-yw-vX.Y.Z-android-arm64.apk` をインストールし、以後Obtainiumの更新確認から新しいGitHub Releaseへ更新します。
+AndroidアプリIDは `io.github.alexandergg0520.azaharyw`。公式Azaharとは別アプリです。Google PlayではなくGitHub Releasesで配布しています。
 
-APKの上書き更新には同じPackage IDとリリース署名鍵が必要です。Package IDまたは署名鍵を変更した場合、通常の更新として認識されず、アプリを削除して再インストールする必要があります。削除前にアプリ内データをバックアップしてください。検証用debug署名APKは本番更新に使用しないでください。
+1. [Obtainium](https://github.com/ImranR98/Obtainium/releases)に `https://github.com/AlexanderGG-0520/azahar` をGitHubソースとして追加。
+2. **Include prereleases** を有効化。
+3. APKフィルターに `^azahar-yw-v[0-9]+\.[0-9]+\.[0-9]+-android-arm64\.apk$` を設定。
+4. 対象APKをインストールして更新を管理。
 
-### Arch Linux / CachyOS（AUR）
+上書き更新には同一アプリIDと署名鍵が必要です。debug署名版からの移行などでは再インストールが必要な場合があるため、**削除前にユーザーデータをバックアップ**してください。Android版にはLevel256互換モード・登録診断の設定項目がありますが、**Android実機での動作検証が完了したという意味ではありません**。
 
-`azahar-yw-git` は `integration/yw` を追従する非公式VCSパッケージです。AURに投稿された後は、AUR helperで `yay -S azahar-yw-git` を実行するか、PKGBUILDを取得して `makepkg -si` でビルド・インストールできます。パッケージは `/usr/bin/azahar-yw` を使い、公式版と異なるdesktop ID・アイコンを使用します。設定、セーブ、NAND、SDMCは `azahar-yw` 専用のXDGディレクトリに保存され、公式版のデータを自動移行しません。
+### Arch Linux / CachyOS
 
-### Linux（ソースからビルド）
+`integration/yw` に `packaging/aur/PKGBUILD`・ランチャーなどの**`azahar-yw-git`用パッケージ定義**があります。リポジトリに定義があることは**AURへの公開を意味しません**。AUR上で確認できた場合に限ってAUR helperを使用してください。取得した`packaging/aur`ディレクトリでは、必要な依存関係を用意して`makepkg -si`でローカルビルドできます。
 
-Linux では `integration/yw` をビルドしてください。基本のチェックアウト手順は次のとおりです。
+このパッケージは`/usr/bin/azahar-yw`を使用し、公式Azaharとは別のXDGユーザーデータ領域を使う設計です。**署名付きpacmanリポジトリの公開・更新状況は別途確認が必要**です。
 
-```sh
+### Linux（開発ソースからビルド）
+
+~~~sh
 git clone --recursive https://github.com/AlexanderGG-0520/azahar.git
 cd azahar
 git switch integration/yw
+git submodule sync --recursive
 git submodule update --init --recursive
-```
+cmake -S . -B build -G Ninja \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DENABLE_ROOM_STANDALONE=OFF \
+  -DENABLE_DISCORD_RPC=ON
+cmake --build build --parallel 6
+./build/bin/Release/azahar
+~~~
 
-CMake、Ninja、Qt 6 と Azahar のビルド依存関係が必要です。具体的なビルド設定・実行ファイルの場所・カメラ設定は [インストールガイド](https://github.com/AlexanderGG-0520/azahar/blob/integration/yw/docs/yw-fork-install.md) を参照してください。
+Azaharの通常のビルド依存関係（CMake・Ninja・Qt 6開発パッケージなど）が必要です。バージョン固定で再現する場合は`git switch --detach yw-v0.4.4`などで**タグ**を選んでください。`master`からのビルドでは新機能が揃いません。
 
-ビルド前に既存のセーブデータと `user` ディレクトリをバックアップすることを推奨します。異なるビルドで同じデータを扱う場合は、直接移動するのではなくコピーを使ってください。
+## ローカル通信とすれちがい通信
 
-## ローカル通信の使い方
+- **ローカル通信:** 双方でYW2向け修正を含むビルドを使用して、同じAzahar Multiplayer Roomへ接続。仮想本体の識別情報（MACアドレスなど）を重複させず、日本版ではリージョン（JPN）も揃えてください。
+- **すれちがい通信:** 対応ビルドの双方がゲームを起動し、ゲーム側ですれちがい通信の登録・設定を済ませてください。Room経由のCECD交換にUDSの対戦開始は不要です。
+- 同じRoomにいるだけでゲーム通信の成功を保証するものではありません。CECDはセーブフラグを直接書き換える機能ではありません。**バックアップ済みの検証用データで試してください。**
 
-1. 通信する双方で、YW2 の通信修正を含む互換ビルドを起動します。
-2. Azahar の **Multiplayer** から同じ Room に参加します。
-3. コンソールの識別情報（ユーザー名、MAC アドレス、コンソールアドレス等）が重複していないことを確認します。
-4. 日本版のゲーム同士では、必要に応じてリージョン設定も **JPN** に合わせます。
-5. 各自のゲームで通常どおり対戦・交換などを開始します。
+## 不具合報告・クレジット
 
-同じ Room への参加はゲーム内通信の成功を保証しません。マッチングできない場合は、ゲームのバージョン、識別情報、ファイアウォール、VPN、Room 接続状態、ログを順に切り分けてください。
+報告時はOS、ゲームの版、再現手順、**ブランチ／リリースタグとコミットSHA**、関係する`azahar_log.txt`の抜粋を揃えてください。共有前にログから**秘密鍵・アカウント情報・個人情報**を削除してください。
 
-## すれちがい通信（実験中）
+- [Azahar Emulator](https://github.com/azahar-emu/azahar): オリジナルのオープンソース3DSエミュレーター
+- [utosa123/azahar](https://github.com/utosa123/azahar): YW2ローカル通信互換性の先行修正
+- [AlexanderGG](https://github.com/AlexanderGG-0520): このフォークの変更・検証・保守
 
-`integration/yw` では、Azahar Multiplayer Room にいる**双方がゲームを起動している状態**を検知し、CECD（すれちがい通信）の OutBox データを相手へ配送する処理を実装しています。
+**ChatGPT / OpenAI Codex** を調査、実装補助、レビュー、文書作成に利用しています。実行時の検証・採否はメンテナーが担います。公式Azaharへの採用・承認を意味しません。
 
-- 同じ Room にいるだけではなく、ゲームの起動状態を利用して交換を開始します。
-- **UDS の対戦を開始する必要はありません**。両者のゲームタイトルが異なる場合も交換処理の対象です。
-- 同じペアへの無制限な再配送を避ける処理や、受信したメッセージのメタデータ調整を含みます。
-- 『妖怪ウォッチ2 真打』の2インスタンス検証で、**ツチノコパンダがVIPルームに実際に出現**したことを確認しています。
-
-これは**セーブデータへ直接出現フラグを注入する機能ではありません**。ゲームが受信したすれちがいメッセージを処理する方式です。
-
-ただし CECD・HOME メニュー・NAND のライフサイクルには未解決の検証項目があります。**重要なデータは必ずバックアップし、実験用データで検証してください。**
-
-## 開発上のポイント
-
-- **NWM / UDS:** 元フォークの YW2 worker-polling workaround を継承。`WaitSynchronization1(timeout=0)` と完了済み worker の処理順序に起因する通信問題を回避します。
-- **Qt カメラ:** キャプチャ開始・停止のスレッド処理と共有カメラの参照カウントを修正。Linux のふしぎなレンズで確認しています。
-- **CECD / Network:** Multiplayer Room の通信路ですれちがいデータを交換。OutBox／Inbox、重複排除、配信タイミングなどを調査・改善しています。
-- **DSP / APT / HOME:** [PR #17](https://github.com/AlexanderGG-0520/azahar/pull/17)で、v0.2.0の[PR #13](https://github.com/AlexanderGG-0520/azahar/pull/13)のYW2タイトル・ゲストPC・固定タイムアウト依存を削除し、DSP音声IRQイベントを実際に待機したスレッドに対して**50msのエミュレート時間に限定した1回限りのgrace**を提供します。別の待機や期限切れでは通常の無効ハンドル処理を維持します。`Kernel::Event`/`Kernel::Thread`の状態はバージョン付きでシリアライズします。**PR #17初期版のHOME往復3回は成功しましたが、最終版の再テストは未実施**です。
-
-問題を調査するときは、再現手順、OS、ブランチとコミット、ゲームの版、関連する `azahar_log.txt` の抜粋を揃えると原因を絞りやすくなります。**ログに含まれる個人情報・認証情報は共有前に削除してください。**
-
-## クレジット・ライセンス
-
-- **[Azahar Emulator](https://github.com/azahar-emu/azahar):** 本フォークのベースとなるオープンソース 3DS エミュレーター
-- **[utosa123/azahar](https://github.com/utosa123/azahar):** 『妖怪ウォッチ2』のローカル通信互換性修正（v3 系）の開発元
-- **[AlexanderGG](https://github.com/AlexanderGG-0520):** このフォークの独自変更・検証・メンテナンス
-
-調査、実装補助、コードレビューや文書作成には **ChatGPT／OpenAI Codex** を活用しています。ゲーム上の動作確認と採否判断はメンテナーが行います。AI 支援によるコードが Azahar 公式のコントリビューション方針に適合するとは限らず、本フォークの変更が公式へ取り込まれたことを意味しません。
-
-ライセンス・権利表記はリポジトリの [`license.txt`](license.txt) および各ソースファイルを参照してください。ゲーム ROM、暗号鍵、ファームウェア等は同梱していません。
+ライセンスと著作権表記は[`license.txt`](license.txt)および各ソースを参照してください。ゲームROM、ファームウェア、暗号鍵、Level256プラグイン・認証情報等は配布していません。
 
 ---
 
 ## English
 
-**Azahar YW Compatibility Fork** is an **unofficial fork maintained by [AlexanderGG](https://github.com/AlexanderGG-0520)**, focused primarily on *Yo-kai Watch 2* local multiplayer, StreetPass experiments, and camera compatibility. It is not affiliated with or endorsed by the official Azahar project.
+**Azahar YW Compatibility Fork** is an **unofficial, independent** [Azahar](https://github.com/azahar-emu/azahar) fork maintained by [AlexanderGG](https://github.com/AlexanderGG-0520), based in part on [utosa123's YW2 local-play work](https://github.com/utosa123/azahar). It focuses on *Yo-kai Watch 2* multiplayer, experimental StreetPass, camera and HOME Menu compatibility, plus selected *Yo-kai Watch Blasters* / Level256 work.
 
-### Features and status (October 9, 2026)
+**Branches:** [`master`](https://github.com/AlexanderGG-0520/azahar/tree/master) is the default **legacy-code branch**, while **[`integration/yw`](https://github.com/AlexanderGG-0520/azahar/tree/integration/yw)** is the main development branch. Do not assume features described above exist on `master`. Release tags contain separate, fixed snapshots.
 
-- **YW2 local multiplayer:** Inherits utosa123's v3 NWM worker-polling workaround. Japanese editions' local play was confirmed by the original fork's maintainer; broader compatibility is not guaranteed.
-- **Linux camera:** Qt camera lifecycle and shared-capture fixes, including a verified fix for the green feed in YW2's Fushigi Lens.
-- **StreetPass over multiplayer rooms:** Experimental game-presence-triggered CECD message exchange in **v0.2.1** and `integration/yw`. **Locally verified:** Two Yo-kai Watch 2 Shin'uchi instances produced a **visible Pandanoko in the VIP room**. Windows prerelease runtime testing remains pending; the feature was **not included in v0.1.0**.
-- **HOME Menu / APT:** [PR #17](https://github.com/AlexanderGG-0520/azahar/pull/17) replaces PR #13's YW2 title/PC-specific workaround with one-shot DSP audio IRQ retirement grace and a 50 ms emulated-time deadline. **Three HOME round-trips with sound were locally verified on an earlier PR #17 revision**; the final hardened version (including versioned savestate support) has not yet been retested. Windows runtime behavior remains unverified.
-- **120 FPS experiments:** Separate experimental branch; not part of the recommended compatibility build.
-- **Yo-kai Watch 3:** An area of interest, not a blanket compatibility claim.
+**Downloads:** Check [Releases](https://github.com/AlexanderGG-0520/azahar/releases). On **October 30, 2026** the most recent published prerelease was [yw-v0.4.4](https://github.com/AlexanderGG-0520/azahar/releases/tag/yw-v0.4.4): Windows MSYS2 installer and portable ZIP, macOS Universal ZIP, signed Android arm64 APK, and `SHA256SUMS.txt`. There is no prebuilt Linux binary attached to this release.
 
-### Get started
+### Feature status
 
-- **Latest prerelease v0.3.2:** [GitHub Release](https://github.com/AlexanderGG-0520/azahar/releases/tag/yw-v0.3.2). Future workflow-enabled releases will include signed Android arm64 APKs.
-- **Current development:** [`integration/yw`](https://github.com/AlexanderGG-0520/azahar/tree/integration/yw)
-- **Android updates:** Add the GitHub repository to [Obtainium](https://github.com/ImranR98/Obtainium/releases), enable prereleases, and filter APK assets with `^azahar-yw-v[0-9]+\.[0-9]+\.[0-9]+-android-arm64\.apk$`.
-- **Arch Linux / CachyOS:** Install `azahar-yw-git` from AUR after it is published; it stores user data separately from official Azahar.
-- **Linux:** Build from source; see the [installation and camera guide](https://github.com/AlexanderGG-0520/azahar/blob/integration/yw/docs/yw-fork-install.md).
-- **Original projects:** [Azahar](https://github.com/azahar-emu/azahar) and [utosa123's YW2 local-play fork](https://github.com/utosa123/azahar).
+- **YW2 local play:** Inherits the upstream-fork NWM/UDS worker-polling workaround; broad compatibility is not guaranteed.
+- **StreetPass over multiplayer rooms:** Experimental CECD delivery, locally verified with two YW2 Shin'uchi instances producing a **visible Pandanoko in the VIP room**; other environments remain unverified.
+- **Linux camera:** Locally confirmed fix for YW2 Fushigi Lens displaying a solid green image.
+- **HOME / Discord:** HOME/DSP event-race mitigations and Discord title updates. v0.4.4 resolves a HOME startup deadlock associated with Discord Rich Presence; passing the previously blocking startup stage was verified, **not** full on-screen HOME navigation or launching a game.
+- **Level256 Network v2.0.1:** Opt-in, restricted signed-3GX compatibility. On Linux, the signed plugin displayed its SELECT menu and *Yo-kai Watch Blasters Red Cat Corps* listed and entered an online room. This is **not blanket support** for every service, OS, or game. Level256 is not distributed here.
+- **Mouse input:** Qt desktop button mapping, MB1–MB27 labels and profile fixes in v0.4.3 onward; available buttons depend on hardware and OS.
+- **Save dates:** Targeted YW2 and Blasters date-normalization fixes. Always back up saved data.
 
-Join the same Azahar multiplayer room with non-duplicated console identities for local play. For experimental StreetPass, run the current development build on both peers, ensure StreetPass is registered in the games, and back up save/NAND data first.
+### Installation notes
 
-Development uses AI-assisted research and implementation with human runtime verification. See [`license.txt`](license.txt) for licensing information.
+- **Android / Obtainium:** Add `https://github.com/AlexanderGG-0520/azahar` as a GitHub source and enable prereleases. APK regex: `^azahar-yw-v[0-9]+\.[0-9]+\.[0-9]+-android-arm64\.apk$`. Android package ID: `io.github.alexandergg0520.azaharyw`. Keep release signing keys consistent; back up data before uninstalling a debug build. Android Level256 behavior is not verified on-device.
+- **Arch / CachyOS:** An `azahar-yw-git` [PKGBUILD is provided](https://github.com/AlexanderGG-0520/azahar/tree/integration/yw/packaging/aur), but that does **not** establish its publication on the AUR or a signed pacman repository.
+- **Linux:** Clone with submodules, switch to `integration/yw`, then build with CMake/Ninja and Qt 6 development dependencies. For reproducible releases, check out the matching `yw-vX.Y.Z` tag.
+
+Use separate console identities and join the same multiplayer room for YW2 local play. For experimental StreetPass, both peers need games running and StreetPass configured. **Always back up your saves, NAND, SDMC and user data.** Build success alone is not proof of game compatibility, including for Level256 and Pretendo.
+
+This is an independently maintained, AI-assisted project with maintainer review and targeted runtime verification. See [`license.txt`](license.txt) for licensing details.
