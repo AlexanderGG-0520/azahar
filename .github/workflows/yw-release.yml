@@ -9,6 +9,7 @@ on:
       - ".github/release-trigger/**"
       - ".github/release-dry-run/**"
       - ".github/workflows/yw-release.yml"
+      - ".github/scripts/**"
       - ".ci/android.sh"
       - "src/android/**"
       - "src/**"
@@ -36,6 +37,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: yw-release-${{ github.ref }}
@@ -53,6 +55,9 @@ jobs:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 2
+      - name: Test cross-release compiler cache lookup
+        shell: bash
+        run: bash .github/scripts/test-find-cross-release-ccache.sh
       - name: Validate target, branch, and release policy
         id: version
         shell: bash
@@ -130,6 +135,9 @@ jobs:
       OS: windows
       TARGET: msys2
       VERSION: ${{ needs.prepare.outputs.version }}
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_COMPILERCHECK: content
+      CCACHE_SLOPPINESS: time_macros
     defaults:
       run:
         shell: msys2 {0}
@@ -137,6 +145,29 @@ jobs:
       - uses: actions/checkout@v6
         with:
           submodules: recursive
+      - name: Restore compiler cache
+        id: local_ccache
+        uses: actions/cache@v5
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ${{ runner.os }}-yw-msys2-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-yw-msys2-
+      - name: Find ccache from previous successful release
+        id: release_ccache
+        if: steps.local_ccache.outputs['cache-hit'] == ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash .github/scripts/find-cross-release-ccache.sh yw-ccache-v1-windows-msys2
+      - name: Download cross-release compiler cache
+        if: steps.release_ccache.outputs.run_id != ''
+        continue-on-error: true
+        uses: actions/download-artifact@v7
+        with:
+          name: yw-ccache-v1-windows-msys2
+          run-id: ${{ steps.release_ccache.outputs.run_id }}
+          github-token: ${{ github.token }}
+          path: ${{ env.CCACHE_DIR }}
       - uses: msys2/setup-msys2@v2
         with:
           msystem: clang64
@@ -150,6 +181,10 @@ jobs:
         run: choco install nsis --yes --no-progress
       - name: Disable line ending translation
         run: git config --global core.autocrlf input
+      - name: Bound compiler cache storage
+        run: ccache --set-config=max_size=750M
+      - name: Reset ccache statistics after restore (preserve compiled objects)
+        run: ccache --zero-stats
       - name: Build Windows MSYS2
         run: ./.ci/windows.sh
       - name: Generate installer
@@ -179,23 +214,115 @@ jobs:
             artifacts/azahar-*.exe
           if-no-files-found: error
 
-  macos-universal:
+      - name: Export compiler cache for future release branches
+        if: success() && startsWith(github.ref, 'refs/heads/release/yw-v')
+        uses: actions/upload-artifact@v7
+        with:
+          name: yw-ccache-v1-windows-msys2
+          path: ${{ env.CCACHE_DIR }}/
+          include-hidden-files: true
+          compression-level: 0
+          retention-days: 7
+          if-no-files-found: warn
+  macos-arch:
     if: needs.prepare.outputs.build_target == 'all'
     needs: prepare
+    runs-on: macos-26
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [arm64, x86_64]
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+      BUILD_ARCH: ${{ matrix.arch }}
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_COMPILERCHECK: content
+      CCACHE_SLOPPINESS: time_macros
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: recursive
+      - name: Restore compiler cache
+        id: local_ccache
+        uses: actions/cache@v5
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ${{ runner.os }}-yw-macos-${{ matrix.arch }}-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-yw-macos-${{ matrix.arch }}-
+      - name: Find ccache from previous successful release
+        id: release_ccache
+        if: steps.local_ccache.outputs['cache-hit'] == ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash .github/scripts/find-cross-release-ccache.sh yw-ccache-v1-macos-${{ matrix.arch }}
+      - name: Download cross-release compiler cache
+        if: steps.release_ccache.outputs.run_id != ''
+        continue-on-error: true
+        uses: actions/download-artifact@v7
+        with:
+          name: yw-ccache-v1-macos-${{ matrix.arch }}
+          run-id: ${{ steps.release_ccache.outputs.run_id }}
+          github-token: ${{ github.token }}
+          path: ${{ env.CCACHE_DIR }}
+      - name: Install tools
+        run: brew install ccache ninja spirv-tools
+      - name: Bound compiler cache storage
+        run: ccache --set-config=max_size=750M
+      - name: Reset ccache statistics after restore (preserve compiled objects)
+        run: ccache --zero-stats
+      - name: Build architecture
+        run: ./.ci/macos.sh
+      - name: Report macOS compiler cache performance
+        if: always()
+        run: ccache --show-stats
+      - name: Preserve app bundle for universal assembly
+        run: |
+          mkdir -p artifacts
+          ditto -c -k --sequesterRsrc --keepParent \
+            "build/${BUILD_ARCH}/bundle/Azahar.app" \
+            "artifacts/${BUILD_ARCH}-bundle.zip"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: macos-bundle-${{ env.VERSION }}-${{ matrix.arch }}
+          path: artifacts/${{ matrix.arch }}-bundle.zip
+          compression-level: 0
+          if-no-files-found: error
+
+      - name: Export compiler cache for future release branches
+        if: success() && startsWith(github.ref, 'refs/heads/release/yw-v')
+        uses: actions/upload-artifact@v7
+        with:
+          name: yw-ccache-v1-macos-${{ matrix.arch }}
+          path: ${{ env.CCACHE_DIR }}/
+          include-hidden-files: true
+          compression-level: 0
+          retention-days: 7
+          if-no-files-found: warn
+  macos-universal:
+    if: needs.prepare.outputs.build_target == 'all'
+    needs: [prepare, macos-arch]
     runs-on: macos-26
     env:
       VERSION: ${{ needs.prepare.outputs.version }}
       OS: macos
     steps:
       - uses: actions/checkout@v6
+      - name: Download arm64 app bundle
+        uses: actions/download-artifact@v7
         with:
-          submodules: recursive
-      - name: Install tools
-        run: brew install ccache ninja spirv-tools
-      - name: Build arm64
-        run: BUILD_ARCH=arm64 ./.ci/macos.sh
-      - name: Build x86_64
-        run: BUILD_ARCH=x86_64 ./.ci/macos.sh
+          name: macos-bundle-${{ env.VERSION }}-arm64
+          path: artifacts/arm64
+      - name: Download x86_64 app bundle
+        uses: actions/download-artifact@v7
+        with:
+          name: macos-bundle-${{ env.VERSION }}-x86_64
+          path: artifacts/x86_64
+      - name: Restore app bundles
+        run: |
+          mkdir -p build/arm64/bundle build/x86_64/bundle
+          ditto -x -k artifacts/arm64/arm64-bundle.zip build/arm64/bundle
+          ditto -x -k artifacts/x86_64/x86_64-bundle.zip build/x86_64/bundle
       - name: Create universal app
         run: ./.ci/macos-universal.sh
       - name: Pack universal app
@@ -239,6 +366,7 @@ jobs:
         with:
           packages: 'platform-tools'
       - name: Restore Gradle and native build caches
+        id: local_ccache
         uses: actions/cache@v5
         with:
           path: |
@@ -249,6 +377,21 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-android-${{ hashFiles('src/android/**/*.gradle.kts', 'src/android/gradle/wrapper/gradle-wrapper.properties', 'src/android/app/src/main/jni/CMakeLists.txt') }}-
             ${{ runner.os }}-android-
+      - name: Find ccache from previous successful release
+        id: release_ccache
+        if: steps.local_ccache.outputs['cache-hit'] == ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash .github/scripts/find-cross-release-ccache.sh yw-ccache-v1-android-arm64
+      - name: Download cross-release compiler cache
+        if: steps.release_ccache.outputs.run_id != ''
+        continue-on-error: true
+        uses: actions/download-artifact@v7
+        with:
+          name: yw-ccache-v1-android-arm64
+          run-id: ${{ steps.release_ccache.outputs.run_id }}
+          github-token: ${{ github.token }}
+          path: ${{ env.CCACHE_DIR }}
       - name: Install Android SDK, NDK, and CMake versions used by this project
         shell: bash
         run: |
@@ -260,6 +403,10 @@ jobs:
             "cmake;3.30.3"
           sudo apt-get update -y
           sudo apt-get install --no-install-recommends -y ccache unzip
+      - name: Bound compiler cache storage and reset per-run statistics
+        run: |
+          ccache --set-config=max_size=750M
+          ccache --zero-stats
       - name: Build Vanilla Release APK
         id: build-apk
         run: ./.ci/android.sh
@@ -342,8 +489,22 @@ jobs:
           path: artifacts/*.apk
           if-no-files-found: error
 
+      - name: Export compiler cache for future release branches
+        if: success() && startsWith(github.ref, 'refs/heads/release/yw-v')
+        uses: actions/upload-artifact@v7
+        with:
+          name: yw-ccache-v1-android-arm64
+          path: ${{ env.CCACHE_DIR }}/
+          include-hidden-files: true
+          compression-level: 0
+          retention-days: 7
+          if-no-files-found: warn
   aur-validation:
     needs: prepare
+    env:
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_COMPILERCHECK: content
+      CCACHE_SLOPPINESS: time_macros
     if: needs.prepare.outputs.build_target == 'all'
     runs-on: ubuntu-latest
     container:
@@ -351,8 +512,31 @@ jobs:
     steps:
       - name: Install Git for checkout
         run: |
-          pacman -Syu --noconfirm --needed git
+          pacman -Syu --noconfirm --needed git ccache github-cli
       - uses: actions/checkout@v6
+      - name: Restore compiler cache
+        id: local_ccache
+        uses: actions/cache@v5
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ${{ runner.os }}-yw-aur-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-yw-aur-
+      - name: Find ccache from previous successful release
+        id: release_ccache
+        if: steps.local_ccache.outputs['cache-hit'] == ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash .github/scripts/find-cross-release-ccache.sh yw-ccache-v1-arch-x86_64
+      - name: Download cross-release compiler cache
+        if: steps.release_ccache.outputs.run_id != ''
+        continue-on-error: true
+        uses: actions/download-artifact@v7
+        with:
+          name: yw-ccache-v1-arch-x86_64
+          run-id: ${{ steps.release_ccache.outputs.run_id }}
+          github-token: ${{ github.token }}
+          path: ${{ env.CCACHE_DIR }}
       - name: Install AUR validation tools and create unprivileged builder
         run: |
           pacman -S --noconfirm --needed namcap sudo
@@ -373,7 +557,20 @@ jobs:
         run: |
           set -euo pipefail
           cd "$GITHUB_WORKSPACE/packaging/aur"
-          sudo -u builder makepkg --syncdeps --noconfirm --cleanbuild
+          sudo -u builder env CCACHE_DIR="$CCACHE_DIR" ccache --set-config=max_size=750M
+          sudo -u builder env CCACHE_DIR="$CCACHE_DIR" ccache --zero-stats
+          sudo -u builder env \
+            CCACHE_DIR="$CCACHE_DIR" \
+            CCACHE_COMPILERCHECK="$CCACHE_COMPILERCHECK" \
+            CCACHE_SLOPPINESS="$CCACHE_SLOPPINESS" \
+            makepkg --syncdeps --noconfirm --cleanbuild
+          sudo -u builder env CCACHE_DIR="$CCACHE_DIR" ccache --show-stats
+          {
+            echo '### Arch Linux ccache (this run only)'
+            echo '```'
+            sudo -u builder env CCACHE_DIR="$CCACHE_DIR" ccache --show-stats
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
           package="$(find . -maxdepth 1 -name 'azahar-yw-git-*.pkg.tar.zst' -print -quit)"
           test -n "$package"
           namcap "$package"
@@ -386,6 +583,16 @@ jobs:
           ! grep -Fq '/usr/share/icons/hicolor/scalable/apps/org.azahar_emu.Azahar.svg' package-files.txt
           cat package-files.txt
 
+      - name: Export compiler cache for future release branches
+        if: success() && startsWith(github.ref, 'refs/heads/release/yw-v')
+        uses: actions/upload-artifact@v7
+        with:
+          name: yw-ccache-v1-arch-x86_64
+          path: ${{ env.CCACHE_DIR }}/
+          include-hidden-files: true
+          compression-level: 0
+          retention-days: 7
+          if-no-files-found: warn
   verify-assets:
     if: needs.prepare.outputs.build_target == 'all'
     needs: [prepare, windows-msys2, macos-universal, android, aur-validation]
