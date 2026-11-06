@@ -71,6 +71,8 @@ AndroidアプリIDは `io.github.alexandergg0520.azaharyw`。公式Azaharとは�
 
 このパッケージは`/usr/bin/azahar-yw`を使用し、公式Azaharとは別のXDGユーザーデータ領域を使う設計です。**署名付きpacmanリポジトリの公開・更新状況は別途確認が必要**です。
 
+署名付きpacmanリポジトリの構成・署名鍵の管理・インストール方法は[Arch/CachyOS向けpacmanリポジトリ手順](docs/yw-pacman-repo.md)を参照してください。
+
 ### Linux（開発ソースからビルド）
 
 ~~~sh
