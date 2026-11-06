@@ -115,9 +115,10 @@ jobs:
           repo-add azahar-yw.db.tar.gz "$pkg"
           sign_file azahar-yw.db.tar.gz
           sign_file azahar-yw.files.tar.gz
-          # Pages artifacts cannot contain symlinks; materialize pacman's aliases.
-          cp -L azahar-yw.db.tar.gz azahar-yw.db
-          cp -L azahar-yw.files.tar.gz azahar-yw.files
+          # Pages artifacts cannot contain symlinks; remove repo-add's aliases first.
+          rm -f azahar-yw.db azahar-yw.files azahar-yw.db.sig azahar-yw.files.sig
+          cp azahar-yw.db.tar.gz azahar-yw.db
+          cp azahar-yw.files.tar.gz azahar-yw.files
           cp azahar-yw.db.tar.gz.sig azahar-yw.db.sig
           cp azahar-yw.files.tar.gz.sig azahar-yw.files.sig
           gpg --batch --verify "$pkg.sig" "$pkg"
