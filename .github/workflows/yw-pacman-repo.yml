@@ -1,0 +1,152 @@
+name: Azahar YW pacman repository
+
+on:
+  push:
+    branches:
+      - integration/yw
+    paths:
+      - .github/workflows/yw-pacman-repo.yml
+      - .github/pacman-repo-trigger/**
+      - packaging/aur/**
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: azahar-yw-pacman-publish
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build Arch x86_64 package
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:base-devel
+    steps:
+      - name: Install build bootstrap packages
+        run: pacman -Syu --noconfirm --needed git sudo
+      - name: Check out latest YW source
+        uses: actions/checkout@v6
+        with:
+          ref: integration/yw
+          persist-credentials: false
+      - name: Prepare non-root builder
+        shell: bash
+        run: |
+          set -euo pipefail
+          useradd --create-home --shell /bin/bash builder
+          printf 'builder ALL=(ALL) NOPASSWD: ALL\n' > /etc/sudoers.d/azahar-yw-builder
+          chmod 0440 /etc/sudoers.d/azahar-yw-builder
+          install -d -o builder -g builder /home/builder/azahar-yw
+          cp packaging/aur/{PKGBUILD,.SRCINFO,azahar-yw-launcher,azahar-yw.desktop} /home/builder/azahar-yw/
+          chown -R builder:builder /home/builder/azahar-yw
+      - name: Build signed-repository input
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo -u builder bash -c 'cd /home/builder/azahar-yw && makepkg --syncdeps --noconfirm --cleanbuild'
+          mkdir -p package-output
+          cp /home/builder/azahar-yw/azahar-yw-git-*-x86_64.pkg.tar.zst package-output/
+          test "$(find package-output -type f -name '*.pkg.tar.zst' | wc -l)" -eq 1
+          pacman -Qip package-output/*.pkg.tar.zst
+          pacman -Qlp package-output/*.pkg.tar.zst | grep -F '/usr/bin/azahar-yw'
+      - name: Upload binary package for signing
+        uses: actions/upload-artifact@v7
+        with:
+          name: azahar-yw-pacman-x86_64
+          path: package-output/*.pkg.tar.zst
+          if-no-files-found: error
+          retention-days: 7
+
+  sign-and-stage:
+    name: Sign repository and stage Pages
+    needs: build
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:base-devel
+    steps:
+      - name: Install repository tooling
+        run: pacman -Syu --noconfirm --needed gnupg pacman
+      - name: Download built package
+        uses: actions/download-artifact@v7
+        with:
+          name: azahar-yw-pacman-x86_64
+          path: package-output
+      - name: Import the existing maintainer signing key
+        shell: bash
+        env:
+          PACMAN_GPG_PRIVATE_KEY: ${{ secrets.PACMAN_GPG_PRIVATE_KEY || secrets.PACMAN_GPG_KEY || secrets.PACMAN_REPO_GPG_PRIVATE_KEY }}
+          PACMAN_GPG_PASSPHRASE: ${{ secrets.PACMAN_GPG_PASSPHRASE || secrets.PACMAN_GPG_PASSWORD || secrets.PACMAN_REPO_GPG_PASSPHRASE }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$PACMAN_GPG_PRIVATE_KEY" ]]; then
+            echo '::error::Missing pacman signing key secret (PACMAN_GPG_PRIVATE_KEY / PACMAN_GPG_KEY / PACMAN_REPO_GPG_PRIVATE_KEY).'
+            exit 1
+          fi
+          export GNUPGHOME="$(mktemp -d)"
+          chmod 700 "$GNUPGHOME"
+          trap 'rm -rf "$GNUPGHOME"' EXIT
+          if [[ "$PACMAN_GPG_PRIVATE_KEY" == *'BEGIN PGP PRIVATE KEY BLOCK'* ]]; then
+            printf '%s\n' "$PACMAN_GPG_PRIVATE_KEY" | gpg --batch --import
+          else
+            printf '%s' "$PACMAN_GPG_PRIVATE_KEY" | base64 -d | gpg --batch --import
+          fi
+          fingerprint="$(gpg --batch --with-colons --list-secret-keys | awk -F: '/^fpr:/ {print $10; exit}')"
+          [[ "$fingerprint" =~ ^[A-Fa-f0-9]{40}$ ]] || { echo '::error::Invalid signing-key fingerprint'; exit 1; }
+          echo "Signing fingerprint: $fingerprint"
+          mkdir -p site/pacman/x86_64
+          gpg --batch --armor --export "$fingerprint" > site/pacman-repo-key.asc
+          test -s site/pacman-repo-key.asc
+          shopt -s nullglob
+          packages=(package-output/*.pkg.tar.zst)
+          [[ ${#packages[@]} -eq 1 ]] || { echo '::error::Expected exactly one package'; exit 1; }
+          cp "${packages[0]}" site/pacman/x86_64/
+          cd site/pacman/x86_64
+          pkg="$(basename "${packages[0]}")"
+          sign_file() {
+            printf '%s\n' "$PACMAN_GPG_PASSPHRASE" |
+              gpg --batch --yes --pinentry-mode loopback --passphrase-fd 0 \
+                --local-user "$fingerprint" --detach-sign --output "$1.sig" "$1"
+          }
+          sign_file "$pkg"
+          repo-add azahar-yw.db.tar.gz "$pkg"
+          sign_file azahar-yw.db.tar.gz
+          sign_file azahar-yw.files.tar.gz
+          # Pages artifacts cannot contain symlinks; remove repo-add's aliases first.
+          rm -f azahar-yw.db azahar-yw.files azahar-yw.db.sig azahar-yw.files.sig
+          cp azahar-yw.db.tar.gz azahar-yw.db
+          cp azahar-yw.files.tar.gz azahar-yw.files
+          cp azahar-yw.db.tar.gz.sig azahar-yw.db.sig
+          cp azahar-yw.files.tar.gz.sig azahar-yw.files.sig
+          gpg --batch --verify "$pkg.sig" "$pkg"
+          gpg --batch --verify azahar-yw.db.sig azahar-yw.db
+          tar -tzf azahar-yw.db.tar.gz >/dev/null
+          find . -maxdepth 1 -type l -print -delete
+          cd ../../..
+          touch site/.nojekyll
+          printf '%s\n' '<!doctype html><html><head><meta charset="utf-8"><title>Azahar YW pacman repository</title></head><body><h1>Azahar YW pacman repository</h1><p><a href="pacman-repo-key.asc">Signing public key</a> · <a href="pacman/x86_64/azahar-yw.db">x86_64 package database</a></p></body></html>' > site/index.html
+          test -s site/pacman/x86_64/azahar-yw.db.sig
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+      - name: Upload Pages payload
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: site
+
+  deploy:
+    name: Publish pacman repository to GitHub Pages
+    needs: sign-and-stage
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
