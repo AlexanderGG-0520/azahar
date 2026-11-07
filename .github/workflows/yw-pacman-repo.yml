@@ -48,11 +48,20 @@ jobs:
         run: |
           set -euo pipefail
           sudo -u builder bash -c 'cd /home/builder/azahar-yw && makepkg --syncdeps --noconfirm --cleanbuild'
+          # makepkg also emits azahar-yw-git-debug by default.
+          # Publish only the real package, not the debug-symbol package.
+          shopt -s nullglob
+          packages=(/home/builder/azahar-yw/azahar-yw-git-[0-9]*-x86_64.pkg.tar.zst)
+          if [[ ${#packages[@]} -ne 1 ]]; then
+            printf '::error::Expected exactly one non-debug azahar-yw-git package, found %s\n' "${#packages[@]}"
+            printf 'Candidate: %s\n' "${packages[@]}"
+            exit 1
+          fi
           mkdir -p package-output
-          cp /home/builder/azahar-yw/azahar-yw-git-*-x86_64.pkg.tar.zst package-output/
-          test "$(find package-output -type f -name '*.pkg.tar.zst' | wc -l)" -eq 1
-          pacman -Qip package-output/*.pkg.tar.zst
-          pacman -Qlp package-output/*.pkg.tar.zst | grep -F '/usr/bin/azahar-yw'
+          cp -- "${packages[0]}" package-output/
+          pkg="package-output/$(basename -- "${packages[0]}")"
+          pacman -Qip "$pkg"
+          pacman -Qlp "$pkg" | grep -F '/usr/bin/azahar-yw'
       - name: Upload binary package for signing
         uses: actions/upload-artifact@v7
         with:
